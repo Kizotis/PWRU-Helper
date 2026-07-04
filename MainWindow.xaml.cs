@@ -27,18 +27,16 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _toastTimer = new() { Interval = TimeSpan.FromSeconds(1.6) };
 
     // --- live screen translation ---
-    private readonly DispatcherTimer _liveTimer = new() { Interval = TimeSpan.FromMilliseconds(900) };
+    private CancellationTokenSource? _liveCts;
     private System.Drawing.Rectangle? _liveRegion;
-    private byte[]? _lastSignature;
-    private string _lastReadText = "";
-    private bool _liveBusy;
-    private const double ChangeThreshold = 0.06; // retranslate when >6% of the area changes
+    private readonly List<string> _recentLines = new();  // lines seen on the previous read
+    private int _liveTicks;
+    private const int MaxHistory = 50;                   // keep the last 50 translated messages
 
     public MainWindow()
     {
         InitializeComponent();
         _toastTimer.Tick += (_, _) => { Toast.Visibility = Visibility.Collapsed; _toastTimer.Stop(); };
-        _liveTimer.Tick += async (_, _) => await LiveTick();
 
         OcrResults.ItemsSource = _ocrItems;
         LoadPhrases();
@@ -263,27 +261,31 @@ public partial class MainWindow : Window
     // ============================================================
     private async void LiveButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_liveTimer.IsEnabled) { StopLive(); return; }
+        if (_liveCts != null) { StopLive(); return; }
 
         var region = await SelectRegionAsync();
         if (region is not { } rect) return;
 
         _liveRegion = rect;
-        _lastSignature = null;
-        _lastReadText = "";
+        _recentLines.Clear();
+        _liveTicks = 0;
         _ocrItems.Clear();
         SetLiveUi(true);
         MainTabs.SelectedIndex = 1;
         ScreenReadStatus.Text = "🔴 Live — watching the selected area. Translations update when the text changes.";
-        _liveTimer.Start();
+
+        _liveCts = new CancellationTokenSource();
+        _ = LiveLoop(rect, _liveCts.Token);
     }
 
     private void StopLive_Click(object sender, RoutedEventArgs e) => StopLive();
 
     private void StopLive()
     {
-        if (!_liveTimer.IsEnabled && _liveRegion == null) return;
-        _liveTimer.Stop();
+        if (_liveCts == null) return;
+        _liveCts.Cancel();
+        _liveCts.Dispose();
+        _liveCts = null;
         _liveRegion = null;
         SetLiveUi(false);
         ScreenReadStatus.Text = "Live stopped.";
@@ -291,72 +293,65 @@ public partial class MainWindow : Window
 
     private void SetLiveUi(bool on)
     {
+        LiveIndicator.Text = "●  LIVE";
         LiveIndicator.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
         StopLiveButton.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
         LiveButton.Content = on ? "■  Stop live translation" : "▶  Start live translation";
         LiveStatus.Text = on
-            ? "🔴 Live is running — re-translating whenever the text changes. Press Stop to end."
-            : "Live mode keeps watching the chosen area and re-translates automatically whenever the text changes (~6% of the area), until you press Stop.";
+            ? "🔴 Live is running — re-reading the area and re-translating whenever the text changes. Press Stop to end."
+            : "Live mode keeps watching the chosen area and re-translates automatically whenever the text changes, until you press Stop.";
     }
 
-    private async Task LiveTick()
+    private async Task LiveLoop(System.Drawing.Rectangle rect, CancellationToken ct)
     {
-        if (_liveBusy || _liveRegion is not { } rect) return;
-        _liveBusy = true;
-        try
+        while (!ct.IsCancellationRequested)
         {
-            using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
-            var sig = Signature(bmp);
-            bool changed = _lastSignature == null || HasChanged(_lastSignature, sig);
-            _lastSignature = sig;
-            if (!changed) return;                       // nothing moved — skip OCR entirely
-
-            var sentences = ToSentences(await _ocr.ReadLinesAsync(bmp));
-            var joined = string.Join("\n", sentences);
-            if (joined.Length == 0 || joined == _lastReadText) return;   // no *new* text
-            _lastReadText = joined;
-
-            var target = SelectedTag(OcrTargetCombo) ?? "en";
-            ScreenReadStatus.Text = "🔴 Live — new text detected, translating…";
-            await TranslateSentencesInto(sentences, target);
-            ScreenReadStatus.Text = $"🔴 Live — updated {sentences.Count} line(s).";
-        }
-        catch (Exception ex)
-        {
-            ScreenReadStatus.Text = $"Live error: {ex.Message}";
-        }
-        finally
-        {
-            _liveBusy = false;
-        }
-    }
-
-    /// <summary>Small grayscale fingerprint of the area, used to detect visual changes.</summary>
-    private static byte[] Signature(System.Drawing.Bitmap src)
-    {
-        const int w = 48, h = 32;
-        using var small = new System.Drawing.Bitmap(w, h);
-        using (var g = System.Drawing.Graphics.FromImage(small))
-        {
-            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
-            g.DrawImage(src, 0, 0, w, h);
-        }
-        var sig = new byte[w * h];
-        for (int y = 0; y < h; y++)
-            for (int x = 0; x < w; x++)
+            try
             {
-                var p = small.GetPixel(x, y);
-                sig[y * w + x] = (byte)((p.R * 30 + p.G * 59 + p.B * 11) / 100);
+                _liveTicks++;
+                LiveIndicator.Text = (_liveTicks % 2 == 0) ? "●  LIVE" : "○  LIVE";  // heartbeat
+
+                using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
+                var lines = ToSentences(await _ocr.ReadLinesAsync(bmp));
+
+                // Which lines are new since the previous read? (text diff, so even one
+                // extra chat line is caught — a pixel % threshold missed those.)
+                var prev = new HashSet<string>(_recentLines);
+                var newLines = lines.Where(l => !prev.Contains(l)).ToList();
+                _recentLines.Clear();
+                _recentLines.AddRange(lines);
+
+                if (newLines.Count > 0)
+                {
+                    var target = SelectedTag(OcrTargetCombo) ?? "en";
+                    ScreenReadStatus.Text = $"🔴 Live — {newLines.Count} new line(s), translating…";
+                    await AppendLinesToHistory(newLines, target);
+                    ScreenReadStatus.Text = $"🔴 Live — {_ocrItems.Count} message(s) in history (check #{_liveTicks}).";
+                }
             }
-        return sig;
+            catch (Exception ex)
+            {
+                ScreenReadStatus.Text = $"Live error: {ex.Message}";
+            }
+
+            try { await Task.Delay(800, ct); }
+            catch (TaskCanceledException) { break; }
+        }
     }
 
-    private static bool HasChanged(byte[] a, byte[] b)
+    /// <summary>Append new Russian lines + their translations, keep the last MaxHistory, and auto-scroll.</summary>
+    private async Task AppendLinesToHistory(List<string> newLines, string target)
     {
-        int changed = 0;
-        for (int i = 0; i < a.Length; i++)
-            if (Math.Abs(a[i] - b[i]) > 24) changed++;
-        return (double)changed / a.Length > ChangeThreshold;
+        foreach (var s in newLines)
+        {
+            var item = new OcrResultItem { Original = s, Translation = "…" };
+            _ocrItems.Add(item);
+            while (_ocrItems.Count > MaxHistory) _ocrItems.RemoveAt(0);   // drop the oldest
+            ResultsScroller?.ScrollToEnd();
+            try { item.Translation = await _translator.TranslateAsync(s, "ru", target); }
+            catch (Exception ex) { item.Translation = $"(translation failed: {ex.Message})"; }
+            ResultsScroller?.ScrollToEnd();
+        }
     }
 
     /// <summary>Break OCR lines into individual sentences (split on . ! ? …).</summary>

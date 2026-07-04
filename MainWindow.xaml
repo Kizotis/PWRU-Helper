@@ -181,7 +181,7 @@
                         </StackPanel>
                     </Grid>
 
-                    <ScrollViewer Grid.Row="6" VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
+                    <ScrollViewer x:Name="ResultsScroller" Grid.Row="6" VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
                         <StackPanel>
                             <TextBlock x:Name="ScreenReadStatus" TextWrapping="Wrap" Margin="0,0,0,8"
                                        Foreground="{StaticResource TextMutedBrush}"
