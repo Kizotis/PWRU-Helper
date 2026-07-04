@@ -1,0 +1,19 @@
+<Window x:Class="PWRUHelper.SelectionOverlay"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        WindowStyle="None" AllowsTransparency="True" Background="#40000000"
+        Topmost="True" ShowInTaskbar="False" WindowStartupLocation="Manual"
+        Cursor="Cross" ResizeMode="NoResize">
+    <Canvas x:Name="RootCanvas">
+        <!-- Instruction hint -->
+        <Border x:Name="HintBox" Background="#CC0E2C47" CornerRadius="8" Padding="16,10"
+                BorderBrush="#FFFFDC50" BorderThickness="1">
+            <TextBlock Foreground="#FFF4EDDD" FontSize="14" FontFamily="Segoe UI">
+                Drag to select the text area &#8226; press Esc to cancel
+            </TextBlock>
+        </Border>
+        <!-- The selection marquee -->
+        <Rectangle x:Name="SelectionRect" Stroke="#FFFFDC50" StrokeThickness="2"
+                   Fill="#22278EB4" Visibility="Collapsed"/>
+    </Canvas>
+</Window>

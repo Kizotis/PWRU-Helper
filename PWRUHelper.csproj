@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- Windows 10.0.19041 target gives us the built-in Windows.Media.Ocr engine (free, on-device) -->
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>PWRUHelper</AssemblyName>
+    <RootNamespace>PWRUHelper</RootNamespace>
+    <Version>0.2.0</Version>
+    <ApplicationIcon>assets\icon.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- window / taskbar icon -->
+    <Resource Include="assets\icon.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Used for capturing the selected screen region (GDI CopyFromScreen) -->
+    <PackageReference Include="System.Drawing.Common" Version="8.0.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Phrasebook data: embedded in the exe (so a single portable exe is self-contained)
+         AND copied next to the exe so it stays easy to edit. -->
+    <None Remove="Data\phrases.json" />
+    <EmbeddedResource Include="Data\phrases.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </EmbeddedResource>
+  </ItemGroup>
+
+</Project>
