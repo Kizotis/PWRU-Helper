@@ -26,10 +26,19 @@ public partial class MainWindow : Window
 
     private readonly DispatcherTimer _toastTimer = new() { Interval = TimeSpan.FromSeconds(1.6) };
 
+    // --- live screen translation ---
+    private readonly DispatcherTimer _liveTimer = new() { Interval = TimeSpan.FromMilliseconds(900) };
+    private System.Drawing.Rectangle? _liveRegion;
+    private byte[]? _lastSignature;
+    private string _lastReadText = "";
+    private bool _liveBusy;
+    private const double ChangeThreshold = 0.06; // retranslate when >6% of the area changes
+
     public MainWindow()
     {
         InitializeComponent();
         _toastTimer.Tick += (_, _) => { Toast.Visibility = Visibility.Collapsed; _toastTimer.Stop(); };
+        _liveTimer.Tick += async (_, _) => await LiveTick();
 
         OcrResults.ItemsSource = _ocrItems;
         LoadPhrases();
@@ -109,22 +118,31 @@ public partial class MainWindow : Window
     // ============================================================
     //  SCREEN OCR + TRANSLATE
     // ============================================================
-    private void CheckOcrAvailability()
+    private bool CheckOcrAvailability()
     {
         var lang = _ocr.ActiveLanguage;
         bool ready = _ocr.IsAvailable && lang != null &&
                      lang.StartsWith("ru", StringComparison.OrdinalIgnoreCase);
 
-        OcrInstallPanel.Visibility = ready ? Visibility.Collapsed : Visibility.Visible;
-        OcrStatus.Text = ready
-            ? "Drag a box over Russian text in your game; each sentence is read and translated below."
-            : "⚠ Russian OCR isn't ready yet — install it below (one click).";
+        if (ready)
+        {
+            OcrLangStatus.Text = "Russian OCR language pack: installed and ready ✓";
+            OcrLangStatus.SetResourceReference(TextBlock.ForegroundProperty, "TealBrush");
+            InstallOcrButton.Content = "Reinstall / repair Russian OCR";
+        }
+        else
+        {
+            OcrLangStatus.Text = "Russian OCR language pack: not installed — Cyrillic won't read well until it is.";
+            OcrLangStatus.SetResourceReference(TextBlock.ForegroundProperty, "GoldBrush");
+            InstallOcrButton.Content = "Install Russian OCR (1 click)";
+        }
+        return ready;
     }
 
     private async void InstallOcr_Click(object sender, RoutedEventArgs e)
     {
         InstallOcrButton.IsEnabled = false;
-        OcrStatus.Text = "Installing Russian OCR… accept the admin prompt. This can take a minute.";
+        OcrLangStatus.Text = "Installing Russian OCR… accept the admin prompt. This can take a minute.";
         try
         {
             var psi = new ProcessStartInfo
@@ -141,18 +159,15 @@ public partial class MainWindow : Window
 
             // Rebuild the engine and re-check.
             _ocr = new OcrService("ru");
-            CheckOcrAvailability();
-            if (OcrInstallPanel.Visibility == Visibility.Collapsed)
-                OcrStatus.Text = "Russian OCR installed ✓ — you're ready to read the screen.";
-            else
-                OcrStatus.Text = "Install finished, but Russian OCR still isn't detected. " +
-                                 "Try restarting the app (or Windows) and check again.";
+            if (!CheckOcrAvailability())
+                OcrLangStatus.Text = "Install finished, but Russian OCR still isn't detected. " +
+                                     "Try restarting the app (or Windows) and check again.";
         }
         catch (Exception ex)
         {
             // Most commonly: the user dismissed the UAC prompt.
-            OcrStatus.Text = $"Install was cancelled or failed ({ex.Message}). " +
-                             "You can also run the command below manually.";
+            OcrLangStatus.Text = $"Install was cancelled or failed ({ex.Message}). " +
+                                 "You can also run the command below manually.";
         }
         finally
         {
@@ -177,19 +192,16 @@ public partial class MainWindow : Window
         return r.ReadToEnd();
     }
 
-    private async void SelectArea_Click(object sender, RoutedEventArgs e)
+    /// <summary>Hide the window, let the user drag a rectangle, return it (physical px).</summary>
+    private async Task<System.Drawing.Rectangle?> SelectRegionAsync()
     {
-        // Hide ourselves so we don't sit on top of the region being captured.
         var wasTopmost = Topmost;
         Hide();
         await Task.Delay(150);
-
-        System.Drawing.Rectangle? region = null;
         try
         {
             var overlay = new SelectionOverlay();
-            if (overlay.ShowDialog() == true)
-                region = overlay.SelectedRegion;
+            return overlay.ShowDialog() == true ? overlay.SelectedRegion : null;
         }
         finally
         {
@@ -197,51 +209,154 @@ public partial class MainWindow : Window
             Topmost = wasTopmost;
             Activate();
         }
+    }
 
+    private async void SelectArea_Click(object sender, RoutedEventArgs e)
+    {
+        StopLive();
+        var region = await SelectRegionAsync();
         if (region is not { } rect) return;
 
-        _ocrItems.Clear();
-        OcrStatus.Text = "Reading…";
+        MainTabs.SelectedIndex = 1;          // results show on the Translator page
         SelectAreaButton.IsEnabled = false;
-
+        _ocrItems.Clear();
+        ScreenReadStatus.Text = "Reading…";
         try
         {
             using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
-            var lines = await _ocr.ReadLinesAsync(bmp);
-            var sentences = ToSentences(lines);
-
+            var sentences = ToSentences(await _ocr.ReadLinesAsync(bmp));
             if (sentences.Count == 0)
             {
-                OcrStatus.Text = "No text detected in that area. Try a tighter box around the text.";
+                ScreenReadStatus.Text = "No text detected there. Try a tighter box around the text.";
                 return;
             }
-
             var target = SelectedTag(OcrTargetCombo) ?? "en";
-            OcrStatus.Text = $"Read {sentences.Count} line(s). Translating…";
-
-            foreach (var s in sentences)
-            {
-                var item = new OcrResultItem { Original = s, Translation = "…" };
-                _ocrItems.Add(item);
-                try
-                {
-                    item.Translation = await _translator.TranslateAsync(s, "ru", target);
-                }
-                catch (Exception ex)
-                {
-                    item.Translation = $"(translation failed: {ex.Message})";
-                }
-            }
-            OcrStatus.Text = $"Done — {sentences.Count} line(s) translated.";
+            ScreenReadStatus.Text = $"Read {sentences.Count} line(s). Translating…";
+            await TranslateSentencesInto(sentences, target);
+            ScreenReadStatus.Text = $"Done — {sentences.Count} line(s) translated.";
         }
         catch (Exception ex)
         {
-            OcrStatus.Text = $"OCR failed: {ex.Message}";
+            ScreenReadStatus.Text = $"OCR failed: {ex.Message}";
         }
         finally
         {
             SelectAreaButton.IsEnabled = true;
         }
+    }
+
+    /// <summary>Fill the reading list with each Russian sentence and its translation.</summary>
+    private async Task TranslateSentencesInto(List<string> sentences, string target)
+    {
+        _ocrItems.Clear();
+        foreach (var s in sentences)
+        {
+            var item = new OcrResultItem { Original = s, Translation = "…" };
+            _ocrItems.Add(item);
+            try { item.Translation = await _translator.TranslateAsync(s, "ru", target); }
+            catch (Exception ex) { item.Translation = $"(translation failed: {ex.Message})"; }
+        }
+    }
+
+    // ============================================================
+    //  LIVE SCREEN TRANSLATION
+    // ============================================================
+    private async void LiveButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_liveTimer.IsEnabled) { StopLive(); return; }
+
+        var region = await SelectRegionAsync();
+        if (region is not { } rect) return;
+
+        _liveRegion = rect;
+        _lastSignature = null;
+        _lastReadText = "";
+        _ocrItems.Clear();
+        SetLiveUi(true);
+        MainTabs.SelectedIndex = 1;
+        ScreenReadStatus.Text = "🔴 Live — watching the selected area. Translations update when the text changes.";
+        _liveTimer.Start();
+    }
+
+    private void StopLive_Click(object sender, RoutedEventArgs e) => StopLive();
+
+    private void StopLive()
+    {
+        if (!_liveTimer.IsEnabled && _liveRegion == null) return;
+        _liveTimer.Stop();
+        _liveRegion = null;
+        SetLiveUi(false);
+        ScreenReadStatus.Text = "Live stopped.";
+    }
+
+    private void SetLiveUi(bool on)
+    {
+        LiveIndicator.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        StopLiveButton.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        LiveButton.Content = on ? "■  Stop live translation" : "▶  Start live translation";
+        LiveStatus.Text = on
+            ? "🔴 Live is running — re-translating whenever the text changes. Press Stop to end."
+            : "Live mode keeps watching the chosen area and re-translates automatically whenever the text changes (~6% of the area), until you press Stop.";
+    }
+
+    private async Task LiveTick()
+    {
+        if (_liveBusy || _liveRegion is not { } rect) return;
+        _liveBusy = true;
+        try
+        {
+            using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
+            var sig = Signature(bmp);
+            bool changed = _lastSignature == null || HasChanged(_lastSignature, sig);
+            _lastSignature = sig;
+            if (!changed) return;                       // nothing moved — skip OCR entirely
+
+            var sentences = ToSentences(await _ocr.ReadLinesAsync(bmp));
+            var joined = string.Join("\n", sentences);
+            if (joined.Length == 0 || joined == _lastReadText) return;   // no *new* text
+            _lastReadText = joined;
+
+            var target = SelectedTag(OcrTargetCombo) ?? "en";
+            ScreenReadStatus.Text = "🔴 Live — new text detected, translating…";
+            await TranslateSentencesInto(sentences, target);
+            ScreenReadStatus.Text = $"🔴 Live — updated {sentences.Count} line(s).";
+        }
+        catch (Exception ex)
+        {
+            ScreenReadStatus.Text = $"Live error: {ex.Message}";
+        }
+        finally
+        {
+            _liveBusy = false;
+        }
+    }
+
+    /// <summary>Small grayscale fingerprint of the area, used to detect visual changes.</summary>
+    private static byte[] Signature(System.Drawing.Bitmap src)
+    {
+        const int w = 48, h = 32;
+        using var small = new System.Drawing.Bitmap(w, h);
+        using (var g = System.Drawing.Graphics.FromImage(small))
+        {
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
+            g.DrawImage(src, 0, 0, w, h);
+        }
+        var sig = new byte[w * h];
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+            {
+                var p = small.GetPixel(x, y);
+                sig[y * w + x] = (byte)((p.R * 30 + p.G * 59 + p.B * 11) / 100);
+            }
+        return sig;
+    }
+
+    private static bool HasChanged(byte[] a, byte[] b)
+    {
+        int changed = 0;
+        for (int i = 0; i < a.Length; i++)
+            if (Math.Abs(a[i] - b[i]) > 24) changed++;
+        return (double)changed / a.Length > ChangeThreshold;
     }
 
     /// <summary>Break OCR lines into individual sentences (split on . ! ? …).</summary>

@@ -22,12 +22,15 @@ Made for English/French (and now Spanish/German) speakers who play on the Russia
 just paste it in the game chat with `Ctrl+V`. Every phrase shows the English meaning and
 how to pronounce it. There's a search bar to find anything fast.
 
-**2. Screen OCR** — click **"Select area & read"**, draw a box over any Russian text on
-your screen, and the app reads it and translates it into English, French, Spanish or
-German — line by line.
+**2. Screen OCR** — click **"Select area & read once"**, draw a box over any Russian text
+on your screen, and the app reads it and translates it (English, French, Spanish or
+German), line by line. Or hit **"Start live translation"** and it keeps re-reading that
+area and re-translating automatically whenever the text changes — until you press Stop.
+Either way, the results appear on the **Translator** tab.
 
-**3. Translator** — type in your language and get Russian instantly (or the other way
-around). Handy for writing a full sentence to someone.
+**3. Translator** — one page for **reading + writing**: type in your language and get
+Russian instantly (or the other way around) at the top, and see the live screen
+translations underneath.
 
 ---
 

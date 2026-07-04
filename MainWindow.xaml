@@ -61,7 +61,7 @@
         </Grid>
 
         <!-- ===== Tabs ===== -->
-        <TabControl Grid.Row="1" Background="Transparent">
+        <TabControl x:Name="MainTabs" Grid.Row="1" Background="Transparent">
 
             <!-- ===================== TAB 1: PHRASEBOOK ===================== -->
             <TabItem Header="Phrasebook">
@@ -113,40 +113,139 @@
                 </Grid>
             </TabItem>
 
-            <!-- ===================== TAB 2: OCR + TRANSLATE ===================== -->
-            <TabItem Header="Screen OCR">
+            <!-- ===================== TAB 2: TRANSLATOR (write + read from screen) ===================== -->
+            <TabItem Header="Translator">
                 <Grid Margin="0,10,0,0">
                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
-                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
-                        <Button x:Name="SelectAreaButton" Style="{StaticResource AccentButton}"
-                                Content="Select area &amp; read" Click="SelectArea_Click"/>
-                        <TextBlock Text="translate to" VerticalAlignment="Center" Margin="12,0,6,0"
-                                   Foreground="{StaticResource TextMutedBrush}"/>
-                        <ComboBox x:Name="OcrTargetCombo" VerticalAlignment="Center" Width="120">
+                    <TextBlock Grid.Row="0" Text="✍  Write — type and get the translation"
+                               FontWeight="Bold" FontSize="13" Foreground="{StaticResource GoldBrush}"
+                               Margin="0,0,0,6"/>
+
+                    <!-- direction controls -->
+                    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
+                        <ComboBox x:Name="FromCombo" Width="120" VerticalAlignment="Center">
                             <ComboBoxItem Content="English" Tag="en" IsSelected="True"/>
+                            <ComboBoxItem Content="French" Tag="fr"/>
+                            <ComboBoxItem Content="Spanish" Tag="es"/>
+                            <ComboBoxItem Content="German" Tag="de"/>
+                            <ComboBoxItem Content="Russian" Tag="ru"/>
+                            <ComboBoxItem Content="Auto" Tag="auto"/>
+                        </ComboBox>
+                        <Button Content="&#8646;" Style="{StaticResource GhostButton}" Margin="8,0"
+                                Click="Swap_Click" ToolTip="Swap languages"/>
+                        <ComboBox x:Name="ToCombo" Width="120" VerticalAlignment="Center">
+                            <ComboBoxItem Content="Russian" Tag="ru" IsSelected="True"/>
+                            <ComboBoxItem Content="English" Tag="en"/>
                             <ComboBoxItem Content="French" Tag="fr"/>
                             <ComboBoxItem Content="Spanish" Tag="es"/>
                             <ComboBoxItem Content="German" Tag="de"/>
                         </ComboBox>
                     </StackPanel>
 
-                    <StackPanel Grid.Row="1">
-                        <TextBlock x:Name="OcrStatus" TextWrapping="Wrap" Margin="0,0,0,8"
-                                   Foreground="{StaticResource TextMutedBrush}"
-                                   Text="Drag a box over Russian text in your game; each sentence is read and translated below."/>
+                    <TextBox x:Name="TranslateInput" Grid.Row="2" AcceptsReturn="True" TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto" MinHeight="60"
+                             KeyDown="TranslateInput_KeyDown"/>
 
-                        <!-- Shown only when the Russian OCR pack is missing -->
-                        <Border x:Name="OcrInstallPanel" Visibility="Collapsed" Margin="0,0,0,10"
+                    <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,8">
+                        <Button x:Name="TranslateButton" Style="{StaticResource AccentButton}"
+                                Content="Translate" Click="Translate_Click"/>
+                        <Button x:Name="CopyResultButton" Style="{StaticResource GhostButton}"
+                                Content="Copy result" Margin="8,0,0,0" Click="CopyResult_Click"/>
+                        <TextBlock x:Name="TranslateStatus" VerticalAlignment="Center" Margin="12,0,0,0"
+                                   Foreground="{StaticResource TextMutedBrush}"/>
+                    </StackPanel>
+
+                    <TextBox x:Name="TranslateOutput" Grid.Row="4" IsReadOnly="True" TextWrapping="Wrap"
+                             AcceptsReturn="True" VerticalScrollBarVisibility="Auto" MinHeight="60"
+                             FontSize="16" Foreground="{StaticResource GoldBrush}"/>
+
+                    <!-- reading from screen -->
+                    <Grid Grid.Row="5" Margin="0,14,0,6">
+                        <TextBlock Text="👁  From screen — reading &amp; live translation"
+                                   FontWeight="Bold" FontSize="13" Foreground="{StaticResource GoldBrush}"
+                                   VerticalAlignment="Center"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <TextBlock x:Name="LiveIndicator" Text="● LIVE" Foreground="{StaticResource AccentBrush}"
+                                       FontWeight="Bold" VerticalAlignment="Center" Visibility="Collapsed"/>
+                            <Button x:Name="StopLiveButton" Content="■ Stop" Style="{StaticResource GhostButton}"
+                                    Padding="10,3" Margin="10,0,0,0" Visibility="Collapsed" Click="StopLive_Click"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <ScrollViewer Grid.Row="6" VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
+                        <StackPanel>
+                            <TextBlock x:Name="ScreenReadStatus" TextWrapping="Wrap" Margin="0,0,0,8"
+                                       Foreground="{StaticResource TextMutedBrush}"
+                                       Text="Pick a screen area in the Screen OCR tab (read once, or live). The Russian text and its translation will appear here."/>
+                            <ItemsControl x:Name="OcrResults">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="{StaticResource PanelBrush}" CornerRadius="8"
+                                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                                Padding="12" Margin="0,0,0,8">
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Original}" FontSize="13"
+                                                           Foreground="{StaticResource TextMutedBrush}"
+                                                           TextWrapping="Wrap"/>
+                                                <TextBlock Text="{Binding Translation}" FontSize="16" FontWeight="SemiBold"
+                                                           Foreground="{StaticResource TextBrush}"
+                                                           TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </TabItem>
+
+            <!-- ===================== TAB 3: SCREEN OCR (controls + settings) ===================== -->
+            <TabItem Header="Screen OCR">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="2,0,6,0">
+                    <StackPanel Margin="0,10,0,0">
+
+                        <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextMutedBrush}" Margin="0,0,0,10"
+                                   Text="Capture Russian text from your screen and translate it. The results appear in the Translator tab."/>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button x:Name="SelectAreaButton" Style="{StaticResource AccentButton}"
+                                    Content="Select area &amp; read once" Click="SelectArea_Click"/>
+                            <TextBlock Text="translate to" VerticalAlignment="Center" Margin="12,0,6,0"
+                                       Foreground="{StaticResource TextMutedBrush}"/>
+                            <ComboBox x:Name="OcrTargetCombo" VerticalAlignment="Center" Width="120">
+                                <ComboBoxItem Content="English" Tag="en" IsSelected="True"/>
+                                <ComboBoxItem Content="French" Tag="fr"/>
+                                <ComboBoxItem Content="Spanish" Tag="es"/>
+                                <ComboBoxItem Content="German" Tag="de"/>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <Button x:Name="LiveButton" Style="{StaticResource AccentButton}" HorizontalAlignment="Left"
+                                Content="▶  Start live translation" Click="LiveButton_Click"/>
+                        <TextBlock x:Name="LiveStatus" TextWrapping="Wrap" Margin="0,6,0,14"
+                                   Foreground="{StaticResource TextMutedBrush}"
+                                   Text="Live mode keeps watching the chosen area and re-translates automatically whenever the text changes (~6% of the area), until you press Stop."/>
+
+                        <!-- Screen OCR settings: Russian OCR language pack -->
+                        <Border x:Name="OcrSettingsPanel" Margin="0,0,0,10"
                                 Background="{StaticResource PanelBrush}" CornerRadius="8"
-                                BorderBrush="{StaticResource GoldBrush}" BorderThickness="1" Padding="12">
+                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Padding="12">
                             <StackPanel>
-                                <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextBrush}"
-                                           Text="The Russian OCR language pack isn't installed yet, so reading Cyrillic won't work well. Install it once:"/>
+                                <TextBlock Text="⚙  Screen OCR — settings" FontWeight="Bold" FontSize="13"
+                                           Foreground="{StaticResource GoldBrush}"/>
+                                <TextBlock x:Name="OcrLangStatus" TextWrapping="Wrap" Margin="0,6,0,0"
+                                           Foreground="{StaticResource TextBrush}"
+                                           Text="Russian OCR language pack: checking…"/>
                                 <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                                     <Button x:Name="InstallOcrButton" Style="{StaticResource AccentButton}"
                                             Content="Install Russian OCR (1 click)" Click="InstallOcr_Click"/>
@@ -168,81 +267,9 @@
                                 </Grid>
                             </StackPanel>
                         </Border>
+
                     </StackPanel>
-
-                    <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
-                        <ItemsControl x:Name="OcrResults">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Border Background="{StaticResource PanelBrush}" CornerRadius="8"
-                                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                                            Padding="12" Margin="0,0,0,8">
-                                        <StackPanel>
-                                            <TextBlock Text="{Binding Original}" FontSize="13"
-                                                       Foreground="{StaticResource TextMutedBrush}"
-                                                       TextWrapping="Wrap"/>
-                                            <TextBlock Text="{Binding Translation}" FontSize="16" FontWeight="SemiBold"
-                                                       Foreground="{StaticResource TextBrush}"
-                                                       TextWrapping="Wrap" Margin="0,4,0,0"/>
-                                        </StackPanel>
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </ScrollViewer>
-                </Grid>
-            </TabItem>
-
-            <!-- ===================== TAB 3: TRANSLATOR ===================== -->
-            <TabItem Header="Translator">
-                <Grid Margin="0,10,0,0">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-
-                    <!-- direction controls -->
-                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
-                        <ComboBox x:Name="FromCombo" Width="120" VerticalAlignment="Center">
-                            <ComboBoxItem Content="English" Tag="en" IsSelected="True"/>
-                            <ComboBoxItem Content="French" Tag="fr"/>
-                            <ComboBoxItem Content="Spanish" Tag="es"/>
-                            <ComboBoxItem Content="German" Tag="de"/>
-                            <ComboBoxItem Content="Russian" Tag="ru"/>
-                            <ComboBoxItem Content="Auto" Tag="auto"/>
-                        </ComboBox>
-                        <Button Content="&#8646;" Style="{StaticResource GhostButton}" Margin="8,0"
-                                Click="Swap_Click" ToolTip="Swap languages"/>
-                        <ComboBox x:Name="ToCombo" Width="120" VerticalAlignment="Center">
-                            <ComboBoxItem Content="Russian" Tag="ru" IsSelected="True"/>
-                            <ComboBoxItem Content="English" Tag="en"/>
-                            <ComboBoxItem Content="French" Tag="fr"/>
-                            <ComboBoxItem Content="Spanish" Tag="es"/>
-                            <ComboBoxItem Content="German" Tag="de"/>
-                        </ComboBox>
-                    </StackPanel>
-
-                    <TextBox x:Name="TranslateInput" Grid.Row="1" AcceptsReturn="True" TextWrapping="Wrap"
-                             VerticalScrollBarVisibility="Auto" MinHeight="90"
-                             KeyDown="TranslateInput_KeyDown"/>
-
-                    <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8">
-                        <Button x:Name="TranslateButton" Style="{StaticResource AccentButton}"
-                                Content="Translate" Click="Translate_Click"/>
-                        <Button x:Name="CopyResultButton" Style="{StaticResource GhostButton}"
-                                Content="Copy result" Margin="8,0,0,0" Click="CopyResult_Click"/>
-                    </StackPanel>
-
-                    <TextBox x:Name="TranslateOutput" Grid.Row="3" IsReadOnly="True" TextWrapping="Wrap"
-                             AcceptsReturn="True" VerticalScrollBarVisibility="Auto" MinHeight="90"
-                             FontSize="16" Foreground="{StaticResource GoldBrush}"/>
-
-                    <TextBlock x:Name="TranslateStatus" Grid.Row="4" Margin="0,6,0,0"
-                               Foreground="{StaticResource TextMutedBrush}"/>
-                </Grid>
+                </ScrollViewer>
             </TabItem>
 
             <!-- ===================== TAB 4: ABOUT ===================== -->
