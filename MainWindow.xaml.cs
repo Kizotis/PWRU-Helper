@@ -107,6 +107,7 @@ public partial class MainWindow : Window
         }
 
         UpdateResumeLiveButton();
+        ApplyFontScale();
     }
 
     private static bool IsOnScreen(double left, double top, double w, double h)
@@ -148,6 +149,27 @@ public partial class MainWindow : Window
     {
         bool show = _liveCts == null && _settings.LastLiveRegion is { Length: 4 };
         ResumeLiveButton.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    // ---- text size ----
+    internal double FontScale => _settings.FontScale;
+
+    private void ApplyFontScale()
+    {
+        double s = _settings.FontScale;
+        PhraseList.LayoutTransform = new System.Windows.Media.ScaleTransform(s, s);
+        OcrResults.LayoutTransform = new System.Windows.Media.ScaleTransform(s, s);
+        _overlay?.ApplyFontScale(s);
+    }
+
+    private void FontSmaller_Click(object sender, RoutedEventArgs e) => ChangeFontScale(-0.1);
+    private void FontLarger_Click(object sender, RoutedEventArgs e) => ChangeFontScale(+0.1);
+
+    private void ChangeFontScale(double delta)
+    {
+        _settings.FontScale = Math.Clamp(Math.Round(_settings.FontScale + delta, 1), 1.0, 1.6);
+        ApplyFontScale();
+        ShowToast($"Text size {(int)Math.Round(_settings.FontScale * 100)}%");
     }
 
     // ============================================================
@@ -314,10 +336,45 @@ public partial class MainWindow : Window
             MessageBox.Show($"Could not read the phrase list:\n{ex.Message}", "PWRU Helper");
         }
 
-        _phrasesView = new CollectionViewSource { Source = _allPhrases };
+        RebuildPhraseView();
+    }
+
+    /// <summary>Rebuild the grouped phrase list: a "🕑 Recent" group and a "★ Favourites"
+    /// group (both cloned from the real phrases) on top, then every phrase by category.</summary>
+    private void RebuildPhraseView()
+    {
+        var fav = new HashSet<string>(_settings.Favourites);
+        foreach (var p in _allPhrases) p.IsFavourite = fav.Contains(p.Ru);
+
+        var display = new List<Phrase>();
+        foreach (var ru in _settings.Recents)
+            if (_allPhrases.FirstOrDefault(p => p.Ru == ru) is { } src) display.Add(Clone(src, "🕑 Recent"));
+        foreach (var ru in _settings.Favourites)
+            if (_allPhrases.FirstOrDefault(p => p.Ru == ru) is { } src) display.Add(Clone(src, "★ Favourites"));
+        display.AddRange(_allPhrases);
+
+        _phrasesView = new CollectionViewSource { Source = display };
         _phrasesView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(Phrase.Category)));
         _phrasesView.Filter += PhrasesFilter;
         PhraseList.ItemsSource = _phrasesView.View;
+
+        static Phrase Clone(Phrase p, string category) => new()
+        { En = p.En, Ru = p.Ru, Translit = p.Translit, Category = category, IsFavourite = p.IsFavourite };
+    }
+
+    private void RecordRecent(string ru)
+    {
+        _settings.Recents.RemoveAll(x => x == ru);
+        _settings.Recents.Insert(0, ru);
+        while (_settings.Recents.Count > 8) _settings.Recents.RemoveAt(_settings.Recents.Count - 1);
+        RebuildPhraseView();
+    }
+
+    private void TogglePin_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: Phrase p }) return;
+        if (!_settings.Favourites.Remove(p.Ru)) _settings.Favourites.Insert(0, p.Ru);
+        RebuildPhraseView();
     }
 
     /// <summary>
@@ -381,7 +438,10 @@ public partial class MainWindow : Window
         if (sender is Button { DataContext: Phrase p })
         {
             if (CopyToClipboard(p.Ru))
+            {
                 ShowToast($"Copied:  {p.Ru}");
+                RecordRecent(p.Ru);
+            }
         }
     }
 

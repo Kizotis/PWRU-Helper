@@ -33,6 +33,12 @@ public class AppSettings
     public int[]? LastLiveRegion { get; set; }
 
     public bool FirstRunDone { get; set; }
+
+    // Phrasebook: pinned favourites and recently-copied phrases (by Russian text).
+    public List<string> Favourites { get; set; } = new();
+    public List<string> Recents { get; set; } = new();
+
+    public double FontScale { get; set; } = 1.0;
 }
 
 /// <summary>Loads/saves <see cref="AppSettings"/> to %AppData%\PWRUHelper\settings.json.

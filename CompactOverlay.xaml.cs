@@ -27,6 +27,7 @@ public partial class CompactOverlay : Window
         FeedItems.ItemsSource = owner.LiveItems;
         _feed = owner.LiveItems;
         _feed.CollectionChanged += Feed_Changed;
+        ApplyFontScale(owner.FontScale);
         UpdateEmptyHint();
 
         _beat.Tick += (_, _) => UpdateLiveIndicator();
@@ -41,6 +42,9 @@ public partial class CompactOverlay : Window
 
     private void UpdateEmptyHint()
         => EmptyHint.Visibility = _owner.LiveItems.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    public void ApplyFontScale(double scale)
+        => FeedItems.LayoutTransform = new System.Windows.Media.ScaleTransform(scale, scale);
 
     private void UpdateLiveIndicator()
     {
