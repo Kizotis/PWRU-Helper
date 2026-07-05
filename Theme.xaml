@@ -10,7 +10,8 @@
     <Color x:Key="TealColor">#FF278EB4</Color>
     <Color x:Key="GoldColor">#FFFFDC50</Color>
     <Color x:Key="TextColor">#FFF4EDDD</Color>
-    <Color x:Key="TextMutedColor">#FF918269</Color>
+    <!-- Lightened for better contrast on the dark panels, esp. small 10-11px labels read at a glance in-game -->
+    <Color x:Key="TextMutedColor">#FFB0A184</Color>
     <Color x:Key="BorderColor">#FF1B3D59</Color>
 
     <SolidColorBrush x:Key="BackgroundBrush" Color="{StaticResource BackgroundColor}"/>

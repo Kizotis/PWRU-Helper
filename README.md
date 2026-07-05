@@ -61,13 +61,21 @@ The app makes this easy: open the **Screen OCR** tab and click
 ## 💡 Tips
 
 - Keep **"Always on top"** ticked so the window stays over your game.
+- **Global shortcuts** (work while you're in the game):
+  **Ctrl+Alt+P** brings the app to the front · **Ctrl+Alt+T** jumps to the translator ·
+  **Ctrl+Alt+L** starts/stops live translation on your last area.
+- Your settings, window position and **last live area are remembered** — use
+  **"↻ Resume last area"** to restart live without re-drawing the box.
+- Translating **auto-copies** the result (Ctrl+V in game). Pasting Russian flips the
+  direction automatically. On a screen-read message, use **↩** to reply in Russian.
 - In **live translation**, use the **OCR sensitivity** slider to tune it: lower it if the
   moving game world behind the chat makes it refresh too much; raise it to catch every
   small change.
 - Your game should run in **windowed** or **borderless** mode for the screen-reading box
   to appear on top. In full-screen, alt-tab out first (or use a second monitor).
-- Want to add your own phrases? Open the `Data/phrases.json` file that appears next to the
-  app and add lines — they'll show up next time you open it.
+- Want to add your own phrases? Edit `phrases.json` — it's kept next to the app (portable)
+  or in `%AppData%\PWRUHelper\` (when installed via the MSI). Add lines and they'll show up
+  next time you open it.
 
 ---
 
