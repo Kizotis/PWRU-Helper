@@ -36,7 +36,12 @@ public partial class CompactOverlay : Window
         UpdateEmptyHint();
 
         _beat.Tick += (_, _) => UpdateLiveIndicator();
-        IsVisibleChanged += (_, _) => { if (IsVisible) { _beat.Start(); UpdateLiveIndicator(); } else _beat.Stop(); };
+        IsVisibleChanged += (_, _) =>
+        {
+            if (IsVisible) { _beat.Start(); UpdateLiveIndicator(); UpdateReplyHint(); }
+            else _beat.Stop();
+        };
+        UpdateReplyHint();
     }
 
     private void Feed_Changed(object? sender, NotifyCollectionChangedEventArgs e)
@@ -85,6 +90,9 @@ public partial class CompactOverlay : Window
     private void ReplyBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
         => ReplyPlaceholder.Visibility = string.IsNullOrEmpty(ReplyBox.Text)
             ? Visibility.Visible : Visibility.Collapsed;
+
+    private void UpdateReplyHint()
+        => ReplyPlaceholder.Text = $"Type a reply → Enter ({_owner.MyLanguage.ToUpperInvariant()} → RU, copied)";
 
     private async void ReplyBox_KeyDown(object sender, KeyEventArgs e)
     {

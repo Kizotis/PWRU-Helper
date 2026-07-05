@@ -335,9 +335,9 @@
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
+                                    <!-- Text is set in code from the OcrCapability constant (single source) -->
                                     <TextBox x:Name="OcrCommandBox" Grid.Column="0" IsReadOnly="True"
-                                             FontFamily="Consolas" FontSize="12" VerticalContentAlignment="Center"
-                                             Text="Add-WindowsCapability -Online -Name &quot;Language.OCR~~~ru-RU~0.0.1.0&quot;"/>
+                                             FontFamily="Consolas" FontSize="12" VerticalContentAlignment="Center"/>
                                     <Button x:Name="CopyCmdButton" Grid.Column="1" Style="{StaticResource GhostButton}"
                                             Content="Copy" Margin="8,0,0,0" Click="CopyOcrCommand_Click"/>
                                 </Grid>

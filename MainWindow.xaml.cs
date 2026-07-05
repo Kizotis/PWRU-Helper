@@ -33,6 +33,9 @@ public partial class MainWindow : Window
     // Tab indices (order must match the TabControl in XAML).
     private const int TabTranslator = 1, TabScreenOcr = 2;
 
+    // The Windows OCR language pack we install / show the command for (single source).
+    private const string OcrCapability = "Language.OCR~~~ru-RU~0.0.1.0";
+
     // --- live screen translation ---
     private CancellationTokenSource? _liveCts;
     private bool _selectingRegion;                       // a screen-area drag is in progress
@@ -54,6 +57,7 @@ public partial class MainWindow : Window
         _toastTimer.Tick += (_, _) => { Toast.Visibility = Visibility.Collapsed; _toastTimer.Stop(); };
 
         OcrResults.ItemsSource = _ocrItems;
+        OcrCommandBox.Text = $"Add-WindowsCapability -Online -Name \"{OcrCapability}\"";
         ShowAppVersion();
         PopulateLanguageCombos();
         LoadPhrases();
@@ -86,10 +90,13 @@ public partial class MainWindow : Window
             MessageBox.Show(this,
                 "Welcome to PWRU Helper!\n\n" +
                 "• Phrasebook — click a Russian phrase to copy it, then paste in game with Ctrl+V.\n" +
+                "   Pin favourites with ★.\n" +
                 "• Translator — type in your language, get Russian (auto-copied). Paste Russian and it\n" +
                 "   flips direction automatically.\n" +
                 "• Screen OCR — read & live-translate Russian text off your screen. Install the Russian\n" +
-                "   OCR pack once (one click) for good Cyrillic reading.\n\n" +
+                "   OCR pack once (one click) for good Cyrillic reading.\n" +
+                "• Compact overlay (⤡ or Ctrl+Alt+M) — a tiny window for while you play.\n\n" +
+                "Shortcuts (work in game): Ctrl+Alt+P show · Ctrl+Alt+T translate · Ctrl+Alt+L live · Ctrl+Alt+M compact.\n" +
                 "Tip: run your game windowed or borderless, and keep \"Always on top\" ticked.",
                 "Welcome", MessageBoxButton.OK, MessageBoxImage.Information);
         }
@@ -189,6 +196,9 @@ public partial class MainWindow : Window
 
     // ---- text size ----
     internal double FontScale => _settings.FontScale;
+
+    /// <summary>The user's own language code (for the overlay's quick-reply hint).</summary>
+    internal string MyLanguage => _settings.MyLanguage is { Length: > 0 } m && m is not ("ru" or "auto") ? m : "en";
 
     private void ApplyFontScale()
     {
@@ -523,6 +533,9 @@ public partial class MainWindow : Window
     // ============================================================
     //  SCREEN OCR + TRANSLATE
     // ============================================================
+    private bool IsOcrReady()
+        => _ocr.IsAvailable && (_ocr.ActiveLanguage?.StartsWith("ru", StringComparison.OrdinalIgnoreCase) ?? false);
+
     private bool CheckOcrAvailability()
     {
         var lang = _ocr.ActiveLanguage;
@@ -564,7 +577,7 @@ public partial class MainWindow : Window
                 {
                     FileName = "powershell.exe",
                     Arguments = "-NoProfile -ExecutionPolicy Bypass -Command " +
-                                "\"Add-WindowsCapability -Online -Name 'Language.OCR~~~ru-RU~0.0.1.0'\"",
+                                $"\"Add-WindowsCapability -Online -Name '{OcrCapability}'\"",
                     Verb = "runas",              // triggers the UAC elevation prompt
                     UseShellExecute = true,
                     WindowStyle = ProcessWindowStyle.Hidden
@@ -661,7 +674,9 @@ public partial class MainWindow : Window
             var sentences = TextMatching.ToSentences(await _ocr.ReadLinesAsync(bmp));
             if (sentences.Count == 0)
             {
-                ScreenReadStatus.Text = "No text detected there. Try a tighter box around the text.";
+                ScreenReadStatus.Text = IsOcrReady()
+                    ? "No text detected there. Try a tighter box around the text."
+                    : "No text detected — the Russian OCR pack isn't installed. Install it on the Screen OCR tab (1 click).";
                 return;
             }
             var target = SelectedTag(OcrTargetCombo) ?? "en";
@@ -744,6 +759,8 @@ public partial class MainWindow : Window
         SetLiveUi(true);
         MainTabs.SelectedIndex = TabTranslator;
         SetLiveStatus("🔴 Live — watching the area. Translations appear when new text shows up.");
+        if (!IsOcrReady())
+            ShowToast("Tip: install the Russian OCR pack (Screen OCR tab) for good Cyrillic reading.");
 
         _liveCts = new CancellationTokenSource();
         _ = LiveLoop(rect, _liveCts.Token);
