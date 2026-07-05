@@ -117,13 +117,18 @@ public class TranslationService
 
                 int code = (int)resp.StatusCode;
                 bool transient = code == 429 || code >= 500;
+                if (!transient)
+                    // A real, non-retryable error (e.g. 400/403) — report it as-is instead of
+                    // retrying and then mislabeling it as "no Internet".
+                    throw new TranslationException($"Translation service error (HTTP {code}). Please try again later.");
                 if (code == 429 && attempt == 2)
                     throw new TranslationException(
                         "Google is limiting translations right now — wait a minute and try again.");
-                if (!transient || attempt == 2)
-                    resp.EnsureSuccessStatusCode();   // throws with the real status
+                if (attempt == 2)
+                    throw new TranslationException($"Translation service is unavailable (HTTP {code}). Try again shortly.");
+                // transient and attempts left → fall through to the delay + retry below.
             }
-            catch (HttpRequestException) when (attempt < 2) { /* retry */ }
+            catch (HttpRequestException) when (attempt < 2) { /* network blip — retry */ }
 
             await Task.Delay(300 * (attempt + 1), ct);
         }

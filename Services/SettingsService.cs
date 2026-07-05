@@ -13,6 +13,10 @@ public class AppSettings
     public string TranslatorFrom { get; set; } = "en";
     public string TranslatorTo { get; set; } = "ru";
 
+    // The user's own language, used when replying (quick reply always targets Russian).
+    // Tracked separately so the translator's auto-flip-to-Russian can't corrupt it.
+    public string MyLanguage { get; set; } = "en";
+
     // Window / behaviour
     public bool AlwaysOnTop { get; set; } = true;
     public bool AutoCopyTranslation { get; set; } = true;
@@ -59,11 +63,28 @@ public static class SettingsService
             {
                 var json = File.ReadAllText(Path_);
                 var s = JsonSerializer.Deserialize<AppSettings>(json);
-                if (s != null) return s;
+                if (s != null) return Sanitize(s);
             }
         }
         catch { /* corrupt/unreadable — fall back to defaults */ }
         return new AppSettings();
+    }
+
+    // A hand-edited or partly-written file can contain nulls in place of the default
+    // collections/strings (nullable ref types are compile-time only). Replace them so
+    // the rest of the app can assume they're never null and never crashes at startup.
+    private static AppSettings Sanitize(AppSettings s)
+    {
+        s.Favourites ??= new();
+        s.Recents ??= new();
+        s.Favourites.RemoveAll(string.IsNullOrEmpty);
+        s.Recents.RemoveAll(string.IsNullOrEmpty);
+        s.OcrTargetLang ??= "en";
+        s.TranslatorFrom ??= "en";
+        s.TranslatorTo ??= "ru";
+        s.MyLanguage ??= "en";
+        if (s.LastLiveRegion is { Length: not 4 }) s.LastLiveRegion = null;
+        return s;
     }
 
     public static void Save(AppSettings settings)
@@ -71,7 +92,12 @@ public static class SettingsService
         try
         {
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path_)!);
-            File.WriteAllText(Path_, JsonSerializer.Serialize(settings, Options));
+            // Write to a temp file first, then swap it in, so a crash mid-write can never
+            // leave a truncated settings.json (which would wipe favourites/last area).
+            var tmp = Path_ + ".tmp";
+            File.WriteAllText(tmp, JsonSerializer.Serialize(settings, Options));
+            if (File.Exists(Path_)) File.Replace(tmp, Path_, null);
+            else File.Move(tmp, Path_);
         }
         catch { /* not writable — preferences just won't persist this time */ }
     }

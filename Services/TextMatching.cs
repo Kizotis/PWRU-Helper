@@ -35,7 +35,7 @@ public static class TextMatching
 
     /// <summary>True if <paramref name="line"/> fuzzy-matches any entry in the set.</summary>
     public static bool ContainsSimilar(IEnumerable<string> set, string line, double threshold)
-        => set.Any(s => Similarity(s, line) >= threshold);
+        => set.Any(s => SimilarEnough(s, line, threshold));
 
     /// <summary>0..1 similarity from Levenshtein edit distance (1 = identical).</summary>
     public static double Similarity(string a, string b)
@@ -46,17 +46,39 @@ public static class TextMatching
         return 1.0 - (double)Levenshtein(a, b) / max;
     }
 
+    /// <summary>Like <see cref="Similarity"/> ≥ threshold, but skips the full edit-distance
+    /// computation when the length difference alone already rules a match out — most
+    /// candidate pairs in a chat differ in length, so this avoids the O(n·m) matrix.</summary>
+    public static bool SimilarEnough(string a, string b, double threshold)
+    {
+        if (a == b) return true;
+        int max = Math.Max(a.Length, b.Length);
+        if (max == 0) return true;
+        // |lenA − lenB| edits are unavoidable, so this bounds the best possible score.
+        if (1.0 - (double)Math.Abs(a.Length - b.Length) / max < threshold) return false;
+        return 1.0 - (double)Levenshtein(a, b) / max >= threshold;
+    }
+
+    // Two-row Levenshtein: O(min(n,m)) memory instead of the full n·m matrix.
     private static int Levenshtein(string a, string b)
     {
-        var d = new int[a.Length + 1, b.Length + 1];
-        for (int i = 0; i <= a.Length; i++) d[i, 0] = i;
-        for (int j = 0; j <= b.Length; j++) d[0, j] = j;
+        if (a.Length == 0) return b.Length;
+        if (b.Length == 0) return a.Length;
+
+        var prev = new int[b.Length + 1];
+        var curr = new int[b.Length + 1];
+        for (int j = 0; j <= b.Length; j++) prev[j] = j;
+
         for (int i = 1; i <= a.Length; i++)
+        {
+            curr[0] = i;
             for (int j = 1; j <= b.Length; j++)
             {
                 int cost = a[i - 1] == b[j - 1] ? 0 : 1;
-                d[i, j] = Math.Min(Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1), d[i - 1, j - 1] + cost);
+                curr[j] = Math.Min(Math.Min(prev[j] + 1, curr[j - 1] + 1), prev[j - 1] + cost);
             }
-        return d[a.Length, b.Length];
+            (prev, curr) = (curr, prev);
+        }
+        return prev[b.Length];
     }
 }
