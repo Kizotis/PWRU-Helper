@@ -321,7 +321,7 @@ public partial class MainWindow : Window
         try
         {
             var ru = await _translator.TranslateAsync(text, from, "ru");
-            bool copied = ru.Length > 0 && CopyToClipboard(ru);
+            bool copied = ru.Length > 0 && await CopyToClipboardAsync(ru);
             return new ReplyOutcome(true, ru, copied, null);
         }
         catch (Exception ex) { return new ReplyOutcome(false, "", false, Friendly(ex)); }
@@ -518,11 +518,11 @@ public partial class MainWindow : Window
                 ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private void PhraseCard_Click(object sender, RoutedEventArgs e)
+    private async void PhraseCard_Click(object sender, RoutedEventArgs e)
     {
         if (sender is Button { DataContext: Phrase p })
         {
-            if (CopyToClipboard(p.Ru))
+            if (await CopyToClipboardAsync(p.Ru))
             {
                 ShowToast($"Copied:  {p.Ru}");
                 RecordRecent(p.Ru);
@@ -618,9 +618,9 @@ public partial class MainWindow : Window
         }
     }
 
-    private void CopyOcrCommand_Click(object sender, RoutedEventArgs e)
+    private async void CopyOcrCommand_Click(object sender, RoutedEventArgs e)
     {
-        if (CopyToClipboard(OcrCommandBox.Text)) ShowToast("Command copied");
+        if (await CopyToClipboardAsync(OcrCommandBox.Text)) ShowToast("Command copied");
     }
 
     private static string? ReadEmbeddedPhrases()
@@ -976,7 +976,7 @@ public partial class MainWindow : Window
             TranslateOutput.Text = result;
             TranslateStatus.Text = $"{from} → {to}";
 
-            if (AutoCopyCheck.IsChecked == true && result.Length > 0 && CopyToClipboard(result))
+            if (AutoCopyCheck.IsChecked == true && result.Length > 0 && await CopyToClipboardAsync(result))
                 ShowToast("Translated & copied — paste in game with Ctrl+V");
         }
         catch (Exception ex)
@@ -1001,16 +1001,16 @@ public partial class MainWindow : Window
         (TranslateInput.Text, TranslateOutput.Text) = (TranslateOutput.Text, TranslateInput.Text);
     }
 
-    private void CopyResult_Click(object sender, RoutedEventArgs e)
+    private async void CopyResult_Click(object sender, RoutedEventArgs e)
     {
-        if (!string.IsNullOrWhiteSpace(TranslateOutput.Text) && CopyToClipboard(TranslateOutput.Text))
+        if (!string.IsNullOrWhiteSpace(TranslateOutput.Text) && await CopyToClipboardAsync(TranslateOutput.Text))
             ShowToast("Result copied");
     }
 
     // Copy the original Russian of a screen-read message.
-    private void CopyOriginal_Click(object sender, RoutedEventArgs e)
+    private async void CopyOriginal_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is FrameworkElement { DataContext: OcrResultItem item } && CopyToClipboard(item.Original))
+        if (sender is FrameworkElement { DataContext: OcrResultItem item } && await CopyToClipboardAsync(item.Original))
             ShowToast("Russian copied");
     }
 
@@ -1027,9 +1027,9 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
-    private void CopyDiscord_Click(object sender, RoutedEventArgs e)
+    private async void CopyDiscord_Click(object sender, RoutedEventArgs e)
     {
-        if (CopyToClipboard("kizotis")) ShowToast("Discord copied: kizotis");
+        if (await CopyToClipboardAsync("kizotis")) ShowToast("Discord copied: kizotis");
     }
 
     // Single source of truth for the language dropdowns (was duplicated 3× in XAML).
@@ -1079,47 +1079,24 @@ public partial class MainWindow : Window
             }
     }
 
-    private bool _copying;   // guards against re-entrancy while we pump messages below
+    private bool _copying;   // one copy at a time; extra requests just report false
 
-    private bool CopyToClipboard(string text)
+    /// <summary>Copy text via <see cref="ClipboardService"/> (raw Win32 on a worker
+    /// thread). The UI never freezes, whatever is holding the clipboard. WPF's
+    /// Clipboard.SetDataObject was abandoned on purpose: its hidden blocking retries and
+    /// OLE flush froze the app for seconds and failed on machines where Windows
+    /// clipboard history (Win+V) is enabled.</summary>
+    private async Task<bool> CopyToClipboardAsync(string text)
     {
-        // The clipboard is single-owner: another app (often Windows' clipboard history)
-        // — or us, still finishing the previous copy — can hold it for a moment.
-        // We retry, but the wait between tries MUST keep our message pump running: if we
-        // blocked the UI thread (Thread.Sleep), our own window couldn't process the
-        // messages that release the clipboard, so every retry would keep failing — which
-        // was exactly the "second copy doesn't work" bug.
         if (_copying) return false;
         _copying = true;
         try
         {
-            // Retry patiently over ~2s with a growing gap (Windows clipboard history opens
-            // the clipboard on every change and can hold it briefly).
-            for (int i = 0; i < 12; i++)
-            {
-                try { Clipboard.SetDataObject(text, true); return true; }
-                catch when (i < 11) { PumpWait(50 + i * 25); }   // pump stays alive
-                catch { /* last SetDataObject attempt failed — try the fallback below */ }
-            }
-            // Last resort: the simpler SetText sometimes succeeds when SetDataObject didn't.
-            try { Clipboard.SetText(text); return true; } catch { /* give up */ }
-
-            ShowToast("Clipboard busy — another app (maybe clipboard history) is holding it. Press again in a moment.");
+            if (await ClipboardService.SetTextAsync(text)) return true;
+            ShowToast("Couldn't copy — another app is blocking the clipboard. Try again.");
             return false;
         }
         finally { _copying = false; }
-    }
-
-    /// <summary>Wait roughly <paramref name="ms"/> ms while still processing window
-    /// messages (unlike Thread.Sleep), so the clipboard's owner can release it.</summary>
-    private static void PumpWait(int ms)
-    {
-        var frame = new DispatcherFrame();
-        var timer = new DispatcherTimer(DispatcherPriority.Background)
-        { Interval = TimeSpan.FromMilliseconds(ms) };
-        timer.Tick += (_, _) => { frame.Continue = false; timer.Stop(); };
-        timer.Start();
-        Dispatcher.PushFrame(frame);
     }
 
     private void ShowToast(string message)
