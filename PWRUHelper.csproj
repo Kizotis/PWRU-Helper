@@ -32,6 +32,10 @@
     <EmbeddedResource Include="Data\phrases.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </EmbeddedResource>
+    <None Remove="Data\slang.json" />
+    <EmbeddedResource Include="Data\slang.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </EmbeddedResource>
   </ItemGroup>
 
 </Project>

@@ -56,6 +56,19 @@
                                         <TextBlock Text="{Binding Translation}" FontSize="14" FontWeight="SemiBold"
                                                    Foreground="{StaticResource TextBrush}" TextWrapping="Wrap"
                                                    Margin="0,2,0,0"/>
+                                        <TextBlock Text="{Binding Glossary}" FontSize="11"
+                                                   Foreground="{StaticResource GoldBrush}" TextWrapping="Wrap"
+                                                   Margin="0,2,0,0">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Style.Triggers>
+                                                        <Trigger Property="Text" Value="">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </Trigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
                                     </StackPanel>
                                 </Border>
                             </DataTemplate>

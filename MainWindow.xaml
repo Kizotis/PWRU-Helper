@@ -239,6 +239,19 @@
                                                     <TextBlock Text="{Binding Translation}" FontSize="16" FontWeight="SemiBold"
                                                                Foreground="{StaticResource TextBrush}"
                                                                TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                                    <TextBlock Text="{Binding Glossary}" FontSize="12"
+                                                               Foreground="{StaticResource GoldBrush}"
+                                                               TextWrapping="Wrap" Margin="0,3,0,0">
+                                                        <TextBlock.Style>
+                                                            <Style TargetType="TextBlock">
+                                                                <Style.Triggers>
+                                                                    <Trigger Property="Text" Value="">
+                                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                                    </Trigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </TextBlock.Style>
+                                                    </TextBlock>
                                                 </StackPanel>
                                                 <Button Grid.Column="1" Content="⧉" Style="{StaticResource GhostButton}"
                                                         Padding="7,2" Margin="8,0,0,0" VerticalAlignment="Top"

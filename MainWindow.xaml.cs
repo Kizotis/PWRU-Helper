@@ -26,6 +26,7 @@ public partial class MainWindow : Window
     private readonly UpdateService _updates = new();
     private readonly AppSettings _settings = SettingsService.Load();
     private OcrService _ocr = new("ru");
+    private SlangGlossary _slang = SlangGlossary.FromJson(null);
     private readonly ObservableCollection<OcrResultItem> _ocrItems = new();
 
     private readonly DispatcherTimer _toastTimer = new() { Interval = TimeSpan.FromSeconds(1.6) };
@@ -60,6 +61,7 @@ public partial class MainWindow : Window
         ShowAppVersion();
         PopulateLanguageCombos();
         LoadPhrases();
+        LoadSlang();
         CheckOcrAvailability();
         ApplySettings();
         // Track "my language" only from here on, so the init-time combo changes above
@@ -610,16 +612,60 @@ public partial class MainWindow : Window
         if (await CopyToClipboardAsync(OcrCommandBox.Text)) ShowToast("Command copied");
     }
 
-    private static string? ReadEmbeddedPhrases()
+    private static string? ReadEmbeddedPhrases() => ReadEmbeddedJson("phrases.json");
+
+    private static string? ReadEmbeddedJson(string endsWith)
     {
         var asm = Assembly.GetExecutingAssembly();
         var name = asm.GetManifestResourceNames()
-            .FirstOrDefault(n => n.EndsWith("phrases.json", StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(n => n.EndsWith(endsWith, StringComparison.OrdinalIgnoreCase));
         if (name == null) return null;
         using var s = asm.GetManifestResourceStream(name);
         if (s == null) return null;
         using var r = new StreamReader(s);
         return r.ReadToEnd();
+    }
+
+    /// <summary>Load the RU chat-slang glossary. Prefers an editable copy (next to the exe,
+    /// or %AppData%) so the user can extend it, falling back to the embedded copy. Fully
+    /// best-effort — any failure just leaves an empty glossary (nothing gets decoded).</summary>
+    private void LoadSlang()
+    {
+        try
+        {
+            var embedded = ReadEmbeddedJson("slang.json");
+            var path = FindOrCreateEditable("slang.json", embedded);
+            string? json = embedded;
+            if (path != null)
+                try { json = File.ReadAllText(path); } catch { /* keep embedded */ }
+            _slang = SlangGlossary.FromJson(json ?? embedded);
+        }
+        catch { _slang = SlangGlossary.FromJson(null); }
+    }
+
+    /// <summary>Editable-copy locator shared by the phrasebook and the slang glossary:
+    /// prefer an existing copy next to the exe or in %AppData%, else create one from the
+    /// embedded text so the user has something to edit. Returns null if none is possible.</summary>
+    private static string? FindOrCreateEditable(string fileName, string? embedded)
+    {
+        var candidates = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "Data", fileName),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                         "PWRUHelper", fileName),
+        };
+        foreach (var path in candidates)
+            if (File.Exists(path)) return path;
+        if (embedded != null)
+            foreach (var path in candidates)
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                    File.WriteAllText(path, embedded);
+                    return path;
+                }
+                catch { /* not writable here — try the next location */ }
+        return null;
     }
 
     /// <summary>Hide the window, let the user drag a rectangle, return it (physical px).</summary>
@@ -689,7 +735,7 @@ public partial class MainWindow : Window
         var items = new List<OcrResultItem>();
         foreach (var s in sentences)
         {
-            var item = new OcrResultItem { Original = s, Translation = "…" };
+            var item = new OcrResultItem { Original = s, Translation = "…", Glossary = _slang.Decode(s) };
             _ocrItems.Add(item);
             items.Add(item);
         }
@@ -896,7 +942,7 @@ public partial class MainWindow : Window
         var items = new List<OcrResultItem>();
         foreach (var s in newLines)
         {
-            var item = new OcrResultItem { Original = s, Translation = "…" };
+            var item = new OcrResultItem { Original = s, Translation = "…", Glossary = _slang.Decode(s) };
             _ocrItems.Add(item);
             items.Add(item);
             while (_ocrItems.Count > MaxHistory) _ocrItems.RemoveAt(0);   // drop the oldest
@@ -1223,5 +1269,14 @@ public class OcrResultItem : INotifyPropertyChanged
         get => _translation;
         set { _translation = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Translation))); }
     }
+
+    // Slang decode ("🔑 В = LFM · ПП = Full Moon Pavilion"), "" when the line has no slang.
+    private string _glossary = "";
+    public string Glossary
+    {
+        get => _glossary;
+        set { _glossary = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Glossary))); }
+    }
+
     public event PropertyChangedEventHandler? PropertyChanged;
 }
