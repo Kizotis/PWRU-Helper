@@ -1093,12 +1093,18 @@ public partial class MainWindow : Window
         _copying = true;
         try
         {
-            for (int i = 0; i < 8; i++)
+            // Retry patiently over ~2s with a growing gap (Windows clipboard history opens
+            // the clipboard on every change and can hold it briefly).
+            for (int i = 0; i < 12; i++)
             {
                 try { Clipboard.SetDataObject(text, true); return true; }
-                catch { PumpWait(70); }   // ~0.5s total, message pump stays alive
+                catch when (i < 11) { PumpWait(50 + i * 25); }   // pump stays alive
+                catch { /* last SetDataObject attempt failed — try the fallback below */ }
             }
-            ShowToast("Clipboard busy — another app is using it. Try again in a second.");
+            // Last resort: the simpler SetText sometimes succeeds when SetDataObject didn't.
+            try { Clipboard.SetText(text); return true; } catch { /* give up */ }
+
+            ShowToast("Clipboard busy — another app (maybe clipboard history) is holding it. Press again in a moment.");
             return false;
         }
         finally { _copying = false; }
