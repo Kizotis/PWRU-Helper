@@ -24,9 +24,12 @@ how to pronounce it. There's a search bar to find anything fast.
 
 **2. Screen OCR** — click **"Select area & read once"**, draw a box over any Russian text
 on your screen, and the app reads it and translates it (English, French, Spanish or
-German), line by line. Or hit **"Start live translation"** and it keeps re-reading that
+German), **sentence by sentence** (lines that wrap are stitched back together, so long
+messages read cleanly). Or hit **"Start live translation"** and it keeps re-reading that
 area and re-translating automatically whenever the text changes — until you press Stop.
-Either way, the results appear on the **Translator** tab.
+Either way, the results appear on the **Translator** tab. Russian **gaming slang** (LFM
+squad-forming, instance/role/class abbreviations, event names) is **decoded underneath**
+each translation — e.g. `В ПП хил` shows *🔑 В = LFM · ПП = Full Moon Pavilion · хил = heal*.
 
 **3. Translator** — one page for **reading + writing**: type in your language and get
 Russian instantly (or the other way around) at the top, and see the live screen
@@ -63,7 +66,8 @@ The app makes this easy: open the **Screen OCR** tab and click
 - Keep **"Always on top"** ticked so the window stays over your game.
 - **Compact overlay:** click **"⤡ Compact"** (or **Ctrl+Alt+M**) to shrink to a small
   always-on-top window — just the live feed plus a one-line reply box (type → Enter →
-  Russian, copied). Click **⤢** to go back to the full window.
+  Russian, copied). If your reply is too long for one chat message, it's **split into
+  numbered blocks** you copy and send one after another. Click **⤢** to go back to the full window.
 - **Global shortcuts** (work while you're in the game):
   **Ctrl+Alt+P** brings the app to the front · **Ctrl+Alt+T** jumps to the translator ·
   **Ctrl+Alt+L** starts/stops live translation · **Ctrl+Alt+M** toggles the compact overlay.
@@ -71,13 +75,17 @@ The app makes this easy: open the **Screen OCR** tab and click
   **"↻ Resume last area"** to restart live without re-drawing the box.
 - Translating **auto-copies** the result (Ctrl+V in game). Pasting Russian flips the
   direction automatically. On a screen-read message, use **↩** to reply in Russian.
-- In **live translation**, use the **OCR sensitivity** slider to tune it: lower it if the
-  moving game world behind the chat makes it refresh too much; raise it to catch every
-  small change.
+- For the sharpest reading, **select just the last 3–4 lines** of the chat rather than the
+  whole window — a tighter box is read far more precisely.
+- **Fine-tuning** (Screen OCR tab): **OCR sensitivity** (lower ignores the moving game world
+  behind the chat; raise to catch every small change), **Live speed** (how often it re-reads),
+  **Smallest text fragment** (skip stray single-letter specks) and **Stability** (how sure it
+  must be a line is real before translating). Sensible defaults are set on first launch.
 - Your game should run in **windowed** or **borderless** mode for the screen-reading box
   to appear on top. In full-screen, alt-tab out first (or use a second monitor).
-- Want to add your own phrases? Edit `phrases.json` — it's kept next to the app (portable)
-  or in `%AppData%\PWRUHelper\` (when installed via the MSI). Add lines and they'll show up
+- Want to add your own phrases or slang? Edit `phrases.json` (phrasebook) or `slang.json`
+  (the chat-slang decoder) — both are kept next to the app (portable) or in
+  `%AppData%\PWRUHelper\` (when installed via the MSI). Add lines and they'll show up
   next time you open it.
 
 ---

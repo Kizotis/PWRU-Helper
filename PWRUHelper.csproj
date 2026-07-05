@@ -11,7 +11,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>PWRUHelper</AssemblyName>
     <RootNamespace>PWRUHelper</RootNamespace>
-    <Version>0.8.0</Version>
+    <Version>0.8.1</Version>
     <ApplicationIcon>assets\icon.ico</ApplicationIcon>
   </PropertyGroup>
 
@@ -30,6 +30,10 @@
          AND copied next to the exe so it stays easy to edit. -->
     <None Remove="Data\phrases.json" />
     <EmbeddedResource Include="Data\phrases.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </EmbeddedResource>
+    <None Remove="Data\slang.json" />
+    <EmbeddedResource Include="Data\slang.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </EmbeddedResource>
   </ItemGroup>

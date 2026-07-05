@@ -7,12 +7,18 @@ namespace PWRUHelper.Services;
 public class AppSettings
 {
     // Translator + OCR choices.
-    // Defaults are tuned for chat OCR out of the box: a low sensitivity (10%) ignores
-    // camera/background movement behind the chat, and ~1.8s between reads (LiveSpeed 48%)
-    // is a calm, readable cadence. These only apply on first launch — a saved settings.json
+    // Defaults are tuned for chat OCR out of the box: a very low sensitivity (5%) ignores
+    // camera/background movement behind the chat, and ~1.0s between reads (LiveSpeed 80%)
+    // keeps the feed responsive. These only apply on first launch — a saved settings.json
     // keeps whatever the user picked.
-    public int SensitivityPercent { get; set; } = 10;
-    public int LiveSpeedPercent { get; set; } = 48;   // → CurrentLiveIntervalMs() ≈ 1.8s
+    public int SensitivityPercent { get; set; } = 5;
+    public int LiveSpeedPercent { get; set; } = 80;   // → CurrentLiveIntervalMs() ≈ 1.0s
+
+    // Fine OCR tuning (live mode). MinFragmentLetters = the smallest text fragment (in
+    // letters) worth translating; StabilityPercent = how strictly a newly-appeared line
+    // must persist across a frame before it's treated as a real message (→ ~0.72 by default).
+    public int MinFragmentLetters { get; set; } = 2;
+    public int StabilityPercent { get; set; } = 49;   // → StabilityThreshold() ≈ 0.72
     public string OcrTargetLang { get; set; } = "en";
     public string TranslatorFrom { get; set; } = "en";
     public string TranslatorTo { get; set; } = "ru";

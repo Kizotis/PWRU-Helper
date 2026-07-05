@@ -26,6 +26,7 @@ public partial class MainWindow : Window
     private readonly UpdateService _updates = new();
     private readonly AppSettings _settings = SettingsService.Load();
     private OcrService _ocr = new("ru");
+    private SlangGlossary _slang = SlangGlossary.FromJson(null);
     private readonly ObservableCollection<OcrResultItem> _ocrItems = new();
 
     private readonly DispatcherTimer _toastTimer = new() { Interval = TimeSpan.FromSeconds(1.6) };
@@ -46,10 +47,9 @@ public partial class MainWindow : Window
     private const int MaxHistory = 50;                   // keep the last 50 translated messages
     // A newly-appeared line must survive into the NEXT read before we translate it. That
     // one-frame confirmation filters OCR flicker from the game moving behind the chat
-    // (camera panning), which only ever shows up for a single frame. This stability check
-    // uses a fixed, tolerant threshold so small OCR noise on a real line doesn't break it —
-    // the sensitivity slider only controls how "new" a line must look to count at all.
-    private const double StabilityThreshold = 0.72;
+    // (camera panning), which only ever shows up for a single frame. How strict this
+    // confirmation is comes from the "Stability" slider (see StabilityThreshold()); the
+    // sensitivity slider only controls how "new" a line must look to count at all.
 
     public MainWindow()
     {
@@ -61,6 +61,7 @@ public partial class MainWindow : Window
         ShowAppVersion();
         PopulateLanguageCombos();
         LoadPhrases();
+        LoadSlang();
         CheckOcrAvailability();
         ApplySettings();
         // Track "my language" only from here on, so the init-time combo changes above
@@ -101,6 +102,8 @@ public partial class MainWindow : Window
         SelectTag(OcrTargetCombo, s.OcrTargetLang);
         SensitivitySlider.Value = Math.Clamp(s.SensitivityPercent, 0, 100);
         LiveSpeedSlider.Value = Math.Clamp(s.LiveSpeedPercent, 0, 100);
+        MinFragmentSlider.Value = Math.Clamp(s.MinFragmentLetters, 1, 6);
+        StabilitySlider.Value = Math.Clamp(s.StabilityPercent, 0, 100);
         TopmostCheck.IsChecked = s.AlwaysOnTop;
         Topmost = s.AlwaysOnTop;
         AutoCopyCheck.IsChecked = s.AutoCopyTranslation;
@@ -153,6 +156,8 @@ public partial class MainWindow : Window
             var s = _settings;
             s.SensitivityPercent = (int)Math.Round(SensitivitySlider.Value);
             s.LiveSpeedPercent = (int)Math.Round(LiveSpeedSlider.Value);
+            s.MinFragmentLetters = (int)Math.Round(MinFragmentSlider.Value);
+            s.StabilityPercent = (int)Math.Round(StabilitySlider.Value);
             s.OcrTargetLang = SelectedTag(OcrTargetCombo) ?? s.OcrTargetLang;
             s.TranslatorFrom = SelectedTag(FromCombo) ?? s.TranslatorFrom;
             s.TranslatorTo = SelectedTag(ToCombo) ?? s.TranslatorTo;
@@ -607,16 +612,60 @@ public partial class MainWindow : Window
         if (await CopyToClipboardAsync(OcrCommandBox.Text)) ShowToast("Command copied");
     }
 
-    private static string? ReadEmbeddedPhrases()
+    private static string? ReadEmbeddedPhrases() => ReadEmbeddedJson("phrases.json");
+
+    private static string? ReadEmbeddedJson(string endsWith)
     {
         var asm = Assembly.GetExecutingAssembly();
         var name = asm.GetManifestResourceNames()
-            .FirstOrDefault(n => n.EndsWith("phrases.json", StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(n => n.EndsWith(endsWith, StringComparison.OrdinalIgnoreCase));
         if (name == null) return null;
         using var s = asm.GetManifestResourceStream(name);
         if (s == null) return null;
         using var r = new StreamReader(s);
         return r.ReadToEnd();
+    }
+
+    /// <summary>Load the RU chat-slang glossary. Prefers an editable copy (next to the exe,
+    /// or %AppData%) so the user can extend it, falling back to the embedded copy. Fully
+    /// best-effort — any failure just leaves an empty glossary (nothing gets decoded).</summary>
+    private void LoadSlang()
+    {
+        try
+        {
+            var embedded = ReadEmbeddedJson("slang.json");
+            var path = FindOrCreateEditable("slang.json", embedded);
+            string? json = embedded;
+            if (path != null)
+                try { json = File.ReadAllText(path); } catch { /* keep embedded */ }
+            _slang = SlangGlossary.FromJson(json ?? embedded);
+        }
+        catch { _slang = SlangGlossary.FromJson(null); }
+    }
+
+    /// <summary>Editable-copy locator shared by the phrasebook and the slang glossary:
+    /// prefer an existing copy next to the exe or in %AppData%, else create one from the
+    /// embedded text so the user has something to edit. Returns null if none is possible.</summary>
+    private static string? FindOrCreateEditable(string fileName, string? embedded)
+    {
+        var candidates = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "Data", fileName),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                         "PWRUHelper", fileName),
+        };
+        foreach (var path in candidates)
+            if (File.Exists(path)) return path;
+        if (embedded != null)
+            foreach (var path in candidates)
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                    File.WriteAllText(path, embedded);
+                    return path;
+                }
+                catch { /* not writable here — try the next location */ }
+        return null;
     }
 
     /// <summary>Hide the window, let the user drag a rectangle, return it (physical px).</summary>
@@ -686,7 +735,7 @@ public partial class MainWindow : Window
         var items = new List<OcrResultItem>();
         foreach (var s in sentences)
         {
-            var item = new OcrResultItem { Original = s, Translation = "…" };
+            var item = new OcrResultItem { Original = s, Translation = "…", Glossary = _slang.Decode(s) };
             _ocrItems.Add(item);
             items.Add(item);
         }
@@ -764,6 +813,21 @@ public partial class MainWindow : Window
             LiveSpeedValue.Text = $"~{CurrentLiveIntervalMs() / 1000.0:0.0}s between reads";
     }
 
+    private void MinFragmentSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (MinFragmentValue != null)
+        {
+            int n = (int)Math.Round(e.NewValue);
+            MinFragmentValue.Text = n == 1 ? "1 letter" : $"{n} letters";
+        }
+    }
+
+    private void StabilitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (StabilityValue != null)
+            StabilityValue.Text = $"{(int)Math.Round(e.NewValue)}%";
+    }
+
     private void StopLive()
     {
         if (_liveCts == null) return;
@@ -808,8 +872,9 @@ public partial class MainWindow : Window
                 LiveIndicator.Text = (_liveTicks % 2 == 0) ? "●  LIVE" : "○  LIVE";  // heartbeat
 
                 using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
+                int minLetters = MinFragmentLetters();
                 var lines = TextMatching.ToSentences(await _ocr.ReadLinesAsync(bmp))
-                    .Where(TextMatching.LooksLikeText).ToList();
+                    .Where(l => TextMatching.LooksLikeText(l, minLetters)).ToList();
                 if (ct.IsCancellationRequested) break;
                 var cur = lines.Select(TextMatching.Normalize).ToList();
 
@@ -817,7 +882,7 @@ public partial class MainWindow : Window
                 // now are real new messages (they survived a frame, so they aren't flicker
                 // from the game moving behind the chat). Those get translated.
                 var confirmed = _pendingLines
-                    .Where(p => TextMatching.ContainsSimilar(cur, TextMatching.Normalize(p), StabilityThreshold))
+                    .Where(p => TextMatching.ContainsSimilar(cur, TextMatching.Normalize(p), StabilityThreshold()))
                     .Distinct()
                     .ToList();
 
@@ -877,7 +942,7 @@ public partial class MainWindow : Window
         var items = new List<OcrResultItem>();
         foreach (var s in newLines)
         {
-            var item = new OcrResultItem { Original = s, Translation = "…" };
+            var item = new OcrResultItem { Original = s, Translation = "…", Glossary = _slang.Decode(s) };
             _ocrItems.Add(item);
             items.Add(item);
             while (_ocrItems.Count > MaxHistory) _ocrItems.RemoveAt(0);   // drop the oldest
@@ -907,14 +972,27 @@ public partial class MainWindow : Window
     /// (The text-matching helpers themselves live in <see cref="TextMatching"/>.)</summary>
     private double SensitivityThreshold()
     {
-        double sens = SensitivitySlider?.Value ?? 10;   // default matches the XAML slider
+        double sens = SensitivitySlider?.Value ?? 5;    // default matches the XAML slider
         return 0.60 + (sens / 100.0) * 0.38;            // 0.60 (calm) … 0.98 (very sensitive)
+    }
+
+    /// <summary>Smallest text fragment (in letters) that live mode will bother translating.</summary>
+    private int MinFragmentLetters()
+        => (int)Math.Round(MinFragmentSlider?.Value ?? 2);
+
+    /// <summary>Map the stability slider (0–100%) to the frame-confirmation threshold. Higher
+    /// = a newly-appeared line must match itself more closely across a frame to be accepted
+    /// (fewer false positives from OCR noise, but slightly slower to confirm real text).</summary>
+    private double StabilityThreshold()
+    {
+        double v = StabilitySlider?.Value ?? 49;        // default matches the XAML slider
+        return 0.50 + (v / 100.0) * 0.45;               // 0.50 (loose) … 0.95 (strict), ≈0.72 at 49%
     }
 
     /// <summary>Live re-read interval from the speed slider (higher speed = shorter wait).</summary>
     private int CurrentLiveIntervalMs()
     {
-        double speed = LiveSpeedSlider?.Value ?? 48;    // 0..100, default matches the XAML slider
+        double speed = LiveSpeedSlider?.Value ?? 80;    // 0..100, default matches the XAML slider
         return (int)(3000 - (speed / 100.0) * 2500);    // 3.0s (slow) … 0.5s (fast)
     }
 
@@ -1191,5 +1269,14 @@ public class OcrResultItem : INotifyPropertyChanged
         get => _translation;
         set { _translation = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Translation))); }
     }
+
+    // Slang decode ("🔑 В = LFM · ПП = Full Moon Pavilion"), "" when the line has no slang.
+    private string _glossary = "";
+    public string Glossary
+    {
+        get => _glossary;
+        set { _glossary = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Glossary))); }
+    }
+
     public event PropertyChangedEventHandler? PropertyChanged;
 }
