@@ -2,6 +2,16 @@
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
   <assemblyIdentity version="1.0.0.0" name="PWRUHelper.app"/>
 
+  <!-- Run with the user's normal rights (no elevation). We only elevate on demand for the
+       one-click Russian OCR install, via a separate elevated powershell process. -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
   <!-- Per-Monitor V2 DPI awareness so screen-capture coordinates are real physical pixels -->
   <application xmlns="urn:schemas-microsoft-com:asm.v3">
     <windowsSettings>

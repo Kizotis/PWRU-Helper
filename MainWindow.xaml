@@ -160,6 +160,10 @@
                                 Content="Translate" Click="Translate_Click"/>
                         <Button x:Name="CopyResultButton" Style="{StaticResource GhostButton}"
                                 Content="Copy result" Margin="8,0,0,0" Click="CopyResult_Click"/>
+                        <CheckBox x:Name="AutoCopyCheck" Content="Auto-copy" IsChecked="True"
+                                  VerticalAlignment="Center" Margin="12,0,0,0"
+                                  Foreground="{StaticResource TextMutedBrush}"
+                                  ToolTip="Copy the translation automatically so you can paste it in game with Ctrl+V."/>
                         <TextBlock x:Name="TranslateStatus" VerticalAlignment="Center" Margin="12,0,0,0"
                                    Foreground="{StaticResource TextMutedBrush}"/>
                     </StackPanel>
@@ -192,14 +196,29 @@
                                         <Border Background="{StaticResource PanelBrush}" CornerRadius="8"
                                                 BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
                                                 Padding="12" Margin="0,0,0,8">
-                                            <StackPanel>
-                                                <TextBlock Text="{Binding Original}" FontSize="13"
-                                                           Foreground="{StaticResource TextMutedBrush}"
-                                                           TextWrapping="Wrap"/>
-                                                <TextBlock Text="{Binding Translation}" FontSize="16" FontWeight="SemiBold"
-                                                           Foreground="{StaticResource TextBrush}"
-                                                           TextWrapping="Wrap" Margin="0,4,0,0"/>
-                                            </StackPanel>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel Grid.Column="0">
+                                                    <TextBlock Text="{Binding Original}" FontSize="13"
+                                                               Foreground="{StaticResource TextMutedBrush}"
+                                                               TextWrapping="Wrap"/>
+                                                    <TextBlock Text="{Binding Translation}" FontSize="16" FontWeight="SemiBold"
+                                                               Foreground="{StaticResource TextBrush}"
+                                                               TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                            VerticalAlignment="Top" Margin="8,0,0,0">
+                                                    <Button Content="⧉" Style="{StaticResource GhostButton}"
+                                                            Padding="7,2" Click="CopyOriginal_Click"
+                                                            ToolTip="Copy the Russian text"/>
+                                                    <Button Content="↩" Style="{StaticResource GhostButton}"
+                                                            Padding="7,2" Margin="6,0,0,0" Click="ReplyToMessage_Click"
+                                                            ToolTip="Reply — type in your language, get Russian"/>
+                                                </StackPanel>
+                                            </Grid>
                                         </Border>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
@@ -230,8 +249,14 @@
                             </ComboBox>
                         </StackPanel>
 
-                        <Button x:Name="LiveButton" Style="{StaticResource AccentButton}" HorizontalAlignment="Left"
-                                Content="▶  Start live translation" Click="LiveButton_Click"/>
+                        <StackPanel Orientation="Horizontal">
+                            <Button x:Name="LiveButton" Style="{StaticResource AccentButton}"
+                                    Content="▶  Start live translation" Click="LiveButton_Click"/>
+                            <Button x:Name="ResumeLiveButton" Style="{StaticResource GhostButton}"
+                                    Content="↻  Resume last area" Margin="8,0,0,0" Visibility="Collapsed"
+                                    Click="ResumeLive_Click"
+                                    ToolTip="Start live on the area you used last time (no need to re-select)."/>
+                        </StackPanel>
                         <TextBlock x:Name="LiveStatus" TextWrapping="Wrap" Margin="0,6,0,10"
                                    Foreground="{StaticResource TextMutedBrush}"
                                    Text="Live mode keeps watching the chosen area and re-translates automatically whenever new text appears, until you press Stop."/>
@@ -298,7 +323,7 @@
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="PWRU" FontSize="20" FontWeight="Bold" Foreground="{StaticResource AccentBrush}"/>
                             <TextBlock Text=" Helper" FontSize="20" FontWeight="Bold" Foreground="{StaticResource TextBrush}"/>
-                            <TextBlock Text="  v0.2" FontSize="13" VerticalAlignment="Bottom" Margin="4,0,0,3"
+                            <TextBlock x:Name="VersionText" Text="  " FontSize="13" VerticalAlignment="Bottom" Margin="4,0,0,3"
                                        Foreground="{StaticResource TextMutedBrush}"/>
                         </StackPanel>
                         <TextBlock Text="A free helper for the Perfect World RU (pwonline.ru) community."
@@ -314,6 +339,22 @@
                                 and made on my own time — so please don't expect changes the same day. 🙂
                             </TextBlock>
                         </Border>
+
+                        <!-- keyboard shortcuts -->
+                        <TextBlock Text="Global shortcuts (work while in game)" FontSize="15" FontWeight="Bold"
+                                   Foreground="{StaticResource GoldBrush}" Margin="0,18,0,6"/>
+                        <TextBlock Margin="0,2" Foreground="{StaticResource TextMutedBrush}">
+                            <Run Text="Ctrl+Alt+P" Foreground="{StaticResource TealBrush}" FontWeight="SemiBold"/>
+                            <Run Text="  bring PWRU Helper to the front"/>
+                        </TextBlock>
+                        <TextBlock Margin="0,2" Foreground="{StaticResource TextMutedBrush}">
+                            <Run Text="Ctrl+Alt+T" Foreground="{StaticResource TealBrush}" FontWeight="SemiBold"/>
+                            <Run Text="  jump to the translator and start typing"/>
+                        </TextBlock>
+                        <TextBlock Margin="0,2" Foreground="{StaticResource TextMutedBrush}">
+                            <Run Text="Ctrl+Alt+L" Foreground="{StaticResource TealBrush}" FontWeight="SemiBold"/>
+                            <Run Text="  start / stop live translation on your last area"/>
+                        </TextBlock>
 
                         <!-- author links -->
                         <TextBlock Text="Made by Kizotis" FontSize="15" FontWeight="Bold"

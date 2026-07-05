@@ -55,9 +55,36 @@ public class OcrService
     {
         if (_engine == null) return new List<string>();
 
-        var software = await ToSoftwareBitmapAsync(bitmap);
-        var result = await _engine.RecognizeAsync(software);
-        software.Dispose();
+        // Windows.Media.Ocr rejects images whose width or height exceeds
+        // OcrEngine.MaxImageDimension (~2600 px) — RecognizeAsync would throw.
+        // Downscale proportionally so the largest side fits within the limit.
+        Bitmap? scaled = null;
+        var source = bitmap;
+        int maxDim = (int)OcrEngine.MaxImageDimension;
+        if (maxDim > 0 && (bitmap.Width > maxDim || bitmap.Height > maxDim))
+        {
+            double factor = (double)maxDim / Math.Max(bitmap.Width, bitmap.Height);
+            int newWidth = Math.Max(1, (int)(bitmap.Width * factor));
+            int newHeight = Math.Max(1, (int)(bitmap.Height * factor));
+            scaled = new Bitmap(newWidth, newHeight, PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(scaled))
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.DrawImage(bitmap, 0, 0, newWidth, newHeight);
+            }
+            source = scaled;
+        }
+
+        OcrResult result;
+        try
+        {
+            using var software = await ToSoftwareBitmapAsync(source);
+            result = await _engine.RecognizeAsync(software);
+        }
+        finally
+        {
+            scaled?.Dispose();
+        }
 
         var lines = new List<string>();
         foreach (var line in result.Lines)

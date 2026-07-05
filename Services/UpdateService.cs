@@ -57,6 +57,11 @@ public class UpdateService
             var url = root.TryGetProperty("html_url", out var h) ? h.GetString() : null;
             if (string.IsNullOrWhiteSpace(url)) url = ReleasesPage;
 
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var u)
+                || u.Scheme != Uri.UriSchemeHttps
+                || !u.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase))
+                url = ReleasesPage;
+
             return latest > CurrentVersion ? new UpdateInfo(latest, tag!, url!) : null;
         }
         catch

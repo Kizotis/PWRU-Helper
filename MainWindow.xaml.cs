@@ -3,12 +3,14 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Threading;
 using PWRUHelper.Models;
 using PWRUHelper.Services;
@@ -22,6 +24,7 @@ public partial class MainWindow : Window
 
     private readonly TranslationService _translator = new();
     private readonly UpdateService _updates = new();
+    private readonly AppSettings _settings = SettingsService.Load();
     private OcrService _ocr = new("ru");
     private readonly ObservableCollection<OcrResultItem> _ocrItems = new();
 
@@ -31,13 +34,16 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _liveCts;
     private System.Drawing.Rectangle? _liveRegion;
     private List<string> _prevNorm = new();              // normalised lines from the previous read
-    private readonly List<string> _shownNorm = new();    // normalised lines already translated (dedup)
+    private List<string> _pendingLines = new();          // lines that just appeared, awaiting confirmation
     private int _liveTicks;
     private const int MaxHistory = 50;                   // keep the last 50 translated messages
-    private const int ShownMemory = 80;                  // how many past lines we remember for dedup
-    // A line must also survive two consecutive reads before we translate it (stability),
-    // which filters out OCR flicker caused by the game moving behind the text (camera
-    // panning) — that noise only ever appears for a single frame.
+    private const int LiveIntervalMs = 800;              // target time between screen reads
+    // A newly-appeared line must survive into the NEXT read before we translate it. That
+    // one-frame confirmation filters OCR flicker from the game moving behind the chat
+    // (camera panning), which only ever shows up for a single frame. This stability check
+    // uses a fixed, tolerant threshold so small OCR noise on a real line doesn't break it —
+    // the sensitivity slider only controls how "new" a line must look to count at all.
+    private const double StabilityThreshold = 0.72;
 
     public MainWindow()
     {
@@ -45,10 +51,105 @@ public partial class MainWindow : Window
         _toastTimer.Tick += (_, _) => { Toast.Visibility = Visibility.Collapsed; _toastTimer.Stop(); };
 
         OcrResults.ItemsSource = _ocrItems;
+        ShowAppVersion();
         LoadPhrases();
         CheckOcrAvailability();
-        _ = CheckForUpdatesAsync();
+        ApplySettings();
+        Loaded += OnWindowLoaded;
     }
+
+    private async void OnWindowLoaded(object sender, RoutedEventArgs e)
+    {
+        if (!_settings.FirstRunDone)
+        {
+            _settings.FirstRunDone = true;
+            SettingsService.Save(_settings);   // persist now so it can't reappear after a crash
+            MessageBox.Show(this,
+                "Welcome to PWRU Helper!\n\n" +
+                "• Phrasebook — click a Russian phrase to copy it, then paste in game with Ctrl+V.\n" +
+                "• Translator — type in your language, get Russian (auto-copied). Paste Russian and it\n" +
+                "   flips direction automatically.\n" +
+                "• Screen OCR — read & live-translate Russian text off your screen. Install the Russian\n" +
+                "   OCR pack once (one click) for good Cyrillic reading.\n\n" +
+                "Tip: run your game windowed or borderless, and keep \"Always on top\" ticked.",
+                "Welcome", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        // Run the update check once the window is up, so the dialog has an owner and
+        // appears in front of our always-on-top window instead of behind it.
+        await CheckForUpdatesAsync();
+    }
+
+    // ============================================================
+    //  SETTINGS (persist between runs)
+    // ============================================================
+    private void ApplySettings()
+    {
+        var s = _settings;
+        SelectTag(FromCombo, s.TranslatorFrom);
+        SelectTag(ToCombo, s.TranslatorTo);
+        SelectTag(OcrTargetCombo, s.OcrTargetLang);
+        SensitivitySlider.Value = Math.Clamp(s.SensitivityPercent, 0, 100);
+        TopmostCheck.IsChecked = s.AlwaysOnTop;
+        Topmost = s.AlwaysOnTop;
+        AutoCopyCheck.IsChecked = s.AutoCopyTranslation;
+        if (s.LastTab >= 0 && s.LastTab < MainTabs.Items.Count)
+            MainTabs.SelectedIndex = s.LastTab;
+
+        // Restore window placement only if it still lands on a visible monitor.
+        if (s.WindowLeft is { } l && s.WindowTop is { } t &&
+            s.WindowWidth is > 200 and { } w && s.WindowHeight is > 200 and { } h &&
+            IsOnScreen(l, t, w, h))
+        {
+            WindowStartupLocation = WindowStartupLocation.Manual;
+            Left = l; Top = t; Width = w; Height = h;
+        }
+
+        UpdateResumeLiveButton();
+    }
+
+    private static bool IsOnScreen(double left, double top, double w, double h)
+    {
+        double vx = SystemParameters.VirtualScreenLeft, vy = SystemParameters.VirtualScreenTop;
+        double vw = SystemParameters.VirtualScreenWidth, vh = SystemParameters.VirtualScreenHeight;
+        // The title bar must be reachable: some horizontal overlap and the top on-screen.
+        return left + w > vx + 60 && left < vx + vw - 60 && top >= vy && top < vy + vh - 20;
+    }
+
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        base.OnClosing(e);
+        try
+        {
+            var s = _settings;
+            s.SensitivityPercent = (int)Math.Round(SensitivitySlider.Value);
+            s.OcrTargetLang = SelectedTag(OcrTargetCombo) ?? s.OcrTargetLang;
+            s.TranslatorFrom = SelectedTag(FromCombo) ?? s.TranslatorFrom;
+            s.TranslatorTo = SelectedTag(ToCombo) ?? s.TranslatorTo;
+            s.AlwaysOnTop = TopmostCheck.IsChecked == true;
+            s.AutoCopyTranslation = AutoCopyCheck.IsChecked == true;
+            s.LastTab = MainTabs.SelectedIndex;
+
+            var b = RestoreBounds;   // correct even if maximised/minimised
+            if (!b.IsEmpty)
+            {
+                s.WindowLeft = b.Left; s.WindowTop = b.Top;
+                s.WindowWidth = b.Width; s.WindowHeight = b.Height;
+            }
+            SettingsService.Save(s);
+        }
+        catch { /* saving preferences is best-effort */ }
+    }
+
+    private void UpdateResumeLiveButton()
+    {
+        bool show = _liveCts == null && _settings.LastLiveRegion is { Length: 4 };
+        ResumeLiveButton.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>Show the real build version in the About tab (never hard-coded).</summary>
+    private void ShowAppVersion()
+        => VersionText.Text = $"v{UpdateService.CurrentVersion.ToString(3)}";
 
     // ============================================================
     //  UPDATE CHECK (GitHub Releases)
@@ -58,7 +159,7 @@ public partial class MainWindow : Window
         var info = await _updates.CheckForUpdateAsync();
         if (info == null) return; // up to date, or the check couldn't run — stay quiet
 
-        var choice = MessageBox.Show(
+        var choice = MessageBox.Show(this,
             "A new version of PWRU Helper is available!\n\n" +
             $"You have: {UpdateService.CurrentVersion.ToString(3)}\n" +
             $"Latest: {info.LatestVersion.ToString(3)}\n\n" +
@@ -73,7 +174,9 @@ public partial class MainWindow : Window
         }
         catch
         {
-            Process.Start(new ProcessStartInfo(UpdateService.ReleasesPage) { UseShellExecute = true });
+            // Browser association broken, etc. — try the canonical page, then give up gracefully.
+            try { Process.Start(new ProcessStartInfo(UpdateService.ReleasesPage) { UseShellExecute = true }); }
+            catch { ShowToast("Couldn't open the browser — see github.com/Kizotis/PWRU-Helper/releases"); }
         }
     }
 
@@ -82,39 +185,87 @@ public partial class MainWindow : Window
     // ============================================================
     private void LoadPhrases()
     {
+        // The embedded copy always works (it's compiled into the exe) — it's our
+        // guaranteed source so the phrasebook is NEVER empty, even if writing/reading
+        // an editable copy fails (e.g. installed under Program Files with no write access).
+        string? json = ReadEmbeddedPhrases();
+
         try
         {
-            var path = Path.Combine(AppContext.BaseDirectory, "Data", "phrases.json");
+            var editable = FindOrCreateEditablePhrases(json);
+            if (editable != null && File.Exists(editable))
+                json = File.ReadAllText(editable);
+        }
+        catch
+        {
+            // Couldn't read an editable copy — fall back to the embedded one (already set).
+        }
 
-            // Portable single-file build ships phrases embedded. On first run, write an
-            // editable copy next to the exe so the user can add their own phrases.
-            if (!File.Exists(path))
-            {
-                var embedded = ReadEmbeddedPhrases();
-                if (embedded != null)
-                {
-                    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                    File.WriteAllText(path, embedded);
-                }
-            }
-
-            var json = File.Exists(path) ? File.ReadAllText(path) : ReadEmbeddedPhrases();
+        try
+        {
             if (json != null)
             {
                 var items = JsonSerializer.Deserialize<List<Phrase>>(json,
                     new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                if (items != null) _allPhrases.AddRange(items);
+                if (items != null)
+                {
+                    // A user-edited file may have missing/null fields — coalesce so the
+                    // search filter (p.En.Contains…) can never hit a NullReferenceException.
+                    // (Nullable ref types are compile-time only; JSON can still write null.)
+                    static string Safe(string? s) => s ?? "";
+                    foreach (var p in items)
+                    {
+                        p.En = Safe(p.En); p.Ru = Safe(p.Ru); p.Translit = Safe(p.Translit);
+                        p.Category = string.IsNullOrEmpty(p.Category) ? "Other" : p.Category;
+                    }
+                    _allPhrases.AddRange(items.Where(p => p.Ru.Length > 0 || p.En.Length > 0));
+                }
             }
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Could not load phrases.json:\n{ex.Message}", "PWRU Helper");
+            MessageBox.Show($"Could not read the phrase list:\n{ex.Message}", "PWRU Helper");
         }
 
         _phrasesView = new CollectionViewSource { Source = _allPhrases };
         _phrasesView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(Phrase.Category)));
         _phrasesView.Filter += PhrasesFilter;
         PhraseList.ItemsSource = _phrasesView.View;
+    }
+
+    /// <summary>
+    /// Returns the path of an editable phrases.json the user can customise, creating it
+    /// from the embedded copy on first run. Prefers next to the exe (portable), but falls
+    /// back to %AppData%\PWRUHelper when that folder isn't writable (e.g. an MSI install
+    /// under Program Files). Returns null if no editable copy could be provided.
+    /// </summary>
+    private static string? FindOrCreateEditablePhrases(string? embedded)
+    {
+        var candidates = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "Data", "phrases.json"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                         "PWRUHelper", "phrases.json"),
+        };
+
+        // If an editable copy already exists anywhere, use it.
+        foreach (var path in candidates)
+            if (File.Exists(path)) return path;
+
+        // Otherwise try to create one (best-effort) so the user has something to edit.
+        if (embedded != null)
+            foreach (var path in candidates)
+            {
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                    File.WriteAllText(path, embedded);
+                    return path;
+                }
+                catch { /* not writable here — try the next location */ }
+            }
+
+        return null;
     }
 
     private void PhrasesFilter(object sender, FilterEventArgs e)
@@ -276,6 +427,7 @@ public partial class MainWindow : Window
 
         MainTabs.SelectedIndex = 1;          // results show on the Translator page
         SelectAreaButton.IsEnabled = false;
+        LiveButton.IsEnabled = false;        // don't let live start mid-read (shared OCR engine)
         _ocrItems.Clear();
         ScreenReadStatus.Text = "Reading…";
         try
@@ -294,11 +446,12 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            ScreenReadStatus.Text = $"OCR failed: {ex.Message}";
+            ScreenReadStatus.Text = $"OCR failed: {Friendly(ex)}";
         }
         finally
         {
             SelectAreaButton.IsEnabled = true;
+            LiveButton.IsEnabled = true;
         }
     }
 
@@ -306,13 +459,23 @@ public partial class MainWindow : Window
     private async Task TranslateSentencesInto(List<string> sentences, string target)
     {
         _ocrItems.Clear();
+        var items = new List<OcrResultItem>();
         foreach (var s in sentences)
         {
             var item = new OcrResultItem { Original = s, Translation = "…" };
             _ocrItems.Add(item);
-            try { item.Translation = await _translator.TranslateAsync(s, "ru", target); }
-            catch (Exception ex) { item.Translation = $"(translation failed: {ex.Message})"; }
+            items.Add(item);
         }
+
+        List<string> translations;
+        try { translations = await _translator.TranslateLinesAsync(sentences, "ru", target); }
+        catch (Exception ex)
+        {
+            foreach (var it in items) it.Translation = $"({Friendly(ex)})";
+            return;
+        }
+        for (int i = 0; i < items.Count && i < translations.Count; i++)
+            items[i].Translation = translations[i];
     }
 
     // ============================================================
@@ -323,16 +486,29 @@ public partial class MainWindow : Window
         if (_liveCts != null) { StopLive(); return; }
 
         var region = await SelectRegionAsync();
-        if (region is not { } rect) return;
+        if (region is { } rect) StartLive(rect);
+    }
+
+    private void ResumeLive_Click(object sender, RoutedEventArgs e)
+    {
+        if (_liveCts != null) return;
+        if (_settings.LastLiveRegion is { Length: 4 } r)
+            StartLive(new System.Drawing.Rectangle(r[0], r[1], r[2], r[3]));
+    }
+
+    private void StartLive(System.Drawing.Rectangle rect)
+    {
+        // Remember the area so it can be resumed next session without re-selecting.
+        _settings.LastLiveRegion = new[] { rect.X, rect.Y, rect.Width, rect.Height };
 
         _liveRegion = rect;
         _prevNorm = new();
-        _shownNorm.Clear();
+        _pendingLines = new();
         _liveTicks = 0;
         _ocrItems.Clear();
         SetLiveUi(true);
         MainTabs.SelectedIndex = 1;
-        ScreenReadStatus.Text = "🔴 Live — watching the selected area. Translations update when the text changes.";
+        ScreenReadStatus.Text = "🔴 Live — watching the selected area. Translations appear when new text shows up.";
 
         _liveCts = new CancellationTokenSource();
         _ = LiveLoop(rect, _liveCts.Token);
@@ -363,6 +539,7 @@ public partial class MainWindow : Window
         LiveIndicator.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
         StopLiveButton.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
         LiveButton.Content = on ? "■  Stop live translation" : "▶  Start live translation";
+        UpdateResumeLiveButton();
         LiveStatus.Text = on
             ? "🔴 Live is running — re-reading the area and re-translating whenever the text changes. Press Stop to end."
             : "Live mode keeps watching the chosen area and re-translates automatically whenever the text changes, until you press Stop.";
@@ -370,73 +547,87 @@ public partial class MainWindow : Window
 
     private async Task LiveLoop(System.Drawing.Rectangle rect, CancellationToken ct)
     {
+        int consecutiveErrors = 0;
+        var sw = new System.Diagnostics.Stopwatch();
         while (!ct.IsCancellationRequested)
         {
+            sw.Restart();
             try
             {
                 _liveTicks++;
                 LiveIndicator.Text = (_liveTicks % 2 == 0) ? "●  LIVE" : "○  LIVE";  // heartbeat
 
                 using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
-                var rawLines = ToSentences(await _ocr.ReadLinesAsync(bmp));
+                var lines = ToSentences(await _ocr.ReadLinesAsync(bmp)).Where(LooksLikeText).ToList();
+                if (ct.IsCancellationRequested) break;
+                var cur = lines.Select(Normalize).ToList();
 
-                // Keep only lines that actually look like text (drop 1-char specks and
-                // pure punctuation/number noise the moving background produces).
-                var lines = rawLines.Where(LooksLikeText).ToList();
-                var norm = lines.Select(Normalize).ToList();
-
-                // A line only counts as "new to translate" when it is:
-                //   (1) STABLE — present in this read AND the previous one. A line that
-                //       flickers in for a single frame (camera panning behind the chat)
-                //       never clears this, so moving the view no longer spams updates.
-                //   (2) NOT ALREADY SHOWN — not a fuzzy match of a line we've already
-                //       translated, so re-reading the same chat line with tiny OCR
-                //       differences doesn't re-translate it.
-                double thr = SensitivityThreshold();
-                var newIdx = Enumerable.Range(0, lines.Count)
-                    .Where(i => ContainsSimilar(_prevNorm, norm[i], thr) &&
-                                !ContainsSimilar(_shownNorm, norm[i], thr))
+                // CONFIRM: lines that appeared in the previous read AND are still on screen
+                // now are real new messages (they survived a frame, so they aren't flicker
+                // from the game moving behind the chat). Those get translated.
+                var confirmed = _pendingLines
+                    .Where(p => ContainsSimilar(cur, Normalize(p), StabilityThreshold))
+                    .Distinct()
                     .ToList();
-                _prevNorm = norm;
 
-                if (newIdx.Count > 0)
+                // FRESH: lines on screen now that aren't (fuzzily) in the previous read.
+                // The sensitivity slider sets how similar counts as "already seen": higher
+                // sensitivity = stricter = smaller changes register as new. Repeats work
+                // naturally — a line that scrolled off leaves _prevNorm, so if it's sent
+                // again it reads as fresh and gets translated again.
+                double freshThr = SensitivityThreshold();
+                _pendingLines = lines.Where(l => !ContainsSimilar(_prevNorm, Normalize(l), freshThr)).ToList();
+                _prevNorm = cur;
+
+                if (confirmed.Count > 0)
                 {
-                    var newLines = newIdx.Select(i => lines[i]).ToList();
-                    foreach (var i in newIdx)
-                    {
-                        _shownNorm.Add(norm[i]);
-                        if (_shownNorm.Count > ShownMemory) _shownNorm.RemoveAt(0);
-                    }
-
                     var target = SelectedTag(OcrTargetCombo) ?? "en";
-                    ScreenReadStatus.Text = $"🔴 Live — {newLines.Count} new line(s), translating…";
-                    await AppendLinesToHistory(newLines, target);
+                    ScreenReadStatus.Text = $"🔴 Live — {confirmed.Count} new line(s), translating…";
+                    await AppendLinesToHistory(confirmed, target, ct);
+                    if (ct.IsCancellationRequested) break;
                     ScreenReadStatus.Text = $"🔴 Live — {_ocrItems.Count} message(s) in history (check #{_liveTicks}).";
                 }
+                consecutiveErrors = 0;
             }
+            catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
-                ScreenReadStatus.Text = $"Live error: {ex.Message}";
+                if (ct.IsCancellationRequested) break;
+                if (++consecutiveErrors >= 5)
+                {
+                    ScreenReadStatus.Text = $"Live stopped after repeated errors ({Friendly(ex)}).";
+                    StopLive();
+                    break;
+                }
+                ScreenReadStatus.Text = $"Live hiccup ({Friendly(ex)}) — retrying…";
             }
 
-            try { await Task.Delay(800, ct); }
+            // Keep a roughly steady cadence: subtract the time the read+translate just took.
+            int wait = Math.Max(150, LiveIntervalMs - (int)sw.ElapsedMilliseconds);
+            try { await Task.Delay(wait, ct); }
             catch (TaskCanceledException) { break; }
         }
     }
 
-    /// <summary>Append new Russian lines + their translations, keep the last MaxHistory, and auto-scroll.</summary>
-    private async Task AppendLinesToHistory(List<string> newLines, string target)
+    /// <summary>Add placeholder items, translate the batch (one request when possible),
+    /// keep the last MaxHistory, and auto-scroll. Respects the live cancellation token.</summary>
+    private async Task AppendLinesToHistory(List<string> newLines, string target, CancellationToken ct)
     {
+        var items = new List<OcrResultItem>();
         foreach (var s in newLines)
         {
             var item = new OcrResultItem { Original = s, Translation = "…" };
             _ocrItems.Add(item);
+            items.Add(item);
             while (_ocrItems.Count > MaxHistory) _ocrItems.RemoveAt(0);   // drop the oldest
-            ResultsScroller?.ScrollToEnd();
-            try { item.Translation = await _translator.TranslateAsync(s, "ru", target); }
-            catch (Exception ex) { item.Translation = $"(translation failed: {ex.Message})"; }
-            ResultsScroller?.ScrollToEnd();
         }
+        ResultsScroller?.ScrollToEnd();
+
+        var translations = await _translator.TranslateLinesAsync(newLines, "ru", target, ct);
+        if (ct.IsCancellationRequested) return;
+        for (int i = 0; i < items.Count && i < translations.Count; i++)
+            items[i].Translation = translations[i];
+        ResultsScroller?.ScrollToEnd();
     }
 
     /// <summary>Break OCR lines into individual sentences (split on . ! ? …).</summary>
@@ -520,22 +711,38 @@ public partial class MainWindow : Window
 
     private async Task RunTranslation()
     {
+        if (!TranslateButton.IsEnabled) return;   // a translation is already running
+
         var text = TranslateInput.Text?.Trim() ?? "";
         if (text.Length == 0) return;
 
         var from = SelectedTag(FromCombo) ?? "en";
         var to = SelectedTag(ToCombo) ?? "ru";
 
+        // Auto-detect: if the text is Russian but we're not translating FROM Russian,
+        // flip the direction so pasting Russian "just works" (was silently wrong before).
+        if (from != "ru" && Regex.IsMatch(text, @"\p{IsCyrillic}"))
+        {
+            from = "ru";
+            if (to == "ru") to = "en";
+            SelectTag(FromCombo, from);
+            SelectTag(ToCombo, to);
+        }
+
         TranslateButton.IsEnabled = false;
         TranslateStatus.Text = "Translating…";
         try
         {
-            TranslateOutput.Text = await _translator.TranslateAsync(text, from, to);
+            var result = await _translator.TranslateAsync(text, from, to);
+            TranslateOutput.Text = result;
             TranslateStatus.Text = $"{from} → {to}";
+
+            if (AutoCopyCheck.IsChecked == true && result.Length > 0 && CopyToClipboard(result))
+                ShowToast("Translated & copied — paste in game with Ctrl+V");
         }
         catch (Exception ex)
         {
-            TranslateStatus.Text = $"Failed: {ex.Message}";
+            TranslateStatus.Text = $"Failed: {Friendly(ex)}";
         }
         finally
         {
@@ -559,6 +766,25 @@ public partial class MainWindow : Window
     {
         if (!string.IsNullOrWhiteSpace(TranslateOutput.Text) && CopyToClipboard(TranslateOutput.Text))
             ShowToast("Result copied");
+    }
+
+    // Copy the original Russian of a screen-read message.
+    private void CopyOriginal_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: OcrResultItem item } && CopyToClipboard(item.Original))
+            ShowToast("Russian copied");
+    }
+
+    // "Reply": set up the translator to write a Russian answer and focus the input.
+    private void ReplyToMessage_Click(object sender, RoutedEventArgs e)
+    {
+        var mine = SelectedTag(FromCombo);
+        if (mine is null or "ru" or "auto") mine = "en";   // reply FROM a real non-Russian language
+        SelectTag(FromCombo, mine);
+        SelectTag(ToCombo, "ru");                            // …TO Russian
+        TranslateInput.Text = "";
+        TranslateInput.Focus();
+        ShowToast("Type your reply — it'll translate to Russian");
     }
 
     // ============================================================
@@ -594,13 +820,17 @@ public partial class MainWindow : Window
 
     private bool CopyToClipboard(string text)
     {
-        // Clipboard can be briefly locked by another app; retry a few times.
-        for (int i = 0; i < 5; i++)
+        // The clipboard is a shared, single-owner resource: a clipboard-history tool,
+        // a game overlay or another app can briefly hold it, making the copy fail
+        // ("clipboard busy"). Retry patiently, and use SetDataObject(copy: true) rather
+        // than SetText — it's more reliable and flushes so the text survives after the
+        // app closes. (WPF has no retry-count overload; that one is WinForms-only.)
+        for (int i = 0; i < 10; i++)
         {
-            try { Clipboard.SetText(text); return true; }
-            catch { Thread.Sleep(40); }
+            try { Clipboard.SetDataObject(text, true); return true; }
+            catch { Thread.Sleep(80); }   // ~0.8s total before we give up
         }
-        ShowToast("Clipboard busy — try again");
+        ShowToast("Clipboard busy — another app is using it. Try again in a second.");
         return false;
     }
 
@@ -610,6 +840,92 @@ public partial class MainWindow : Window
         Toast.Visibility = Visibility.Visible;
         _toastTimer.Stop();
         _toastTimer.Start();
+    }
+
+    /// <summary>Turn an exception into a short, non-technical message for the user.</summary>
+    private static string Friendly(Exception ex) => ex switch
+    {
+        TranslationException te => te.Message,
+        System.Net.Http.HttpRequestException => "no Internet connection",
+        TaskCanceledException => "the request timed out",
+        _ => ex.Message,
+    };
+
+    // ============================================================
+    //  GLOBAL HOTKEYS (work even while the game has focus)
+    //    Ctrl+Alt+P — bring PWRU Helper to the front
+    //    Ctrl+Alt+T — bring to front + focus the translator input
+    //    Ctrl+Alt+L — start/stop live on the last area
+    // ============================================================
+    private const int WM_HOTKEY = 0x0312;
+    private const uint MOD_ALT = 0x0001, MOD_CONTROL = 0x0002, MOD_NOREPEAT = 0x4000;
+    private const int HK_SHOW = 1, HK_TRANSLATE = 2, HK_LIVE = 3;
+    private HwndSource? _hwnd;
+
+    [DllImport("user32.dll")] private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+    [DllImport("user32.dll")] private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        var handle = new WindowInteropHelper(this).Handle;
+        _hwnd = HwndSource.FromHwnd(handle);
+        _hwnd?.AddHook(HotkeyHook);
+
+        uint mod = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
+        // Best-effort: if another app already owns a combo, RegisterHotKey just returns false.
+        RegisterHotKey(handle, HK_SHOW, mod, 0x50);       // P
+        RegisterHotKey(handle, HK_TRANSLATE, mod, 0x54);  // T
+        RegisterHotKey(handle, HK_LIVE, mod, 0x4C);       // L
+    }
+
+    private IntPtr HotkeyHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg != WM_HOTKEY) return IntPtr.Zero;
+        switch (wParam.ToInt32())
+        {
+            case HK_SHOW: BringToFront(); handled = true; break;
+            case HK_TRANSLATE:
+                BringToFront(); MainTabs.SelectedIndex = 1; TranslateInput.Focus(); handled = true; break;
+            case HK_LIVE: ToggleLiveFromHotkey(); handled = true; break;
+        }
+        return IntPtr.Zero;
+    }
+
+    private void BringToFront()
+    {
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Show();
+        // Nudge topmost to force ourselves above the game, then restore the user's choice.
+        Topmost = true;
+        Topmost = TopmostCheck.IsChecked == true;
+        Activate();
+    }
+
+    private void ToggleLiveFromHotkey()
+    {
+        if (_liveCts != null) { StopLive(); return; }
+        if (_settings.LastLiveRegion is { Length: 4 } r)
+            StartLive(new System.Drawing.Rectangle(r[0], r[1], r[2], r[3]));
+        else
+        {
+            BringToFront();
+            MainTabs.SelectedIndex = 2;   // Screen OCR tab
+            ShowToast("Pick a screen area once — then Ctrl+Alt+L resumes it.");
+        }
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        if (_hwnd != null)
+        {
+            var handle = new WindowInteropHelper(this).Handle;
+            UnregisterHotKey(handle, HK_SHOW);
+            UnregisterHotKey(handle, HK_TRANSLATE);
+            UnregisterHotKey(handle, HK_LIVE);
+            _hwnd.RemoveHook(HotkeyHook);
+        }
+        base.OnClosed(e);
     }
 }
 

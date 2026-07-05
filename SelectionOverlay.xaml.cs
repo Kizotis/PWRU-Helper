@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -7,13 +8,27 @@ namespace PWRUHelper;
 
 /// <summary>
 /// A full-screen transparent overlay. The user drags a rectangle; on release we
-/// return that rectangle in PHYSICAL screen pixels (via PointToScreen, so it is
-/// correct at any display scaling). Returns null if cancelled with Esc.
+/// return that rectangle in PHYSICAL screen pixels. The corners are read straight
+/// from the OS cursor position (GetCursorPos), which is already in physical pixels
+/// for our per-monitor-DPI-aware process — so it stays correct even across monitors
+/// with different scaling, where WPF's own PointToScreen would drift. Returns null
+/// if cancelled with Esc.
 /// </summary>
 public partial class SelectionOverlay : Window
 {
-    private Point _startPoint;
+    private Point _startPoint;               // window coords, for drawing the marquee
+    private System.Drawing.Point _startPhysical;  // physical screen pixels, for the result
     private bool _dragging;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT { public int X; public int Y; }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetCursorPos(out POINT lpPoint);
+
+    private static System.Drawing.Point PhysicalCursor()
+        => GetCursorPos(out var p) ? new System.Drawing.Point(p.X, p.Y) : new System.Drawing.Point(0, 0);
 
     /// <summary>Selected region in physical screen pixels, or null if cancelled.</summary>
     public System.Drawing.Rectangle? SelectedRegion { get; private set; }
@@ -53,6 +68,7 @@ public partial class SelectionOverlay : Window
         if (e.ChangedButton != MouseButton.Left) return;
 
         _startPoint = e.GetPosition(RootCanvas);
+        _startPhysical = PhysicalCursor();
         _dragging = true;
         HintBox.Visibility = Visibility.Collapsed;
         SelectionRect.Visibility = Visibility.Visible;
@@ -75,16 +91,14 @@ public partial class SelectionOverlay : Window
         _dragging = false;
         ReleaseMouseCapture();
 
-        var endPoint = e.GetPosition(RootCanvas);
+        // Read the release corner straight from the OS in physical pixels (see class note).
+        var p1 = _startPhysical;
+        var p2 = PhysicalCursor();
 
-        // Convert both corners to physical screen pixels (DPI-correct).
-        var p1 = RootCanvas.PointToScreen(_startPoint);
-        var p2 = RootCanvas.PointToScreen(endPoint);
-
-        int x = (int)Math.Round(Math.Min(p1.X, p2.X));
-        int y = (int)Math.Round(Math.Min(p1.Y, p2.Y));
-        int w = (int)Math.Round(Math.Abs(p2.X - p1.X));
-        int h = (int)Math.Round(Math.Abs(p2.Y - p1.Y));
+        int x = Math.Min(p1.X, p2.X);
+        int y = Math.Min(p1.Y, p2.Y);
+        int w = Math.Abs(p2.X - p1.X);
+        int h = Math.Abs(p2.Y - p1.Y);
 
         if (w < 4 || h < 4)
         {

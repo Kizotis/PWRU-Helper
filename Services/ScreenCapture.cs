@@ -14,9 +14,18 @@ public static class ScreenCapture
         width = Math.Max(1, width);
         height = Math.Max(1, height);
         var bmp = new Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-        using (var g = Graphics.FromImage(bmp))
+        try
         {
-            g.CopyFromScreen(x, y, 0, 0, new Size(width, height), CopyPixelOperation.SourceCopy);
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.CopyFromScreen(x, y, 0, 0, new Size(width, height), CopyPixelOperation.SourceCopy);
+            }
+        }
+        catch
+        {
+            // Locked workstation, UAC secure desktop, etc. Never leak the GDI handle.
+            bmp.Dispose();
+            throw;
         }
         return bmp;
     }
