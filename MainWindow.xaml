@@ -252,8 +252,10 @@
                                     <TextBlock Text="asks for admin permission" VerticalAlignment="Center"
                                                Margin="10,0,0,0" Foreground="{StaticResource TextMutedBrush}"/>
                                 </StackPanel>
-                                <TextBlock Text="…or run this command yourself in an admin PowerShell:" Margin="0,12,0,4"
-                                           Foreground="{StaticResource TextMutedBrush}" FontSize="12"/>
+                                <TextBlock TextWrapping="Wrap" Margin="0,12,0,4"
+                                           Foreground="{StaticResource TextMutedBrush}" FontSize="12">
+                                    <Run Text="…or do it yourself: right-click Start → "/><Run Text="Terminal (Admin)" FontWeight="Bold"/><Run Text=" or "/><Run Text="Windows PowerShell (Admin)" FontWeight="Bold"/><Run Text=", then paste the line below. "/><LineBreak/><Run Text="⚠ Must be PowerShell — this will NOT work in Command Prompt (cmd)." FontWeight="Bold" Foreground="{StaticResource GoldBrush}"/>
+                                </TextBlock>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
