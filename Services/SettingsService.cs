@@ -6,9 +6,13 @@ namespace PWRUHelper.Services;
 /// <summary>User preferences that survive between runs. Plain data, JSON-serialised.</summary>
 public class AppSettings
 {
-    // Translator + OCR choices
-    public int SensitivityPercent { get; set; } = 60;
-    public int LiveSpeedPercent { get; set; } = 55;
+    // Translator + OCR choices.
+    // Defaults are tuned for chat OCR out of the box: a low sensitivity (10%) ignores
+    // camera/background movement behind the chat, and ~1.8s between reads (LiveSpeed 48%)
+    // is a calm, readable cadence. These only apply on first launch — a saved settings.json
+    // keeps whatever the user picked.
+    public int SensitivityPercent { get; set; } = 10;
+    public int LiveSpeedPercent { get; set; } = 48;   // → CurrentLiveIntervalMs() ≈ 1.8s
     public string OcrTargetLang { get; set; } = "en";
     public string TranslatorFrom { get; set; } = "en";
     public string TranslatorTo { get; set; } = "ru";
