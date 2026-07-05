@@ -31,13 +31,16 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _liveCts;
     private System.Drawing.Rectangle? _liveRegion;
     private List<string> _prevNorm = new();              // normalised lines from the previous read
-    private readonly List<string> _shownNorm = new();    // normalised lines already translated (dedup)
+    private List<string> _pendingLines = new();          // lines that just appeared, awaiting confirmation
     private int _liveTicks;
     private const int MaxHistory = 50;                   // keep the last 50 translated messages
-    private const int ShownMemory = 80;                  // how many past lines we remember for dedup
-    // A line must also survive two consecutive reads before we translate it (stability),
-    // which filters out OCR flicker caused by the game moving behind the text (camera
-    // panning) — that noise only ever appears for a single frame.
+    private const int LiveIntervalMs = 800;              // target time between screen reads
+    // A newly-appeared line must survive into the NEXT read before we translate it. That
+    // one-frame confirmation filters OCR flicker from the game moving behind the chat
+    // (camera panning), which only ever shows up for a single frame. This stability check
+    // uses a fixed, tolerant threshold so small OCR noise on a real line doesn't break it —
+    // the sensitivity slider only controls how "new" a line must look to count at all.
+    private const double StabilityThreshold = 0.72;
 
     public MainWindow()
     {
@@ -368,13 +371,23 @@ public partial class MainWindow : Window
     private async Task TranslateSentencesInto(List<string> sentences, string target)
     {
         _ocrItems.Clear();
+        var items = new List<OcrResultItem>();
         foreach (var s in sentences)
         {
             var item = new OcrResultItem { Original = s, Translation = "…" };
             _ocrItems.Add(item);
-            try { item.Translation = await _translator.TranslateAsync(s, "ru", target); }
-            catch (Exception ex) { item.Translation = $"(translation failed: {ex.Message})"; }
+            items.Add(item);
         }
+
+        List<string> translations;
+        try { translations = await _translator.TranslateLinesAsync(sentences, "ru", target); }
+        catch (Exception ex)
+        {
+            foreach (var it in items) it.Translation = $"({Friendly(ex)})";
+            return;
+        }
+        for (int i = 0; i < items.Count && i < translations.Count; i++)
+            items[i].Translation = translations[i];
     }
 
     // ============================================================
@@ -389,7 +402,7 @@ public partial class MainWindow : Window
 
         _liveRegion = rect;
         _prevNorm = new();
-        _shownNorm.Clear();
+        _pendingLines = new();
         _liveTicks = 0;
         _ocrItems.Clear();
         SetLiveUi(true);
@@ -432,73 +445,87 @@ public partial class MainWindow : Window
 
     private async Task LiveLoop(System.Drawing.Rectangle rect, CancellationToken ct)
     {
+        int consecutiveErrors = 0;
+        var sw = new System.Diagnostics.Stopwatch();
         while (!ct.IsCancellationRequested)
         {
+            sw.Restart();
             try
             {
                 _liveTicks++;
                 LiveIndicator.Text = (_liveTicks % 2 == 0) ? "●  LIVE" : "○  LIVE";  // heartbeat
 
                 using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
-                var rawLines = ToSentences(await _ocr.ReadLinesAsync(bmp));
+                var lines = ToSentences(await _ocr.ReadLinesAsync(bmp)).Where(LooksLikeText).ToList();
+                if (ct.IsCancellationRequested) break;
+                var cur = lines.Select(Normalize).ToList();
 
-                // Keep only lines that actually look like text (drop 1-char specks and
-                // pure punctuation/number noise the moving background produces).
-                var lines = rawLines.Where(LooksLikeText).ToList();
-                var norm = lines.Select(Normalize).ToList();
-
-                // A line only counts as "new to translate" when it is:
-                //   (1) STABLE — present in this read AND the previous one. A line that
-                //       flickers in for a single frame (camera panning behind the chat)
-                //       never clears this, so moving the view no longer spams updates.
-                //   (2) NOT ALREADY SHOWN — not a fuzzy match of a line we've already
-                //       translated, so re-reading the same chat line with tiny OCR
-                //       differences doesn't re-translate it.
-                double thr = SensitivityThreshold();
-                var newIdx = Enumerable.Range(0, lines.Count)
-                    .Where(i => ContainsSimilar(_prevNorm, norm[i], thr) &&
-                                !ContainsSimilar(_shownNorm, norm[i], thr))
+                // CONFIRM: lines that appeared in the previous read AND are still on screen
+                // now are real new messages (they survived a frame, so they aren't flicker
+                // from the game moving behind the chat). Those get translated.
+                var confirmed = _pendingLines
+                    .Where(p => ContainsSimilar(cur, Normalize(p), StabilityThreshold))
+                    .Distinct()
                     .ToList();
-                _prevNorm = norm;
 
-                if (newIdx.Count > 0)
+                // FRESH: lines on screen now that aren't (fuzzily) in the previous read.
+                // The sensitivity slider sets how similar counts as "already seen": higher
+                // sensitivity = stricter = smaller changes register as new. Repeats work
+                // naturally — a line that scrolled off leaves _prevNorm, so if it's sent
+                // again it reads as fresh and gets translated again.
+                double freshThr = SensitivityThreshold();
+                _pendingLines = lines.Where(l => !ContainsSimilar(_prevNorm, Normalize(l), freshThr)).ToList();
+                _prevNorm = cur;
+
+                if (confirmed.Count > 0)
                 {
-                    var newLines = newIdx.Select(i => lines[i]).ToList();
-                    foreach (var i in newIdx)
-                    {
-                        _shownNorm.Add(norm[i]);
-                        if (_shownNorm.Count > ShownMemory) _shownNorm.RemoveAt(0);
-                    }
-
                     var target = SelectedTag(OcrTargetCombo) ?? "en";
-                    ScreenReadStatus.Text = $"🔴 Live — {newLines.Count} new line(s), translating…";
-                    await AppendLinesToHistory(newLines, target);
+                    ScreenReadStatus.Text = $"🔴 Live — {confirmed.Count} new line(s), translating…";
+                    await AppendLinesToHistory(confirmed, target, ct);
+                    if (ct.IsCancellationRequested) break;
                     ScreenReadStatus.Text = $"🔴 Live — {_ocrItems.Count} message(s) in history (check #{_liveTicks}).";
                 }
+                consecutiveErrors = 0;
             }
+            catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
-                ScreenReadStatus.Text = $"Live error: {ex.Message}";
+                if (ct.IsCancellationRequested) break;
+                if (++consecutiveErrors >= 5)
+                {
+                    ScreenReadStatus.Text = $"Live stopped after repeated errors ({Friendly(ex)}).";
+                    StopLive();
+                    break;
+                }
+                ScreenReadStatus.Text = $"Live hiccup ({Friendly(ex)}) — retrying…";
             }
 
-            try { await Task.Delay(800, ct); }
+            // Keep a roughly steady cadence: subtract the time the read+translate just took.
+            int wait = Math.Max(150, LiveIntervalMs - (int)sw.ElapsedMilliseconds);
+            try { await Task.Delay(wait, ct); }
             catch (TaskCanceledException) { break; }
         }
     }
 
-    /// <summary>Append new Russian lines + their translations, keep the last MaxHistory, and auto-scroll.</summary>
-    private async Task AppendLinesToHistory(List<string> newLines, string target)
+    /// <summary>Add placeholder items, translate the batch (one request when possible),
+    /// keep the last MaxHistory, and auto-scroll. Respects the live cancellation token.</summary>
+    private async Task AppendLinesToHistory(List<string> newLines, string target, CancellationToken ct)
     {
+        var items = new List<OcrResultItem>();
         foreach (var s in newLines)
         {
             var item = new OcrResultItem { Original = s, Translation = "…" };
             _ocrItems.Add(item);
+            items.Add(item);
             while (_ocrItems.Count > MaxHistory) _ocrItems.RemoveAt(0);   // drop the oldest
-            ResultsScroller?.ScrollToEnd();
-            try { item.Translation = await _translator.TranslateAsync(s, "ru", target); }
-            catch (Exception ex) { item.Translation = $"(translation failed: {ex.Message})"; }
-            ResultsScroller?.ScrollToEnd();
         }
+        ResultsScroller?.ScrollToEnd();
+
+        var translations = await _translator.TranslateLinesAsync(newLines, "ru", target, ct);
+        if (ct.IsCancellationRequested) return;
+        for (int i = 0; i < items.Count && i < translations.Count; i++)
+            items[i].Translation = translations[i];
+        ResultsScroller?.ScrollToEnd();
     }
 
     /// <summary>Break OCR lines into individual sentences (split on . ! ? …).</summary>
@@ -673,6 +700,15 @@ public partial class MainWindow : Window
         _toastTimer.Stop();
         _toastTimer.Start();
     }
+
+    /// <summary>Turn an exception into a short, non-technical message for the user.</summary>
+    private static string Friendly(Exception ex) => ex switch
+    {
+        TranslationException te => te.Message,
+        System.Net.Http.HttpRequestException => "no Internet connection",
+        TaskCanceledException => "the request timed out",
+        _ => ex.Message,
+    };
 }
 
 /// <summary>One OCR line + its translation (updates the UI when translated).</summary>
