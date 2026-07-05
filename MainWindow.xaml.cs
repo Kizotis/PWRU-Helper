@@ -341,6 +341,7 @@ public partial class MainWindow : Window
 
         MainTabs.SelectedIndex = 1;          // results show on the Translator page
         SelectAreaButton.IsEnabled = false;
+        LiveButton.IsEnabled = false;        // don't let live start mid-read (shared OCR engine)
         _ocrItems.Clear();
         ScreenReadStatus.Text = "Reading…";
         try
@@ -359,11 +360,12 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            ScreenReadStatus.Text = $"OCR failed: {ex.Message}";
+            ScreenReadStatus.Text = $"OCR failed: {Friendly(ex)}";
         }
         finally
         {
             SelectAreaButton.IsEnabled = true;
+            LiveButton.IsEnabled = true;
         }
     }
 
@@ -683,13 +685,17 @@ public partial class MainWindow : Window
 
     private bool CopyToClipboard(string text)
     {
-        // Clipboard can be briefly locked by another app; retry a few times.
-        for (int i = 0; i < 5; i++)
+        // The clipboard is a shared, single-owner resource: a clipboard-history tool,
+        // a game overlay or another app can briefly hold it, making the copy fail
+        // ("clipboard busy"). Retry patiently, and use SetDataObject(copy: true) rather
+        // than SetText — it's more reliable and flushes so the text survives after the
+        // app closes. (WPF has no retry-count overload; that one is WinForms-only.)
+        for (int i = 0; i < 10; i++)
         {
-            try { Clipboard.SetText(text); return true; }
-            catch { Thread.Sleep(40); }
+            try { Clipboard.SetDataObject(text, true); return true; }
+            catch { Thread.Sleep(80); }   // ~0.8s total before we give up
         }
-        ShowToast("Clipboard busy — try again");
+        ShowToast("Clipboard busy — another app is using it. Try again in a second.");
         return false;
     }
 
