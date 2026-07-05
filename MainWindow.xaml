@@ -8,6 +8,32 @@
         Topmost="True">
 
     <Window.Resources>
+        <!-- ★ pin/unpin toggle used on each phrase card -->
+        <Style x:Key="PinButton" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Content" Value="☆"/>
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}"/>
+            <Setter Property="ToolTip" Value="Pin to Favourites"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="Transparent" Padding="4,0">
+                            <TextBlock Text="{TemplateBinding Content}" Foreground="{TemplateBinding Foreground}"
+                                       FontSize="{TemplateBinding FontSize}"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsFavourite}" Value="True">
+                    <Setter Property="Content" Value="★"/>
+                    <Setter Property="Foreground" Value="{StaticResource GoldBrush}"/>
+                    <Setter Property="ToolTip" Value="Unpin from Favourites"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
         <!-- Phrase card button -->
         <Style x:Key="PhraseCard" TargetType="Button">
             <Setter Property="Cursor" Value="Hand"/>
@@ -20,14 +46,22 @@
                         <Border x:Name="b" Background="{StaticResource PanelBrush}" CornerRadius="8"
                                 BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
                                 Padding="12,8">
-                            <StackPanel>
-                                <TextBlock Text="{Binding Ru}" FontSize="15" FontWeight="SemiBold"
-                                           Foreground="{StaticResource TextBrush}" TextWrapping="Wrap"/>
-                                <TextBlock Text="{Binding En}" FontSize="11" TextWrapping="Wrap"
-                                           Foreground="{StaticResource TextMutedBrush}" Margin="0,2,0,0"/>
-                                <TextBlock Text="{Binding Translit}" FontSize="10" FontStyle="Italic"
-                                           Foreground="{StaticResource TealBrush}" TextWrapping="Wrap"/>
-                            </StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="{Binding Ru}" FontSize="15" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextBrush}" TextWrapping="Wrap"/>
+                                    <TextBlock Text="{Binding En}" FontSize="11" TextWrapping="Wrap"
+                                               Foreground="{StaticResource TextMutedBrush}" Margin="0,2,0,0"/>
+                                    <TextBlock Text="{Binding Translit}" FontSize="10" FontStyle="Italic"
+                                               Foreground="{StaticResource TealBrush}" TextWrapping="Wrap"/>
+                                </StackPanel>
+                                <Button Grid.Column="1" Style="{StaticResource PinButton}"
+                                        VerticalAlignment="Top" Click="TogglePin_Click"/>
+                            </Grid>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
@@ -54,10 +88,19 @@
                 <TextBlock Text="PWRU" FontSize="22" FontWeight="Bold" Foreground="{StaticResource AccentBrush}"/>
                 <TextBlock Text=" Helper" FontSize="22" FontWeight="Bold" Foreground="{StaticResource TextBrush}"/>
             </StackPanel>
-            <CheckBox x:Name="TopmostCheck" Content="Always on top" IsChecked="True"
-                      HorizontalAlignment="Right" VerticalAlignment="Center"
-                      Foreground="{StaticResource TextMutedBrush}"
-                      Checked="TopmostCheck_Changed" Unchecked="TopmostCheck_Changed"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                <CheckBox x:Name="TopmostCheck" Content="Always on top" IsChecked="True"
+                          VerticalAlignment="Center"
+                          Foreground="{StaticResource TextMutedBrush}"
+                          Checked="TopmostCheck_Changed" Unchecked="TopmostCheck_Changed"/>
+                <Button Style="{StaticResource GhostButton}" Padding="7,3" Margin="10,0,0,0"
+                        Content="A−" Click="FontSmaller_Click" ToolTip="Smaller text"/>
+                <Button Style="{StaticResource GhostButton}" Padding="7,3" Margin="4,0,0,0"
+                        Content="A+" Click="FontLarger_Click" ToolTip="Larger text"/>
+                <Button x:Name="CompactButton" Style="{StaticResource GhostButton}" Padding="8,3"
+                        Margin="10,0,0,0" Content="⤡ Compact" Click="CompactButton_Click"
+                        ToolTip="Shrink to a small overlay for playing (Ctrl+Alt+M)"/>
+            </StackPanel>
         </Grid>
 
         <!-- ===== Tabs ===== -->
@@ -132,23 +175,11 @@
 
                     <!-- direction controls -->
                     <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
-                        <ComboBox x:Name="FromCombo" Width="120" VerticalAlignment="Center">
-                            <ComboBoxItem Content="English" Tag="en" IsSelected="True"/>
-                            <ComboBoxItem Content="French" Tag="fr"/>
-                            <ComboBoxItem Content="Spanish" Tag="es"/>
-                            <ComboBoxItem Content="German" Tag="de"/>
-                            <ComboBoxItem Content="Russian" Tag="ru"/>
-                            <ComboBoxItem Content="Auto" Tag="auto"/>
-                        </ComboBox>
+                        <!-- items filled in code from a single language list (see PopulateLanguageCombos) -->
+                        <ComboBox x:Name="FromCombo" Width="120" VerticalAlignment="Center"/>
                         <Button Content="&#8646;" Style="{StaticResource GhostButton}" Margin="8,0"
                                 Click="Swap_Click" ToolTip="Swap languages"/>
-                        <ComboBox x:Name="ToCombo" Width="120" VerticalAlignment="Center">
-                            <ComboBoxItem Content="Russian" Tag="ru" IsSelected="True"/>
-                            <ComboBoxItem Content="English" Tag="en"/>
-                            <ComboBoxItem Content="French" Tag="fr"/>
-                            <ComboBoxItem Content="Spanish" Tag="es"/>
-                            <ComboBoxItem Content="German" Tag="de"/>
-                        </ComboBox>
+                        <ComboBox x:Name="ToCombo" Width="120" VerticalAlignment="Center"/>
                     </StackPanel>
 
                     <TextBox x:Name="TranslateInput" Grid.Row="2" AcceptsReturn="True" TextWrapping="Wrap"
@@ -241,12 +272,7 @@
                                     Content="Select area &amp; read once" Click="SelectArea_Click"/>
                             <TextBlock Text="translate to" VerticalAlignment="Center" Margin="12,0,6,0"
                                        Foreground="{StaticResource TextMutedBrush}"/>
-                            <ComboBox x:Name="OcrTargetCombo" VerticalAlignment="Center" Width="120">
-                                <ComboBoxItem Content="English" Tag="en" IsSelected="True"/>
-                                <ComboBoxItem Content="French" Tag="fr"/>
-                                <ComboBoxItem Content="Spanish" Tag="es"/>
-                                <ComboBoxItem Content="German" Tag="de"/>
-                            </ComboBox>
+                            <ComboBox x:Name="OcrTargetCombo" VerticalAlignment="Center" Width="120"/>
                         </StackPanel>
 
                         <StackPanel Orientation="Horizontal">
@@ -275,6 +301,19 @@
                                     Margin="0,4,0,2" ValueChanged="SensitivitySlider_ValueChanged"/>
                             <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMutedBrush}"
                                        Text="Lower = calmer: ignores tiny changes and background movement (e.g. panning the camera behind the chat). Higher = catches every little change, but may re-translate more often."/>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <TextBlock Text="Live speed" FontWeight="SemiBold"
+                                           Foreground="{StaticResource TextBrush}" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="LiveSpeedValue" Text="~1.6s between reads" Margin="8,0,0,0"
+                                           Foreground="{StaticResource GoldBrush}" FontWeight="Bold"
+                                           VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <Slider x:Name="LiveSpeedSlider" Minimum="0" Maximum="100" Value="55"
+                                    TickFrequency="10" Width="280" HorizontalAlignment="Left"
+                                    Margin="0,4,0,2" ValueChanged="LiveSpeedSlider_ValueChanged"/>
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMutedBrush}"
+                                       Text="How often live mode re-reads the screen. Slide left to slow it down if it translates too fast; right to react quicker."/>
                         </StackPanel>
 
                         <!-- Screen OCR settings: Russian OCR language pack -->
@@ -354,6 +393,10 @@
                         <TextBlock Margin="0,2" Foreground="{StaticResource TextMutedBrush}">
                             <Run Text="Ctrl+Alt+L" Foreground="{StaticResource TealBrush}" FontWeight="SemiBold"/>
                             <Run Text="  start / stop live translation on your last area"/>
+                        </TextBlock>
+                        <TextBlock Margin="0,2" Foreground="{StaticResource TextMutedBrush}">
+                            <Run Text="Ctrl+Alt+M" Foreground="{StaticResource TealBrush}" FontWeight="SemiBold"/>
+                            <Run Text="  toggle the compact overlay (small in-game window)"/>
                         </TextBlock>
 
                         <!-- author links -->

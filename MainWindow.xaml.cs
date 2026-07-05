@@ -37,7 +37,6 @@ public partial class MainWindow : Window
     private List<string> _pendingLines = new();          // lines that just appeared, awaiting confirmation
     private int _liveTicks;
     private const int MaxHistory = 50;                   // keep the last 50 translated messages
-    private const int LiveIntervalMs = 800;              // target time between screen reads
     // A newly-appeared line must survive into the NEXT read before we translate it. That
     // one-frame confirmation filters OCR flicker from the game moving behind the chat
     // (camera panning), which only ever shows up for a single frame. This stability check
@@ -52,6 +51,7 @@ public partial class MainWindow : Window
 
         OcrResults.ItemsSource = _ocrItems;
         ShowAppVersion();
+        PopulateLanguageCombos();
         LoadPhrases();
         CheckOcrAvailability();
         ApplySettings();
@@ -90,6 +90,7 @@ public partial class MainWindow : Window
         SelectTag(ToCombo, s.TranslatorTo);
         SelectTag(OcrTargetCombo, s.OcrTargetLang);
         SensitivitySlider.Value = Math.Clamp(s.SensitivityPercent, 0, 100);
+        LiveSpeedSlider.Value = Math.Clamp(s.LiveSpeedPercent, 0, 100);
         TopmostCheck.IsChecked = s.AlwaysOnTop;
         Topmost = s.AlwaysOnTop;
         AutoCopyCheck.IsChecked = s.AutoCopyTranslation;
@@ -106,6 +107,7 @@ public partial class MainWindow : Window
         }
 
         UpdateResumeLiveButton();
+        ApplyFontScale();
     }
 
     private static bool IsOnScreen(double left, double top, double w, double h)
@@ -123,6 +125,7 @@ public partial class MainWindow : Window
         {
             var s = _settings;
             s.SensitivityPercent = (int)Math.Round(SensitivitySlider.Value);
+            s.LiveSpeedPercent = (int)Math.Round(LiveSpeedSlider.Value);
             s.OcrTargetLang = SelectedTag(OcrTargetCombo) ?? s.OcrTargetLang;
             s.TranslatorFrom = SelectedTag(FromCombo) ?? s.TranslatorFrom;
             s.TranslatorTo = SelectedTag(ToCombo) ?? s.TranslatorTo;
@@ -136,6 +139,7 @@ public partial class MainWindow : Window
                 s.WindowLeft = b.Left; s.WindowTop = b.Top;
                 s.WindowWidth = b.Width; s.WindowHeight = b.Height;
             }
+            SaveOverlayBounds();
             SettingsService.Save(s);
         }
         catch { /* saving preferences is best-effort */ }
@@ -145,6 +149,111 @@ public partial class MainWindow : Window
     {
         bool show = _liveCts == null && _settings.LastLiveRegion is { Length: 4 };
         ResumeLiveButton.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    // ---- text size ----
+    internal double FontScale => _settings.FontScale;
+
+    private void ApplyFontScale()
+    {
+        double s = _settings.FontScale;
+        PhraseList.LayoutTransform = new System.Windows.Media.ScaleTransform(s, s);
+        OcrResults.LayoutTransform = new System.Windows.Media.ScaleTransform(s, s);
+        _overlay?.ApplyFontScale(s);
+    }
+
+    private void FontSmaller_Click(object sender, RoutedEventArgs e) => ChangeFontScale(-0.1);
+    private void FontLarger_Click(object sender, RoutedEventArgs e) => ChangeFontScale(+0.1);
+
+    private void ChangeFontScale(double delta)
+    {
+        _settings.FontScale = Math.Clamp(Math.Round(_settings.FontScale + delta, 1), 1.0, 1.6);
+        ApplyFontScale();
+        ShowToast($"Text size {(int)Math.Round(_settings.FontScale * 100)}%");
+    }
+
+    // ============================================================
+    //  COMPACT OVERLAY MODE
+    // ============================================================
+    private CompactOverlay? _overlay;
+
+    /// <summary>The live feed, shared with the compact overlay so both show the same thing.</summary>
+    internal ObservableCollection<OcrResultItem> LiveItems => _ocrItems;
+    internal bool IsLive => _liveCts != null;
+
+    private void CompactButton_Click(object sender, RoutedEventArgs e) => EnterCompactMode();
+
+    private void ToggleCompact()
+    {
+        if (_overlay is { IsVisible: true }) ExitCompactMode();
+        else EnterCompactMode();
+    }
+
+    internal void EnterCompactMode()
+    {
+        if (_overlay == null)
+        {
+            _overlay = new CompactOverlay(this);
+            if (_settings.OverlayWidth is > 200 and { } ow) _overlay.Width = ow;
+            if (_settings.OverlayHeight is > 150 and { } oh) _overlay.Height = oh;
+            if (_settings.OverlayLeft is { } ol && _settings.OverlayTop is { } ot && IsOnScreen(ol, ot, 240, 180))
+            { _overlay.Left = ol; _overlay.Top = ot; }
+            else
+            {
+                // First time: park it near the top-right of the primary work area.
+                _overlay.Left = SystemParameters.WorkArea.Right - _overlay.Width - 20;
+                _overlay.Top = SystemParameters.WorkArea.Top + 40;
+            }
+        }
+        _overlay.Show();
+        _overlay.Activate();
+        Hide();
+    }
+
+    internal void ExitCompactMode()
+    {
+        if (_overlay != null) { SaveOverlayBounds(); _overlay.Hide(); }
+        Show();
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Activate();
+    }
+
+    private void SaveOverlayBounds()
+    {
+        if (_overlay == null) return;
+        var b = _overlay.RestoreBounds;
+        if (b.IsEmpty) return;
+        _settings.OverlayLeft = b.Left; _settings.OverlayTop = b.Top;
+        _settings.OverlayWidth = b.Width; _settings.OverlayHeight = b.Height;
+    }
+
+    internal void ToggleLiveFromOverlay()
+    {
+        if (_liveCts != null) { StopLive(); return; }
+        if (_settings.LastLiveRegion is { Length: 4 } r)
+            StartLive(new System.Drawing.Rectangle(r[0], r[1], r[2], r[3]));
+        else
+        {
+            ExitCompactMode();
+            MainTabs.SelectedIndex = 2;   // Screen OCR tab
+            ShowToast("Pick a screen area once — then ▶ Live (or Ctrl+Alt+L) resumes it.");
+        }
+    }
+
+    /// <summary>Translate a short reply into Russian and copy it. Never throws.</summary>
+    internal async Task<string> QuickReplyTranslateAsync(string text)
+    {
+        text = text.Trim();
+        if (text.Length == 0) return "";
+        var from = SelectedTag(FromCombo);
+        if (from is null or "ru" or "auto") from = "en";
+        try
+        {
+            var ru = await _translator.TranslateAsync(text, from, "ru");
+            if (ru.Length > 0) CopyToClipboard(ru);
+            return ru;
+        }
+        catch (Exception ex) { return $"(couldn't translate: {Friendly(ex)})"; }
     }
 
     /// <summary>Show the real build version in the About tab (never hard-coded).</summary>
@@ -227,10 +336,45 @@ public partial class MainWindow : Window
             MessageBox.Show($"Could not read the phrase list:\n{ex.Message}", "PWRU Helper");
         }
 
-        _phrasesView = new CollectionViewSource { Source = _allPhrases };
+        RebuildPhraseView();
+    }
+
+    /// <summary>Rebuild the grouped phrase list: a "🕑 Recent" group and a "★ Favourites"
+    /// group (both cloned from the real phrases) on top, then every phrase by category.</summary>
+    private void RebuildPhraseView()
+    {
+        var fav = new HashSet<string>(_settings.Favourites);
+        foreach (var p in _allPhrases) p.IsFavourite = fav.Contains(p.Ru);
+
+        var display = new List<Phrase>();
+        foreach (var ru in _settings.Recents)
+            if (_allPhrases.FirstOrDefault(p => p.Ru == ru) is { } src) display.Add(Clone(src, "🕑 Recent"));
+        foreach (var ru in _settings.Favourites)
+            if (_allPhrases.FirstOrDefault(p => p.Ru == ru) is { } src) display.Add(Clone(src, "★ Favourites"));
+        display.AddRange(_allPhrases);
+
+        _phrasesView = new CollectionViewSource { Source = display };
         _phrasesView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(Phrase.Category)));
         _phrasesView.Filter += PhrasesFilter;
         PhraseList.ItemsSource = _phrasesView.View;
+
+        static Phrase Clone(Phrase p, string category) => new()
+        { En = p.En, Ru = p.Ru, Translit = p.Translit, Category = category, IsFavourite = p.IsFavourite };
+    }
+
+    private void RecordRecent(string ru)
+    {
+        _settings.Recents.RemoveAll(x => x == ru);
+        _settings.Recents.Insert(0, ru);
+        while (_settings.Recents.Count > 8) _settings.Recents.RemoveAt(_settings.Recents.Count - 1);
+        RebuildPhraseView();
+    }
+
+    private void TogglePin_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: Phrase p }) return;
+        if (!_settings.Favourites.Remove(p.Ru)) _settings.Favourites.Insert(0, p.Ru);
+        RebuildPhraseView();
     }
 
     /// <summary>
@@ -294,7 +438,10 @@ public partial class MainWindow : Window
         if (sender is Button { DataContext: Phrase p })
         {
             if (CopyToClipboard(p.Ru))
+            {
                 ShowToast($"Copied:  {p.Ru}");
+                RecordRecent(p.Ru);
+            }
         }
     }
 
@@ -433,7 +580,7 @@ public partial class MainWindow : Window
         try
         {
             using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
-            var sentences = ToSentences(await _ocr.ReadLinesAsync(bmp));
+            var sentences = TextMatching.ToSentences(await _ocr.ReadLinesAsync(bmp));
             if (sentences.Count == 0)
             {
                 ScreenReadStatus.Text = "No text detected there. Try a tighter box around the text.";
@@ -522,6 +669,12 @@ public partial class MainWindow : Window
             SensitivityValue.Text = $"{(int)Math.Round(e.NewValue)}%";
     }
 
+    private void LiveSpeedSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (LiveSpeedValue != null)
+            LiveSpeedValue.Text = $"~{CurrentLiveIntervalMs() / 1000.0:0.0}s between reads";
+    }
+
     private void StopLive()
     {
         if (_liveCts == null) return;
@@ -558,15 +711,16 @@ public partial class MainWindow : Window
                 LiveIndicator.Text = (_liveTicks % 2 == 0) ? "●  LIVE" : "○  LIVE";  // heartbeat
 
                 using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
-                var lines = ToSentences(await _ocr.ReadLinesAsync(bmp)).Where(LooksLikeText).ToList();
+                var lines = TextMatching.ToSentences(await _ocr.ReadLinesAsync(bmp))
+                    .Where(TextMatching.LooksLikeText).ToList();
                 if (ct.IsCancellationRequested) break;
-                var cur = lines.Select(Normalize).ToList();
+                var cur = lines.Select(TextMatching.Normalize).ToList();
 
                 // CONFIRM: lines that appeared in the previous read AND are still on screen
                 // now are real new messages (they survived a frame, so they aren't flicker
                 // from the game moving behind the chat). Those get translated.
                 var confirmed = _pendingLines
-                    .Where(p => ContainsSimilar(cur, Normalize(p), StabilityThreshold))
+                    .Where(p => TextMatching.ContainsSimilar(cur, TextMatching.Normalize(p), StabilityThreshold))
                     .Distinct()
                     .ToList();
 
@@ -576,7 +730,9 @@ public partial class MainWindow : Window
                 // naturally — a line that scrolled off leaves _prevNorm, so if it's sent
                 // again it reads as fresh and gets translated again.
                 double freshThr = SensitivityThreshold();
-                _pendingLines = lines.Where(l => !ContainsSimilar(_prevNorm, Normalize(l), freshThr)).ToList();
+                _pendingLines = lines
+                    .Where(l => !TextMatching.ContainsSimilar(_prevNorm, TextMatching.Normalize(l), freshThr))
+                    .ToList();
                 _prevNorm = cur;
 
                 if (confirmed.Count > 0)
@@ -603,7 +759,7 @@ public partial class MainWindow : Window
             }
 
             // Keep a roughly steady cadence: subtract the time the read+translate just took.
-            int wait = Math.Max(150, LiveIntervalMs - (int)sw.ElapsedMilliseconds);
+            int wait = Math.Max(150, CurrentLiveIntervalMs() - (int)sw.ElapsedMilliseconds);
             try { await Task.Delay(wait, ct); }
             catch (TaskCanceledException) { break; }
         }
@@ -630,69 +786,20 @@ public partial class MainWindow : Window
         ResultsScroller?.ScrollToEnd();
     }
 
-    /// <summary>Break OCR lines into individual sentences (split on . ! ? …).</summary>
-    private static List<string> ToSentences(IEnumerable<string> lines)
-    {
-        var result = new List<string>();
-        foreach (var line in lines)
-        {
-            var parts = Regex.Split(line, @"(?<=[\.\!\?…])\s+");
-            foreach (var part in parts)
-            {
-                var t = part.Trim();
-                if (t.Length > 0) result.Add(t);
-            }
-        }
-        return result;
-    }
-
-    // --- live-diff helpers: make "same chat line" recognition robust to OCR noise ---
-
-    /// <summary>True if a line is worth translating (has ≥2 letters), not background specks.</summary>
-    private static bool LooksLikeText(string s)
-        => s.Count(char.IsLetter) >= 2;
-
-    /// <summary>Lower-case, collapse whitespace, drop edge punctuation — so trivial OCR
-    /// variations of the same line compare equal.</summary>
-    private static string Normalize(string s)
-    {
-        s = Regex.Replace(s.Trim().ToLowerInvariant(), @"\s+", " ");
-        return s.Trim(' ', '.', ',', '!', '?', ':', ';', '"', '\'', '-', '…', '(', ')');
-    }
-
-    /// <summary>True if <paramref name="line"/> fuzzy-matches any entry in the set.</summary>
-    private static bool ContainsSimilar(IEnumerable<string> set, string line, double threshold)
-        => set.Any(s => Similarity(s, line) >= threshold);
-
     /// <summary>Map the sensitivity slider (0–100%) to a fuzzy-match threshold. Higher
-    /// sensitivity → stricter "same line" test → smaller changes count as new text.</summary>
+    /// sensitivity → stricter "same line" test → smaller changes count as new text.
+    /// (The text-matching helpers themselves live in <see cref="TextMatching"/>.)</summary>
     private double SensitivityThreshold()
     {
         double sens = SensitivitySlider?.Value ?? 60;   // default matches the XAML slider
         return 0.60 + (sens / 100.0) * 0.38;            // 0.60 (calm) … 0.98 (very sensitive)
     }
 
-    /// <summary>0..1 similarity from Levenshtein edit distance (1 = identical).</summary>
-    private static double Similarity(string a, string b)
+    /// <summary>Live re-read interval from the speed slider (higher speed = shorter wait).</summary>
+    private int CurrentLiveIntervalMs()
     {
-        if (a == b) return 1.0;
-        int max = Math.Max(a.Length, b.Length);
-        if (max == 0) return 1.0;
-        return 1.0 - (double)Levenshtein(a, b) / max;
-    }
-
-    private static int Levenshtein(string a, string b)
-    {
-        var d = new int[a.Length + 1, b.Length + 1];
-        for (int i = 0; i <= a.Length; i++) d[i, 0] = i;
-        for (int j = 0; j <= b.Length; j++) d[0, j] = j;
-        for (int i = 1; i <= a.Length; i++)
-            for (int j = 1; j <= b.Length; j++)
-            {
-                int cost = a[i - 1] == b[j - 1] ? 0 : 1;
-                d[i, j] = Math.Min(Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1), d[i - 1, j - 1] + cost);
-            }
-        return d[a.Length, b.Length];
+        double speed = LiveSpeedSlider?.Value ?? 55;    // 0..100, default matches the XAML slider
+        return (int)(3000 - (speed / 100.0) * 2500);    // 3.0s (slow) … 0.5s (fast)
     }
 
     // ============================================================
@@ -805,6 +912,40 @@ public partial class MainWindow : Window
         if (CopyToClipboard("kizotis")) ShowToast("Discord copied: kizotis");
     }
 
+    // Single source of truth for the language dropdowns (was duplicated 3× in XAML).
+    private readonly record struct Lang(string Name, string Code);
+    private static readonly Lang[] SourceLangs =
+    {
+        new("English", "en"), new("French", "fr"), new("Spanish", "es"),
+        new("German", "de"), new("Russian", "ru"), new("Auto-detect", "auto"),
+    };
+    private static readonly Lang[] TargetLangs =
+    {
+        new("Russian", "ru"), new("English", "en"), new("French", "fr"),
+        new("Spanish", "es"), new("German", "de"),
+    };
+    private static readonly Lang[] OcrLangs =
+    {
+        new("English", "en"), new("French", "fr"), new("Spanish", "es"), new("German", "de"),
+    };
+
+    private void PopulateLanguageCombos()
+    {
+        Fill(FromCombo, SourceLangs, "en");
+        Fill(ToCombo, TargetLangs, "ru");
+        Fill(OcrTargetCombo, OcrLangs, "en");
+
+        static void Fill(ComboBox combo, Lang[] langs, string defaultCode)
+        {
+            combo.Items.Clear();
+            foreach (var l in langs)
+                combo.Items.Add(new ComboBoxItem { Content = l.Name, Tag = l.Code });
+            foreach (var obj in combo.Items)
+                if (obj is ComboBoxItem { Tag: string code } ci && code == defaultCode)
+                { combo.SelectedItem = ci; break; }
+        }
+    }
+
     private static string? SelectedTag(ComboBox combo)
         => (combo.SelectedItem as ComboBoxItem)?.Tag?.ToString();
 
@@ -856,10 +997,11 @@ public partial class MainWindow : Window
     //    Ctrl+Alt+P — bring PWRU Helper to the front
     //    Ctrl+Alt+T — bring to front + focus the translator input
     //    Ctrl+Alt+L — start/stop live on the last area
+    //    Ctrl+Alt+M — toggle the compact overlay
     // ============================================================
     private const int WM_HOTKEY = 0x0312;
     private const uint MOD_ALT = 0x0001, MOD_CONTROL = 0x0002, MOD_NOREPEAT = 0x4000;
-    private const int HK_SHOW = 1, HK_TRANSLATE = 2, HK_LIVE = 3;
+    private const int HK_SHOW = 1, HK_TRANSLATE = 2, HK_LIVE = 3, HK_COMPACT = 4;
     private HwndSource? _hwnd;
 
     [DllImport("user32.dll")] private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
@@ -877,6 +1019,7 @@ public partial class MainWindow : Window
         RegisterHotKey(handle, HK_SHOW, mod, 0x50);       // P
         RegisterHotKey(handle, HK_TRANSLATE, mod, 0x54);  // T
         RegisterHotKey(handle, HK_LIVE, mod, 0x4C);       // L
+        RegisterHotKey(handle, HK_COMPACT, mod, 0x4D);    // M
     }
 
     private IntPtr HotkeyHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -888,6 +1031,7 @@ public partial class MainWindow : Window
             case HK_TRANSLATE:
                 BringToFront(); MainTabs.SelectedIndex = 1; TranslateInput.Focus(); handled = true; break;
             case HK_LIVE: ToggleLiveFromHotkey(); handled = true; break;
+            case HK_COMPACT: ToggleCompact(); handled = true; break;
         }
         return IntPtr.Zero;
     }
@@ -923,8 +1067,10 @@ public partial class MainWindow : Window
             UnregisterHotKey(handle, HK_SHOW);
             UnregisterHotKey(handle, HK_TRANSLATE);
             UnregisterHotKey(handle, HK_LIVE);
+            UnregisterHotKey(handle, HK_COMPACT);
             _hwnd.RemoveHook(HotkeyHook);
         }
+        _overlay?.Close();
         base.OnClosed(e);
     }
 }

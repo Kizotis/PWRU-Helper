@@ -8,6 +8,7 @@ public class AppSettings
 {
     // Translator + OCR choices
     public int SensitivityPercent { get; set; } = 60;
+    public int LiveSpeedPercent { get; set; } = 55;
     public string OcrTargetLang { get; set; } = "en";
     public string TranslatorFrom { get; set; } = "en";
     public string TranslatorTo { get; set; } = "ru";
@@ -22,10 +23,22 @@ public class AppSettings
     public double? WindowWidth { get; set; }
     public double? WindowHeight { get; set; }
 
+    // Compact overlay placement
+    public double? OverlayLeft { get; set; }
+    public double? OverlayTop { get; set; }
+    public double? OverlayWidth { get; set; }
+    public double? OverlayHeight { get; set; }
+
     // Last live-translation area (physical px): [x, y, w, h], or null if never used.
     public int[]? LastLiveRegion { get; set; }
 
     public bool FirstRunDone { get; set; }
+
+    // Phrasebook: pinned favourites and recently-copied phrases (by Russian text).
+    public List<string> Favourites { get; set; } = new();
+    public List<string> Recents { get; set; } = new();
+
+    public double FontScale { get; set; } = 1.0;
 }
 
 /// <summary>Loads/saves <see cref="AppSettings"/> to %AppData%\PWRUHelper\settings.json.
