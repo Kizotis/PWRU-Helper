@@ -137,23 +137,11 @@
 
                     <!-- direction controls -->
                     <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
-                        <ComboBox x:Name="FromCombo" Width="120" VerticalAlignment="Center">
-                            <ComboBoxItem Content="English" Tag="en" IsSelected="True"/>
-                            <ComboBoxItem Content="French" Tag="fr"/>
-                            <ComboBoxItem Content="Spanish" Tag="es"/>
-                            <ComboBoxItem Content="German" Tag="de"/>
-                            <ComboBoxItem Content="Russian" Tag="ru"/>
-                            <ComboBoxItem Content="Auto" Tag="auto"/>
-                        </ComboBox>
+                        <!-- items filled in code from a single language list (see PopulateLanguageCombos) -->
+                        <ComboBox x:Name="FromCombo" Width="120" VerticalAlignment="Center"/>
                         <Button Content="&#8646;" Style="{StaticResource GhostButton}" Margin="8,0"
                                 Click="Swap_Click" ToolTip="Swap languages"/>
-                        <ComboBox x:Name="ToCombo" Width="120" VerticalAlignment="Center">
-                            <ComboBoxItem Content="Russian" Tag="ru" IsSelected="True"/>
-                            <ComboBoxItem Content="English" Tag="en"/>
-                            <ComboBoxItem Content="French" Tag="fr"/>
-                            <ComboBoxItem Content="Spanish" Tag="es"/>
-                            <ComboBoxItem Content="German" Tag="de"/>
-                        </ComboBox>
+                        <ComboBox x:Name="ToCombo" Width="120" VerticalAlignment="Center"/>
                     </StackPanel>
 
                     <TextBox x:Name="TranslateInput" Grid.Row="2" AcceptsReturn="True" TextWrapping="Wrap"
@@ -246,12 +234,7 @@
                                     Content="Select area &amp; read once" Click="SelectArea_Click"/>
                             <TextBlock Text="translate to" VerticalAlignment="Center" Margin="12,0,6,0"
                                        Foreground="{StaticResource TextMutedBrush}"/>
-                            <ComboBox x:Name="OcrTargetCombo" VerticalAlignment="Center" Width="120">
-                                <ComboBoxItem Content="English" Tag="en" IsSelected="True"/>
-                                <ComboBoxItem Content="French" Tag="fr"/>
-                                <ComboBoxItem Content="Spanish" Tag="es"/>
-                                <ComboBoxItem Content="German" Tag="de"/>
-                            </ComboBox>
+                            <ComboBox x:Name="OcrTargetCombo" VerticalAlignment="Center" Width="120"/>
                         </StackPanel>
 
                         <StackPanel Orientation="Horizontal">

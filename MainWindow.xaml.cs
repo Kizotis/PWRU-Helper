@@ -51,6 +51,7 @@ public partial class MainWindow : Window
 
         OcrResults.ItemsSource = _ocrItems;
         ShowAppVersion();
+        PopulateLanguageCombos();
         LoadPhrases();
         CheckOcrAvailability();
         ApplySettings();
@@ -849,6 +850,40 @@ public partial class MainWindow : Window
     private void CopyDiscord_Click(object sender, RoutedEventArgs e)
     {
         if (CopyToClipboard("kizotis")) ShowToast("Discord copied: kizotis");
+    }
+
+    // Single source of truth for the language dropdowns (was duplicated 3× in XAML).
+    private readonly record struct Lang(string Name, string Code);
+    private static readonly Lang[] SourceLangs =
+    {
+        new("English", "en"), new("French", "fr"), new("Spanish", "es"),
+        new("German", "de"), new("Russian", "ru"), new("Auto-detect", "auto"),
+    };
+    private static readonly Lang[] TargetLangs =
+    {
+        new("Russian", "ru"), new("English", "en"), new("French", "fr"),
+        new("Spanish", "es"), new("German", "de"),
+    };
+    private static readonly Lang[] OcrLangs =
+    {
+        new("English", "en"), new("French", "fr"), new("Spanish", "es"), new("German", "de"),
+    };
+
+    private void PopulateLanguageCombos()
+    {
+        Fill(FromCombo, SourceLangs, "en");
+        Fill(ToCombo, TargetLangs, "ru");
+        Fill(OcrTargetCombo, OcrLangs, "en");
+
+        static void Fill(ComboBox combo, Lang[] langs, string defaultCode)
+        {
+            combo.Items.Clear();
+            foreach (var l in langs)
+                combo.Items.Add(new ComboBoxItem { Content = l.Name, Tag = l.Code });
+            foreach (var obj in combo.Items)
+                if (obj is ComboBoxItem { Tag: string code } ci && code == defaultCode)
+                { combo.SelectedItem = ci; break; }
+        }
     }
 
     private static string? SelectedTag(ComboBox combo)
