@@ -340,6 +340,22 @@
                             </TextBlock>
                         </Border>
 
+                        <!-- keyboard shortcuts -->
+                        <TextBlock Text="Global shortcuts (work while in game)" FontSize="15" FontWeight="Bold"
+                                   Foreground="{StaticResource GoldBrush}" Margin="0,18,0,6"/>
+                        <TextBlock Margin="0,2" Foreground="{StaticResource TextMutedBrush}">
+                            <Run Text="Ctrl+Alt+P" Foreground="{StaticResource TealBrush}" FontWeight="SemiBold"/>
+                            <Run Text="  bring PWRU Helper to the front"/>
+                        </TextBlock>
+                        <TextBlock Margin="0,2" Foreground="{StaticResource TextMutedBrush}">
+                            <Run Text="Ctrl+Alt+T" Foreground="{StaticResource TealBrush}" FontWeight="SemiBold"/>
+                            <Run Text="  jump to the translator and start typing"/>
+                        </TextBlock>
+                        <TextBlock Margin="0,2" Foreground="{StaticResource TextMutedBrush}">
+                            <Run Text="Ctrl+Alt+L" Foreground="{StaticResource TealBrush}" FontWeight="SemiBold"/>
+                            <Run Text="  start / stop live translation on your last area"/>
+                        </TextBlock>
+
                         <!-- author links -->
                         <TextBlock Text="Made by Kizotis" FontSize="15" FontWeight="Bold"
                                    Foreground="{StaticResource GoldBrush}" Margin="0,18,0,8"/>

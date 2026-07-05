@@ -3,12 +3,14 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Threading;
 using PWRUHelper.Models;
 using PWRUHelper.Services;
@@ -848,6 +850,83 @@ public partial class MainWindow : Window
         TaskCanceledException => "the request timed out",
         _ => ex.Message,
     };
+
+    // ============================================================
+    //  GLOBAL HOTKEYS (work even while the game has focus)
+    //    Ctrl+Alt+P — bring PWRU Helper to the front
+    //    Ctrl+Alt+T — bring to front + focus the translator input
+    //    Ctrl+Alt+L — start/stop live on the last area
+    // ============================================================
+    private const int WM_HOTKEY = 0x0312;
+    private const uint MOD_ALT = 0x0001, MOD_CONTROL = 0x0002, MOD_NOREPEAT = 0x4000;
+    private const int HK_SHOW = 1, HK_TRANSLATE = 2, HK_LIVE = 3;
+    private HwndSource? _hwnd;
+
+    [DllImport("user32.dll")] private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+    [DllImport("user32.dll")] private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        var handle = new WindowInteropHelper(this).Handle;
+        _hwnd = HwndSource.FromHwnd(handle);
+        _hwnd?.AddHook(HotkeyHook);
+
+        uint mod = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
+        // Best-effort: if another app already owns a combo, RegisterHotKey just returns false.
+        RegisterHotKey(handle, HK_SHOW, mod, 0x50);       // P
+        RegisterHotKey(handle, HK_TRANSLATE, mod, 0x54);  // T
+        RegisterHotKey(handle, HK_LIVE, mod, 0x4C);       // L
+    }
+
+    private IntPtr HotkeyHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg != WM_HOTKEY) return IntPtr.Zero;
+        switch (wParam.ToInt32())
+        {
+            case HK_SHOW: BringToFront(); handled = true; break;
+            case HK_TRANSLATE:
+                BringToFront(); MainTabs.SelectedIndex = 1; TranslateInput.Focus(); handled = true; break;
+            case HK_LIVE: ToggleLiveFromHotkey(); handled = true; break;
+        }
+        return IntPtr.Zero;
+    }
+
+    private void BringToFront()
+    {
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Show();
+        // Nudge topmost to force ourselves above the game, then restore the user's choice.
+        Topmost = true;
+        Topmost = TopmostCheck.IsChecked == true;
+        Activate();
+    }
+
+    private void ToggleLiveFromHotkey()
+    {
+        if (_liveCts != null) { StopLive(); return; }
+        if (_settings.LastLiveRegion is { Length: 4 } r)
+            StartLive(new System.Drawing.Rectangle(r[0], r[1], r[2], r[3]));
+        else
+        {
+            BringToFront();
+            MainTabs.SelectedIndex = 2;   // Screen OCR tab
+            ShowToast("Pick a screen area once — then Ctrl+Alt+L resumes it.");
+        }
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        if (_hwnd != null)
+        {
+            var handle = new WindowInteropHelper(this).Handle;
+            UnregisterHotKey(handle, HK_SHOW);
+            UnregisterHotKey(handle, HK_TRANSLATE);
+            UnregisterHotKey(handle, HK_LIVE);
+            _hwnd.RemoveHook(HotkeyHook);
+        }
+        base.OnClosed(e);
+    }
 }
 
 /// <summary>One OCR line + its translation (updates the UI when translated).</summary>
