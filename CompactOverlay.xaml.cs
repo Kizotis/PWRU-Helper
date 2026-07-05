@@ -94,16 +94,22 @@ public partial class CompactOverlay : Window
     private void UpdateReplyHint()
         => ReplyPlaceholder.Text = $"Type a reply → Enter ({_owner.MyLanguage.ToUpperInvariant()} → RU, copied)";
 
+    private bool _replying;   // ignore extra Enter presses while a reply is in flight
+
     private async void ReplyBox_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.Enter) return;
         e.Handled = true;
+        if (_replying) return;
 
         var text = ReplyBox.Text.Trim();
         if (text.Length == 0) return;
 
+        _replying = true;
         SetReplyResult("Translating…", error: false);
-        var r = await _owner.QuickReplyTranslateAsync(text);
+        MainWindow.ReplyOutcome r;
+        try { r = await _owner.QuickReplyTranslateAsync(text); }
+        finally { _replying = false; }
 
         if (!r.Ok)
         {
