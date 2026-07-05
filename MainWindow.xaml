@@ -299,11 +299,11 @@
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="OCR sensitivity" FontWeight="SemiBold"
                                            Foreground="{StaticResource TextBrush}" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="SensitivityValue" Text="10%" Margin="8,0,0,0"
+                                <TextBlock x:Name="SensitivityValue" Text="5%" Margin="8,0,0,0"
                                            Foreground="{StaticResource GoldBrush}" FontWeight="Bold"
                                            VerticalAlignment="Center"/>
                             </StackPanel>
-                            <Slider x:Name="SensitivitySlider" Minimum="0" Maximum="100" Value="10"
+                            <Slider x:Name="SensitivitySlider" Minimum="0" Maximum="100" Value="5"
                                     TickFrequency="10" Width="280" HorizontalAlignment="Left"
                                     Margin="0,4,0,2" ValueChanged="SensitivitySlider_ValueChanged"/>
                             <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMutedBrush}"
@@ -312,11 +312,11 @@
                             <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                                 <TextBlock Text="Live speed" FontWeight="SemiBold"
                                            Foreground="{StaticResource TextBrush}" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="LiveSpeedValue" Text="~1.8s between reads" Margin="8,0,0,0"
+                                <TextBlock x:Name="LiveSpeedValue" Text="~1.0s between reads" Margin="8,0,0,0"
                                            Foreground="{StaticResource GoldBrush}" FontWeight="Bold"
                                            VerticalAlignment="Center"/>
                             </StackPanel>
-                            <Slider x:Name="LiveSpeedSlider" Minimum="0" Maximum="100" Value="48"
+                            <Slider x:Name="LiveSpeedSlider" Minimum="0" Maximum="100" Value="80"
                                     TickFrequency="10" Width="280" HorizontalAlignment="Left"
                                     Margin="0,4,0,2" ValueChanged="LiveSpeedSlider_ValueChanged"/>
                             <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMutedBrush}"

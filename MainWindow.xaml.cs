@@ -972,7 +972,7 @@ public partial class MainWindow : Window
     /// (The text-matching helpers themselves live in <see cref="TextMatching"/>.)</summary>
     private double SensitivityThreshold()
     {
-        double sens = SensitivitySlider?.Value ?? 10;   // default matches the XAML slider
+        double sens = SensitivitySlider?.Value ?? 5;    // default matches the XAML slider
         return 0.60 + (sens / 100.0) * 0.38;            // 0.60 (calm) … 0.98 (very sensitive)
     }
 
@@ -992,7 +992,7 @@ public partial class MainWindow : Window
     /// <summary>Live re-read interval from the speed slider (higher speed = shorter wait).</summary>
     private int CurrentLiveIntervalMs()
     {
-        double speed = LiveSpeedSlider?.Value ?? 48;    // 0..100, default matches the XAML slider
+        double speed = LiveSpeedSlider?.Value ?? 80;    // 0..100, default matches the XAML slider
         return (int)(3000 - (speed / 100.0) * 2500);    // 3.0s (slow) … 0.5s (fast)
     }
 

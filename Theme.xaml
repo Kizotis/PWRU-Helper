@@ -31,6 +31,41 @@
         <Setter Property="FontFamily" Value="Segoe UI"/>
     </Style>
 
+    <!-- ===== Tooltips (dark & readable) =====
+         The default Windows tooltip has a light background, but our text is light
+         (see the TextBlock style above) — so help text was invisible. Restyle every
+         tooltip as a dark panel with light text so it reads on our theme. -->
+    <Style TargetType="ToolTip">
+        <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+        <Setter Property="Background" Value="{StaticResource PanelBrush}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource GoldBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="9,6"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="HasDropShadow" Value="True"/>
+        <Setter Property="MaxWidth" Value="360"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToolTip">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="6" Padding="{TemplateBinding Padding}">
+                        <ContentPresenter>
+                            <ContentPresenter.Resources>
+                                <!-- string tooltips become a TextBlock here — make it wrap
+                                     and inherit our light text colour. -->
+                                <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                                    <Setter Property="TextWrapping" Value="Wrap"/>
+                                </Style>
+                            </ContentPresenter.Resources>
+                        </ContentPresenter>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- ===== Primary button (PW red) ===== -->
     <Style x:Key="AccentButton" TargetType="Button">
         <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
