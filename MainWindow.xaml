@@ -308,6 +308,34 @@
                                     Margin="0,4,0,2" ValueChanged="LiveSpeedSlider_ValueChanged"/>
                             <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMutedBrush}"
                                        Text="How often live mode re-reads the screen. Slide left to slow it down if it translates too fast; right to react quicker."/>
+
+                            <!-- Smallest text fragment -->
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <TextBlock Text="Smallest text fragment" FontWeight="SemiBold"
+                                           Foreground="{StaticResource TextBrush}" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="MinFragmentValue" Text="2 letters" Margin="8,0,0,0"
+                                           Foreground="{StaticResource GoldBrush}" FontWeight="Bold"
+                                           VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <Slider x:Name="MinFragmentSlider" Minimum="1" Maximum="6" Value="2"
+                                    TickFrequency="1" IsSnapToTickEnabled="True" Width="280" HorizontalAlignment="Left"
+                                    Margin="0,4,0,2" ValueChanged="MinFragmentSlider_ValueChanged"/>
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMutedBrush}"
+                                       Text="Ignore fragments shorter than this many letters. Raise it to skip stray specks and single-letter OCR noise."/>
+
+                            <!-- Stability (frame confirmation) -->
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <TextBlock Text="Stability" FontWeight="SemiBold"
+                                           Foreground="{StaticResource TextBrush}" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="StabilityValue" Text="49%" Margin="8,0,0,0"
+                                           Foreground="{StaticResource GoldBrush}" FontWeight="Bold"
+                                           VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <Slider x:Name="StabilitySlider" Minimum="0" Maximum="100" Value="49"
+                                    TickFrequency="10" Width="280" HorizontalAlignment="Left"
+                                    Margin="0,4,0,2" ValueChanged="StabilitySlider_ValueChanged"/>
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMutedBrush}"
+                                       Text="How strictly a new line must stay put for one read before it's translated. Higher = fewer false lines from flicker, but a touch slower to confirm real text."/>
                         </StackPanel>
 
                         <!-- Screen OCR settings: Russian OCR language pack -->

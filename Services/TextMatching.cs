@@ -96,8 +96,10 @@ public static class TextMatching
         return chunks;
     }
 
-    /// <summary>True if a line is worth translating (has ≥2 letters), not background specks.</summary>
-    public static bool LooksLikeText(string s) => s.Count(char.IsLetter) >= 2;
+    /// <summary>True if a line is worth translating (has at least <paramref name="minLetters"/>
+    /// letters), rather than background specks. The threshold is user-tunable in live mode.</summary>
+    public static bool LooksLikeText(string s, int minLetters = 2)
+        => s.Count(char.IsLetter) >= Math.Max(1, minLetters);
 
     /// <summary>Lower-case, collapse whitespace, drop edge punctuation — so trivial OCR
     /// variations of the same line compare equal.</summary>
