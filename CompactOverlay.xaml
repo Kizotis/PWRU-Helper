@@ -69,6 +69,7 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <Grid Grid.Row="0">
                     <TextBox x:Name="ReplyBox" KeyDown="ReplyBox_KeyDown" TextChanged="ReplyBox_TextChanged"
@@ -81,8 +82,39 @@
                 <TextBlock x:Name="ReplyResult" Grid.Row="1" TextWrapping="Wrap" Margin="2,4,0,0"
                            FontSize="12" Foreground="{StaticResource GoldBrush}"/>
 
+                <!-- Long reply: split into game-sized blocks to copy & send one after another. -->
+                <StackPanel x:Name="ReplyBlocksPanel" Grid.Row="2" Visibility="Collapsed" Margin="0,4,0,0">
+                    <TextBlock x:Name="ReplyBlocksHint" TextWrapping="Wrap" FontSize="11" Margin="2,0,0,4"
+                               Foreground="{StaticResource TextMutedBrush}"
+                               Text="Too long for one chat message — copy each block and send them in order:"/>
+                    <ItemsControl x:Name="ReplyBlocks">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,0,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="{Binding Label}" FontWeight="Bold"
+                                               Foreground="{StaticResource GoldBrush}" VerticalAlignment="Center"
+                                               Margin="0,0,6,0"/>
+                                    <Border Grid.Column="1" Background="{StaticResource PanelBrush}" CornerRadius="6"
+                                            Padding="8,5">
+                                        <TextBlock Text="{Binding Text}" TextWrapping="Wrap" FontSize="13"
+                                                   Foreground="{StaticResource TextBrush}"/>
+                                    </Border>
+                                    <Button Grid.Column="2" Style="{StaticResource GhostButton}" Padding="8,2"
+                                            Margin="6,0,0,0" Content="Copy" Click="CopyBlock_Click"
+                                            VerticalAlignment="Center"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
                 <!-- resize grip -->
-                <Thumb x:Name="ResizeGrip" Grid.Row="1" Width="14" Height="14"
+                <Thumb x:Name="ResizeGrip" Grid.Row="2" Width="14" Height="14"
                        HorizontalAlignment="Right" VerticalAlignment="Bottom" Cursor="SizeNWSE"
                        Opacity="0.5" DragDelta="ResizeGrip_DragDelta">
                     <Thumb.Template>

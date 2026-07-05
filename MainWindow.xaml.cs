@@ -83,23 +83,7 @@ public partial class MainWindow : Window
 
     private async void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
-        if (!_settings.FirstRunDone)
-        {
-            _settings.FirstRunDone = true;
-            SettingsService.Save(_settings);   // persist now so it can't reappear after a crash
-            MessageBox.Show(this,
-                "Welcome to PWRU Helper!\n\n" +
-                "• Phrasebook — click a Russian phrase to copy it, then paste in game with Ctrl+V.\n" +
-                "   Pin favourites with ★.\n" +
-                "• Translator — type in your language, get Russian (auto-copied). Paste Russian and it\n" +
-                "   flips direction automatically.\n" +
-                "• Screen OCR — read & live-translate Russian text off your screen. Install the Russian\n" +
-                "   OCR pack once (one click) for good Cyrillic reading.\n" +
-                "• Compact overlay (⤡ or Ctrl+Alt+M) — a tiny window for while you play.\n\n" +
-                "Shortcuts (work in game): Ctrl+Alt+P show · Ctrl+Alt+T translate · Ctrl+Alt+L live · Ctrl+Alt+M compact.\n" +
-                "Tip: run your game windowed or borderless, and keep \"Always on top\" ticked.",
-                "Welcome", MessageBoxButton.OK, MessageBoxImage.Information);
-        }
+        // (No first-run welcome dialog — the app opens straight to the tabs.)
 
         // Run the update check once the window is up, so the dialog has an owner and
         // appears in front of our always-on-top window instead of behind it.
@@ -923,14 +907,14 @@ public partial class MainWindow : Window
     /// (The text-matching helpers themselves live in <see cref="TextMatching"/>.)</summary>
     private double SensitivityThreshold()
     {
-        double sens = SensitivitySlider?.Value ?? 60;   // default matches the XAML slider
+        double sens = SensitivitySlider?.Value ?? 10;   // default matches the XAML slider
         return 0.60 + (sens / 100.0) * 0.38;            // 0.60 (calm) … 0.98 (very sensitive)
     }
 
     /// <summary>Live re-read interval from the speed slider (higher speed = shorter wait).</summary>
     private int CurrentLiveIntervalMs()
     {
-        double speed = LiveSpeedSlider?.Value ?? 55;    // 0..100, default matches the XAML slider
+        double speed = LiveSpeedSlider?.Value ?? 48;    // 0..100, default matches the XAML slider
         return (int)(3000 - (speed / 100.0) * 2500);    // 3.0s (slow) … 0.5s (fast)
     }
 
@@ -1086,7 +1070,7 @@ public partial class MainWindow : Window
     /// Clipboard.SetDataObject was abandoned on purpose: its hidden blocking retries and
     /// OLE flush froze the app for seconds and failed on machines where Windows
     /// clipboard history (Win+V) is enabled.</summary>
-    private async Task<bool> CopyToClipboardAsync(string text)
+    internal async Task<bool> CopyToClipboardAsync(string text)
     {
         if (_copying) return false;
         _copying = true;
