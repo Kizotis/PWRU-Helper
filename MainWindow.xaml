@@ -232,9 +232,25 @@
 
                         <Button x:Name="LiveButton" Style="{StaticResource AccentButton}" HorizontalAlignment="Left"
                                 Content="▶  Start live translation" Click="LiveButton_Click"/>
-                        <TextBlock x:Name="LiveStatus" TextWrapping="Wrap" Margin="0,6,0,14"
+                        <TextBlock x:Name="LiveStatus" TextWrapping="Wrap" Margin="0,6,0,10"
                                    Foreground="{StaticResource TextMutedBrush}"
-                                   Text="Live mode keeps watching the chosen area and re-translates automatically whenever the text changes (~6% of the area), until you press Stop."/>
+                                   Text="Live mode keeps watching the chosen area and re-translates automatically whenever new text appears, until you press Stop."/>
+
+                        <!-- Live OCR sensitivity -->
+                        <StackPanel Margin="0,0,0,14">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="OCR sensitivity" FontWeight="SemiBold"
+                                           Foreground="{StaticResource TextBrush}" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="SensitivityValue" Text="60%" Margin="8,0,0,0"
+                                           Foreground="{StaticResource GoldBrush}" FontWeight="Bold"
+                                           VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <Slider x:Name="SensitivitySlider" Minimum="0" Maximum="100" Value="60"
+                                    TickFrequency="10" Width="280" HorizontalAlignment="Left"
+                                    Margin="0,4,0,2" ValueChanged="SensitivitySlider_ValueChanged"/>
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMutedBrush}"
+                                       Text="Lower = calmer: ignores tiny changes and background movement (e.g. panning the camera behind the chat). Higher = catches every little change, but may re-translate more often."/>
+                        </StackPanel>
 
                         <!-- Screen OCR settings: Russian OCR language pack -->
                         <Border x:Name="OcrSettingsPanel" Margin="0,0,0,10"

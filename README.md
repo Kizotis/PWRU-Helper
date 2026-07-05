@@ -34,11 +34,15 @@ translations underneath.
 
 ---
 
-## ⬇️ Download & use (no installation!)
+## ⬇️ Download & use
 
-1. Go to the **[Releases](../../releases)** page.
-2. Download **`PWRUHelper.exe`**.
-3. Double-click it. That's it — **nothing to install**, everything is inside the file.
+Go to the **[Releases](../../releases)** page and pick whichever you prefer:
+
+- **`PWRUHelper.exe`** — *no installation.* Download and double-click; everything is inside
+  the one file. Great for putting it on a USB stick or running it anywhere.
+- **`PWRUHelper-x.y.z-setup.msi`** — *classic installer.* Installs the app into
+  Program Files with **Start-menu and desktop shortcuts**, and shows up in
+  *Add or remove programs* for a clean uninstall. Updating just means running the newer MSI.
 
 > Works on Windows 10 & 11. The first time you run it, Windows might warn about an
 > "unknown publisher" — click **More info → Run anyway** (this is normal for small free
@@ -57,6 +61,9 @@ The app makes this easy: open the **Screen OCR** tab and click
 ## 💡 Tips
 
 - Keep **"Always on top"** ticked so the window stays over your game.
+- In **live translation**, use the **OCR sensitivity** slider to tune it: lower it if the
+  moving game world behind the chat makes it refresh too much; raise it to catch every
+  small change.
 - Your game should run in **windowed** or **borderless** mode for the screen-reading box
   to appear on top. In full-screen, alt-tab out first (or use a second monitor).
 - Want to add your own phrases? Open the `Data/phrases.json` file that appears next to the

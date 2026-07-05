@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MSI installer for PWRU Helper.
+
+  Built with WiX v5 (free, no OSMF fee). See "Build MSI Installer.bat".
+  Variables passed on the command line:
+    -d Version=x.y.z.0   the product version
+    -d ExeFile=...       path to the published single-file PWRUHelper.exe
+    -d IconFile=...      path to assets\icon.ico
+    -d LicenseFile=...   path to the license .rtf shown in the wizard
+
+  IMPORTANT: UpgradeCode below must NEVER change — it's how Windows knows a
+  new MSI replaces the old one instead of installing side-by-side.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package Name="PWRU Helper"
+           Manufacturer="Kizotis"
+           Version="$(var.Version)"
+           UpgradeCode="B7D1F3A2-6E54-4C9B-8A1D-2F0C7E5A9B34"
+           Compressed="yes"
+           Scope="perMachine">
+
+    <!-- Uninstall the old version automatically when a newer one is installed. -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of PWRU Helper is already installed. Please uninstall it first if you want to go back." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Add/Remove Programs entry -->
+    <Icon Id="AppIcon.ico" SourceFile="$(var.IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/Kizotis/PWRU-Helper" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/Kizotis/PWRU-Helper" />
+
+    <!-- Install location: C:\Program Files\PWRU Helper\ -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="PWRU Helper" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="AppComponents" Directory="INSTALLFOLDER">
+      <Component Id="MainExecutable" Guid="*">
+        <File Id="PWRUHelperExe" Source="$(var.ExeFile)" Name="PWRUHelper.exe" KeyPath="yes">
+          <!-- Start-menu shortcut -->
+          <Shortcut Id="StartMenuShortcut"
+                    Directory="ProgramMenuFolder"
+                    Name="PWRU Helper"
+                    Description="Chat, read and translate Russian on the Perfect World RU server"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Icon="AppIcon.ico"
+                    Advertise="yes" />
+          <!-- Desktop shortcut -->
+          <Shortcut Id="DesktopShortcut"
+                    Directory="DesktopFolder"
+                    Name="PWRU Helper"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Icon="AppIcon.ico"
+                    Advertise="yes" />
+        </File>
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="Main" Title="PWRU Helper" Level="1">
+      <ComponentGroupRef Id="AppComponents" />
+    </Feature>
+
+    <!-- Simple installer wizard: welcome → license → choose folder → install. -->
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseFile)" />
+  </Package>
+</Wix>

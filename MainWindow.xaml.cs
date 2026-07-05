@@ -30,9 +30,14 @@ public partial class MainWindow : Window
     // --- live screen translation ---
     private CancellationTokenSource? _liveCts;
     private System.Drawing.Rectangle? _liveRegion;
-    private readonly List<string> _recentLines = new();  // lines seen on the previous read
+    private List<string> _prevNorm = new();              // normalised lines from the previous read
+    private readonly List<string> _shownNorm = new();    // normalised lines already translated (dedup)
     private int _liveTicks;
     private const int MaxHistory = 50;                   // keep the last 50 translated messages
+    private const int ShownMemory = 80;                  // how many past lines we remember for dedup
+    // A line must also survive two consecutive reads before we translate it (stability),
+    // which filters out OCR flicker caused by the game moving behind the text (camera
+    // panning) — that noise only ever appears for a single frame.
 
     public MainWindow()
     {
@@ -321,7 +326,8 @@ public partial class MainWindow : Window
         if (region is not { } rect) return;
 
         _liveRegion = rect;
-        _recentLines.Clear();
+        _prevNorm = new();
+        _shownNorm.Clear();
         _liveTicks = 0;
         _ocrItems.Clear();
         SetLiveUi(true);
@@ -333,6 +339,12 @@ public partial class MainWindow : Window
     }
 
     private void StopLive_Click(object sender, RoutedEventArgs e) => StopLive();
+
+    private void SensitivitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (SensitivityValue != null)
+            SensitivityValue.Text = $"{(int)Math.Round(e.NewValue)}%";
+    }
 
     private void StopLive()
     {
@@ -366,17 +378,36 @@ public partial class MainWindow : Window
                 LiveIndicator.Text = (_liveTicks % 2 == 0) ? "●  LIVE" : "○  LIVE";  // heartbeat
 
                 using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
-                var lines = ToSentences(await _ocr.ReadLinesAsync(bmp));
+                var rawLines = ToSentences(await _ocr.ReadLinesAsync(bmp));
 
-                // Which lines are new since the previous read? (text diff, so even one
-                // extra chat line is caught — a pixel % threshold missed those.)
-                var prev = new HashSet<string>(_recentLines);
-                var newLines = lines.Where(l => !prev.Contains(l)).ToList();
-                _recentLines.Clear();
-                _recentLines.AddRange(lines);
+                // Keep only lines that actually look like text (drop 1-char specks and
+                // pure punctuation/number noise the moving background produces).
+                var lines = rawLines.Where(LooksLikeText).ToList();
+                var norm = lines.Select(Normalize).ToList();
 
-                if (newLines.Count > 0)
+                // A line only counts as "new to translate" when it is:
+                //   (1) STABLE — present in this read AND the previous one. A line that
+                //       flickers in for a single frame (camera panning behind the chat)
+                //       never clears this, so moving the view no longer spams updates.
+                //   (2) NOT ALREADY SHOWN — not a fuzzy match of a line we've already
+                //       translated, so re-reading the same chat line with tiny OCR
+                //       differences doesn't re-translate it.
+                double thr = SensitivityThreshold();
+                var newIdx = Enumerable.Range(0, lines.Count)
+                    .Where(i => ContainsSimilar(_prevNorm, norm[i], thr) &&
+                                !ContainsSimilar(_shownNorm, norm[i], thr))
+                    .ToList();
+                _prevNorm = norm;
+
+                if (newIdx.Count > 0)
                 {
+                    var newLines = newIdx.Select(i => lines[i]).ToList();
+                    foreach (var i in newIdx)
+                    {
+                        _shownNorm.Add(norm[i]);
+                        if (_shownNorm.Count > ShownMemory) _shownNorm.RemoveAt(0);
+                    }
+
                     var target = SelectedTag(OcrTargetCombo) ?? "en";
                     ScreenReadStatus.Text = $"🔴 Live — {newLines.Count} new line(s), translating…";
                     await AppendLinesToHistory(newLines, target);
@@ -422,6 +453,55 @@ public partial class MainWindow : Window
             }
         }
         return result;
+    }
+
+    // --- live-diff helpers: make "same chat line" recognition robust to OCR noise ---
+
+    /// <summary>True if a line is worth translating (has ≥2 letters), not background specks.</summary>
+    private static bool LooksLikeText(string s)
+        => s.Count(char.IsLetter) >= 2;
+
+    /// <summary>Lower-case, collapse whitespace, drop edge punctuation — so trivial OCR
+    /// variations of the same line compare equal.</summary>
+    private static string Normalize(string s)
+    {
+        s = Regex.Replace(s.Trim().ToLowerInvariant(), @"\s+", " ");
+        return s.Trim(' ', '.', ',', '!', '?', ':', ';', '"', '\'', '-', '…', '(', ')');
+    }
+
+    /// <summary>True if <paramref name="line"/> fuzzy-matches any entry in the set.</summary>
+    private static bool ContainsSimilar(IEnumerable<string> set, string line, double threshold)
+        => set.Any(s => Similarity(s, line) >= threshold);
+
+    /// <summary>Map the sensitivity slider (0–100%) to a fuzzy-match threshold. Higher
+    /// sensitivity → stricter "same line" test → smaller changes count as new text.</summary>
+    private double SensitivityThreshold()
+    {
+        double sens = SensitivitySlider?.Value ?? 60;   // default matches the XAML slider
+        return 0.60 + (sens / 100.0) * 0.38;            // 0.60 (calm) … 0.98 (very sensitive)
+    }
+
+    /// <summary>0..1 similarity from Levenshtein edit distance (1 = identical).</summary>
+    private static double Similarity(string a, string b)
+    {
+        if (a == b) return 1.0;
+        int max = Math.Max(a.Length, b.Length);
+        if (max == 0) return 1.0;
+        return 1.0 - (double)Levenshtein(a, b) / max;
+    }
+
+    private static int Levenshtein(string a, string b)
+    {
+        var d = new int[a.Length + 1, b.Length + 1];
+        for (int i = 0; i <= a.Length; i++) d[i, 0] = i;
+        for (int j = 0; j <= b.Length; j++) d[0, j] = j;
+        for (int i = 1; i <= a.Length; i++)
+            for (int j = 1; j <= b.Length; j++)
+            {
+                int cost = a[i - 1] == b[j - 1] ? 0 : 1;
+                d[i, j] = Math.Min(Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1), d[i - 1, j - 1] + cost);
+            }
+        return d[a.Length, b.Length];
     }
 
     // ============================================================
