@@ -1,0 +1,17 @@
+PackageIdentifier: Kizotis.PWRUHelper
+PackageVersion: 0.7.0
+PackageLocale: en-US
+Publisher: Kizotis
+PublisherUrl: https://github.com/Kizotis
+PackageName: PWRU Helper
+PackageUrl: https://github.com/Kizotis/PWRU-Helper
+License: Free / fan-made
+ShortDescription: Chat, read and translate Russian faster while playing on the Perfect World RU server.
+Tags:
+  - perfect-world
+  - translation
+  - ocr
+  - russian
+  - gaming
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

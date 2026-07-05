@@ -1,0 +1,18 @@
+# Installer manifest TEMPLATE. Replace <...> placeholders, or (recommended) let
+# `wingetcreate` fill InstallerSha256 + ProductCode from the released MSI URL.
+PackageIdentifier: Kizotis.PWRUHelper
+PackageVersion: 0.7.0
+InstallerType: wix
+Scope: machine
+InstallModes:
+  - interactive
+  - silent
+  - silentWithProgress
+UpgradeBehavior: install
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/Kizotis/PWRU-Helper/releases/download/v0.7.0/PWRUHelper-0.7.0-setup.msi
+    InstallerSha256: <SHA256 OF THE RELEASED .msi>
+    ProductCode: '<{PRODUCT-CODE-GUID} FROM THE RELEASED .msi>'
+ManifestType: installer
+ManifestVersion: 1.6.0

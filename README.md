@@ -113,9 +113,16 @@ dotnet run
 
 # build the single portable exe (bundles .NET + all DLLs)
 ./"Build Portable EXE.bat"
+
+# build the MSI installer (installs WiX v5 the first time)
+./"Build MSI Installer.bat"
 ```
 
 The portable build ends up in `bin/Release/.../win-x64/publish/PWRUHelper.exe`.
+
+Reducing the SmartScreen "unknown publisher" warning (free code-signing via SignPath OSS,
+winget submission, publishing SHA-256 hashes) is documented in
+[`packaging/DISTRIBUTION.md`](packaging/DISTRIBUTION.md).
 
 ---
 
