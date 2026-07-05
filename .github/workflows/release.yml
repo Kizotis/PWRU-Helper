@@ -1,0 +1,51 @@
+name: Release
+
+# Tag a commit with e.g. v0.9.0 and push the tag to build the portable exe and publish a
+# GitHub Release. The app's built-in update check reads this release's tag, and winget can
+# point at the attached exe + SHA-256.
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Run unit tests
+        run: dotnet test tests/PWRUHelper.Tests -c Release
+
+      - name: Publish portable single-file exe
+        run: >
+          dotnet publish PWRUHelper.csproj -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+          -p:DebugType=none
+
+      - name: Stage artifact + checksum
+        shell: pwsh
+        run: |
+          $out = "bin/Release/net8.0-windows10.0.19041.0/win-x64/publish/PWRUHelper.exe"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item $out dist/PWRUHelper.exe
+          (Get-FileHash dist/PWRUHelper.exe -Algorithm SHA256).Hash |
+            Out-File dist/PWRUHelper.exe.sha256.txt -Encoding ascii
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/PWRUHelper.exe
+            dist/PWRUHelper.exe.sha256.txt
+          generate_release_notes: true

@@ -76,7 +76,7 @@ public class UpdateService
     private static Version Normalize(Version v) =>
         new(v.Major, v.Minor, v.Build < 0 ? 0 : v.Build);
 
-    private static bool TryParseVersion(string tag, out Version version)
+    internal static bool TryParseVersion(string tag, out Version version)
     {
         // Tags look like "v0.3.0", "0.3", "v1.2.3-beta" — keep the leading number.
         var cleaned = tag.TrimStart('v', 'V').Trim();

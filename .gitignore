@@ -3,6 +3,13 @@ obj/
 *.user
 .vs/
 
+# Claude Code local working data (worktrees, session state) — never commit
+.claude/
+
+# Test/build output
+[Tt]est[Rr]esults/
+*.trx
+
 # Installer build output (the .msi is a release artifact, not source)
 installer/*.msi
 installer/*.wixpdb

@@ -101,6 +101,23 @@ public static class TextMatching
     public static bool LooksLikeText(string s, int minLetters = 2)
         => s.Count(char.IsLetter) >= Math.Max(1, minLetters);
 
+    /// <summary>Fraction (0..1) of the letters in <paramref name="s"/> that are Cyrillic.
+    /// Used to decide whether pasted text is really Russian before auto-flipping the
+    /// translator direction: a single stray Cyrillic character in otherwise Latin text
+    /// (a smiley, a name) must NOT count as "this is Russian".</summary>
+    public static double CyrillicShare(string s)
+    {
+        int letters = 0, cyrillic = 0;
+        foreach (var ch in s)
+        {
+            if (!char.IsLetter(ch)) continue;
+            letters++;
+            // Cyrillic + Cyrillic Supplement cover Russian and its neighbours.
+            if (ch is >= 'Ѐ' and <= 'ԯ') cyrillic++;
+        }
+        return letters == 0 ? 0 : (double)cyrillic / letters;
+    }
+
     /// <summary>Lower-case, collapse whitespace, drop edge punctuation — so trivial OCR
     /// variations of the same line compare equal.</summary>
     public static string Normalize(string s)

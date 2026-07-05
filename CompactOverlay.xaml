@@ -28,9 +28,11 @@
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                     <Button x:Name="LiveToggleButton" Style="{StaticResource GhostButton}" Padding="8,2"
                             Content="▶ Live" Click="LiveToggle_Click"
-                            ToolTip="Start / stop live translation on your last area (Ctrl+Alt+L)"/>
+                            ToolTip="Start / stop live translation on your last area (Ctrl+Alt+L)"
+                            AutomationProperties.Name="Start or stop live translation"/>
                     <Button Style="{StaticResource GhostButton}" Padding="8,2" Margin="6,0,0,0"
-                            Content="⤢" Click="Expand_Click" ToolTip="Back to the full window"/>
+                            Content="⤢" Click="Expand_Click" ToolTip="Back to the full window"
+                            AutomationProperties.Name="Back to the full window"/>
                 </StackPanel>
             </Grid>
 

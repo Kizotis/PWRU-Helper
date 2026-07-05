@@ -11,13 +11,21 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>PWRUHelper</AssemblyName>
     <RootNamespace>PWRUHelper</RootNamespace>
-    <Version>0.8.1</Version>
+    <Version>0.9.0</Version>
     <ApplicationIcon>assets\icon.ico</ApplicationIcon>
+    <!-- The test project lives under tests\ inside this folder; keep its sources out of the
+         app's default .cs/.xaml globbing (it has its own csproj). -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);tests\**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- window / taskbar icon -->
     <Resource Include="assets\icon.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Let the test project reach a couple of internal pure helpers (ChunkText, version parsing) -->
+    <InternalsVisibleTo Include="PWRUHelper.Tests" />
   </ItemGroup>
 
   <ItemGroup>
