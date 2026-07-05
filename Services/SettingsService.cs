@@ -8,6 +8,7 @@ public class AppSettings
 {
     // Translator + OCR choices
     public int SensitivityPercent { get; set; } = 60;
+    public int LiveSpeedPercent { get; set; } = 55;
     public string OcrTargetLang { get; set; } = "en";
     public string TranslatorFrom { get; set; } = "en";
     public string TranslatorTo { get; set; } = "ru";

@@ -37,7 +37,6 @@ public partial class MainWindow : Window
     private List<string> _pendingLines = new();          // lines that just appeared, awaiting confirmation
     private int _liveTicks;
     private const int MaxHistory = 50;                   // keep the last 50 translated messages
-    private const int LiveIntervalMs = 800;              // target time between screen reads
     // A newly-appeared line must survive into the NEXT read before we translate it. That
     // one-frame confirmation filters OCR flicker from the game moving behind the chat
     // (camera panning), which only ever shows up for a single frame. This stability check
@@ -90,6 +89,7 @@ public partial class MainWindow : Window
         SelectTag(ToCombo, s.TranslatorTo);
         SelectTag(OcrTargetCombo, s.OcrTargetLang);
         SensitivitySlider.Value = Math.Clamp(s.SensitivityPercent, 0, 100);
+        LiveSpeedSlider.Value = Math.Clamp(s.LiveSpeedPercent, 0, 100);
         TopmostCheck.IsChecked = s.AlwaysOnTop;
         Topmost = s.AlwaysOnTop;
         AutoCopyCheck.IsChecked = s.AutoCopyTranslation;
@@ -123,6 +123,7 @@ public partial class MainWindow : Window
         {
             var s = _settings;
             s.SensitivityPercent = (int)Math.Round(SensitivitySlider.Value);
+            s.LiveSpeedPercent = (int)Math.Round(LiveSpeedSlider.Value);
             s.OcrTargetLang = SelectedTag(OcrTargetCombo) ?? s.OcrTargetLang;
             s.TranslatorFrom = SelectedTag(FromCombo) ?? s.TranslatorFrom;
             s.TranslatorTo = SelectedTag(ToCombo) ?? s.TranslatorTo;
@@ -518,7 +519,7 @@ public partial class MainWindow : Window
         try
         {
             using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
-            var sentences = ToSentences(await _ocr.ReadLinesAsync(bmp));
+            var sentences = TextMatching.ToSentences(await _ocr.ReadLinesAsync(bmp));
             if (sentences.Count == 0)
             {
                 ScreenReadStatus.Text = "No text detected there. Try a tighter box around the text.";
@@ -607,6 +608,12 @@ public partial class MainWindow : Window
             SensitivityValue.Text = $"{(int)Math.Round(e.NewValue)}%";
     }
 
+    private void LiveSpeedSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (LiveSpeedValue != null)
+            LiveSpeedValue.Text = $"~{CurrentLiveIntervalMs() / 1000.0:0.0}s between reads";
+    }
+
     private void StopLive()
     {
         if (_liveCts == null) return;
@@ -643,15 +650,16 @@ public partial class MainWindow : Window
                 LiveIndicator.Text = (_liveTicks % 2 == 0) ? "●  LIVE" : "○  LIVE";  // heartbeat
 
                 using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
-                var lines = ToSentences(await _ocr.ReadLinesAsync(bmp)).Where(LooksLikeText).ToList();
+                var lines = TextMatching.ToSentences(await _ocr.ReadLinesAsync(bmp))
+                    .Where(TextMatching.LooksLikeText).ToList();
                 if (ct.IsCancellationRequested) break;
-                var cur = lines.Select(Normalize).ToList();
+                var cur = lines.Select(TextMatching.Normalize).ToList();
 
                 // CONFIRM: lines that appeared in the previous read AND are still on screen
                 // now are real new messages (they survived a frame, so they aren't flicker
                 // from the game moving behind the chat). Those get translated.
                 var confirmed = _pendingLines
-                    .Where(p => ContainsSimilar(cur, Normalize(p), StabilityThreshold))
+                    .Where(p => TextMatching.ContainsSimilar(cur, TextMatching.Normalize(p), StabilityThreshold))
                     .Distinct()
                     .ToList();
 
@@ -661,7 +669,9 @@ public partial class MainWindow : Window
                 // naturally — a line that scrolled off leaves _prevNorm, so if it's sent
                 // again it reads as fresh and gets translated again.
                 double freshThr = SensitivityThreshold();
-                _pendingLines = lines.Where(l => !ContainsSimilar(_prevNorm, Normalize(l), freshThr)).ToList();
+                _pendingLines = lines
+                    .Where(l => !TextMatching.ContainsSimilar(_prevNorm, TextMatching.Normalize(l), freshThr))
+                    .ToList();
                 _prevNorm = cur;
 
                 if (confirmed.Count > 0)
@@ -688,7 +698,7 @@ public partial class MainWindow : Window
             }
 
             // Keep a roughly steady cadence: subtract the time the read+translate just took.
-            int wait = Math.Max(150, LiveIntervalMs - (int)sw.ElapsedMilliseconds);
+            int wait = Math.Max(150, CurrentLiveIntervalMs() - (int)sw.ElapsedMilliseconds);
             try { await Task.Delay(wait, ct); }
             catch (TaskCanceledException) { break; }
         }
@@ -715,69 +725,20 @@ public partial class MainWindow : Window
         ResultsScroller?.ScrollToEnd();
     }
 
-    /// <summary>Break OCR lines into individual sentences (split on . ! ? …).</summary>
-    private static List<string> ToSentences(IEnumerable<string> lines)
-    {
-        var result = new List<string>();
-        foreach (var line in lines)
-        {
-            var parts = Regex.Split(line, @"(?<=[\.\!\?…])\s+");
-            foreach (var part in parts)
-            {
-                var t = part.Trim();
-                if (t.Length > 0) result.Add(t);
-            }
-        }
-        return result;
-    }
-
-    // --- live-diff helpers: make "same chat line" recognition robust to OCR noise ---
-
-    /// <summary>True if a line is worth translating (has ≥2 letters), not background specks.</summary>
-    private static bool LooksLikeText(string s)
-        => s.Count(char.IsLetter) >= 2;
-
-    /// <summary>Lower-case, collapse whitespace, drop edge punctuation — so trivial OCR
-    /// variations of the same line compare equal.</summary>
-    private static string Normalize(string s)
-    {
-        s = Regex.Replace(s.Trim().ToLowerInvariant(), @"\s+", " ");
-        return s.Trim(' ', '.', ',', '!', '?', ':', ';', '"', '\'', '-', '…', '(', ')');
-    }
-
-    /// <summary>True if <paramref name="line"/> fuzzy-matches any entry in the set.</summary>
-    private static bool ContainsSimilar(IEnumerable<string> set, string line, double threshold)
-        => set.Any(s => Similarity(s, line) >= threshold);
-
     /// <summary>Map the sensitivity slider (0–100%) to a fuzzy-match threshold. Higher
-    /// sensitivity → stricter "same line" test → smaller changes count as new text.</summary>
+    /// sensitivity → stricter "same line" test → smaller changes count as new text.
+    /// (The text-matching helpers themselves live in <see cref="TextMatching"/>.)</summary>
     private double SensitivityThreshold()
     {
         double sens = SensitivitySlider?.Value ?? 60;   // default matches the XAML slider
         return 0.60 + (sens / 100.0) * 0.38;            // 0.60 (calm) … 0.98 (very sensitive)
     }
 
-    /// <summary>0..1 similarity from Levenshtein edit distance (1 = identical).</summary>
-    private static double Similarity(string a, string b)
+    /// <summary>Live re-read interval from the speed slider (higher speed = shorter wait).</summary>
+    private int CurrentLiveIntervalMs()
     {
-        if (a == b) return 1.0;
-        int max = Math.Max(a.Length, b.Length);
-        if (max == 0) return 1.0;
-        return 1.0 - (double)Levenshtein(a, b) / max;
-    }
-
-    private static int Levenshtein(string a, string b)
-    {
-        var d = new int[a.Length + 1, b.Length + 1];
-        for (int i = 0; i <= a.Length; i++) d[i, 0] = i;
-        for (int j = 0; j <= b.Length; j++) d[0, j] = j;
-        for (int i = 1; i <= a.Length; i++)
-            for (int j = 1; j <= b.Length; j++)
-            {
-                int cost = a[i - 1] == b[j - 1] ? 0 : 1;
-                d[i, j] = Math.Min(Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1), d[i - 1, j - 1] + cost);
-            }
-        return d[a.Length, b.Length];
+        double speed = LiveSpeedSlider?.Value ?? 55;    // 0..100, default matches the XAML slider
+        return (int)(3000 - (speed / 100.0) * 2500);    // 3.0s (slow) … 0.5s (fast)
     }
 
     // ============================================================
