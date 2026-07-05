@@ -21,6 +21,7 @@ public partial class MainWindow : Window
     private CollectionViewSource? _phrasesView;
 
     private readonly TranslationService _translator = new();
+    private readonly UpdateService _updates = new();
     private OcrService _ocr = new("ru");
     private readonly ObservableCollection<OcrResultItem> _ocrItems = new();
 
@@ -41,6 +42,34 @@ public partial class MainWindow : Window
         OcrResults.ItemsSource = _ocrItems;
         LoadPhrases();
         CheckOcrAvailability();
+        _ = CheckForUpdatesAsync();
+    }
+
+    // ============================================================
+    //  UPDATE CHECK (GitHub Releases)
+    // ============================================================
+    private async Task CheckForUpdatesAsync()
+    {
+        var info = await _updates.CheckForUpdateAsync();
+        if (info == null) return; // up to date, or the check couldn't run — stay quiet
+
+        var choice = MessageBox.Show(
+            "A new version of PWRU Helper is available!\n\n" +
+            $"You have: {UpdateService.CurrentVersion.ToString(3)}\n" +
+            $"Latest: {info.LatestVersion.ToString(3)}\n\n" +
+            "Open the download page now?",
+            "Update available",
+            MessageBoxButton.YesNo, MessageBoxImage.Information);
+
+        if (choice != MessageBoxResult.Yes) return;
+        try
+        {
+            Process.Start(new ProcessStartInfo(info.ReleaseUrl) { UseShellExecute = true });
+        }
+        catch
+        {
+            Process.Start(new ProcessStartInfo(UpdateService.ReleasesPage) { UseShellExecute = true });
+        }
     }
 
     // ============================================================
@@ -140,35 +169,60 @@ public partial class MainWindow : Window
     private async void InstallOcr_Click(object sender, RoutedEventArgs e)
     {
         InstallOcrButton.IsEnabled = false;
-        OcrLangStatus.Text = "Installing Russian OCR… accept the admin prompt. This can take a minute.";
+        // Untick "Always on top" while installing so the Windows admin (UAC) prompt
+        // can't hide behind our window.
+        bool wasTopmost = Topmost;
+        Topmost = false;
+        OcrLangStatus.Text = "⏳ A Windows admin prompt is opening — click \"Yes\". " +
+                             "If you don't see it, check the taskbar or Alt+Tab. Then wait a few minutes…";
         try
         {
-            var psi = new ProcessStartInfo
+            // Run the elevation on a background thread. Process.Start() with the
+            // "runas" verb blocks until the UAC prompt is answered, so doing it on
+            // the UI thread freezes the whole window (looks like it's stuck).
+            int exitCode = await Task.Run(() =>
             {
-                FileName = "powershell.exe",
-                Arguments = "-NoProfile -ExecutionPolicy Bypass -Command " +
-                            "\"Add-WindowsCapability -Online -Name 'Language.OCR~~~ru-RU~0.0.1.0'\"",
-                Verb = "runas",              // triggers the UAC elevation prompt
-                UseShellExecute = true,
-                WindowStyle = ProcessWindowStyle.Hidden
-            };
-            var proc = Process.Start(psi);
-            if (proc != null) await proc.WaitForExitAsync();
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "powershell.exe",
+                    Arguments = "-NoProfile -ExecutionPolicy Bypass -Command " +
+                                "\"Add-WindowsCapability -Online -Name 'Language.OCR~~~ru-RU~0.0.1.0'\"",
+                    Verb = "runas",              // triggers the UAC elevation prompt
+                    UseShellExecute = true,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                };
+                using var proc = Process.Start(psi);
+                if (proc == null) return -1;
+                proc.WaitForExit();
+                return proc.ExitCode;
+            });
 
             // Rebuild the engine and re-check.
             _ocr = new OcrService("ru");
-            if (!CheckOcrAvailability())
+            if (CheckOcrAvailability())
+                OcrLangStatus.Text = "Russian OCR installed ✓ — you're ready to read the screen.";
+            else if (exitCode != 0)
+                OcrLangStatus.Text = $"The install command finished with an error (code {exitCode}). " +
+                                     "Make sure you're online, then try again — or run the command below in " +
+                                     "an admin PowerShell.";
+            else
                 OcrLangStatus.Text = "Install finished, but Russian OCR still isn't detected. " +
                                      "Try restarting the app (or Windows) and check again.";
         }
+        catch (Win32Exception w32) when (w32.NativeErrorCode == 1223)
+        {
+            // 1223 = ERROR_CANCELLED: the user clicked "No" / closed the UAC prompt.
+            OcrLangStatus.Text = "You didn't accept the Windows admin prompt, so nothing was installed. " +
+                                 "Click the button again and choose \"Yes\".";
+        }
         catch (Exception ex)
         {
-            // Most commonly: the user dismissed the UAC prompt.
-            OcrLangStatus.Text = $"Install was cancelled or failed ({ex.Message}). " +
-                                 "You can also run the command below manually.";
+            OcrLangStatus.Text = $"Install couldn't run ({ex.Message}). " +
+                                 "You can also run the command below manually in an admin PowerShell.";
         }
         finally
         {
+            Topmost = wasTopmost;
             InstallOcrButton.IsEnabled = true;
         }
     }
