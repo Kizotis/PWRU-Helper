@@ -298,7 +298,7 @@
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="PWRU" FontSize="20" FontWeight="Bold" Foreground="{StaticResource AccentBrush}"/>
                             <TextBlock Text=" Helper" FontSize="20" FontWeight="Bold" Foreground="{StaticResource TextBrush}"/>
-                            <TextBlock Text="  v0.2" FontSize="13" VerticalAlignment="Bottom" Margin="4,0,0,3"
+                            <TextBlock x:Name="VersionText" Text="  " FontSize="13" VerticalAlignment="Bottom" Margin="4,0,0,3"
                                        Foreground="{StaticResource TextMutedBrush}"/>
                         </StackPanel>
                         <TextBlock Text="A free helper for the Perfect World RU (pwonline.ru) community."

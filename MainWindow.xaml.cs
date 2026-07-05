@@ -45,10 +45,22 @@ public partial class MainWindow : Window
         _toastTimer.Tick += (_, _) => { Toast.Visibility = Visibility.Collapsed; _toastTimer.Stop(); };
 
         OcrResults.ItemsSource = _ocrItems;
+        ShowAppVersion();
         LoadPhrases();
         CheckOcrAvailability();
-        _ = CheckForUpdatesAsync();
+        Loaded += OnWindowLoaded;
     }
+
+    private async void OnWindowLoaded(object sender, RoutedEventArgs e)
+    {
+        // Run the update check once the window is up, so the dialog has an owner and
+        // appears in front of our always-on-top window instead of behind it.
+        await CheckForUpdatesAsync();
+    }
+
+    /// <summary>Show the real build version in the About tab (never hard-coded).</summary>
+    private void ShowAppVersion()
+        => VersionText.Text = $"v{UpdateService.CurrentVersion.ToString(3)}";
 
     // ============================================================
     //  UPDATE CHECK (GitHub Releases)
@@ -58,7 +70,7 @@ public partial class MainWindow : Window
         var info = await _updates.CheckForUpdateAsync();
         if (info == null) return; // up to date, or the check couldn't run — stay quiet
 
-        var choice = MessageBox.Show(
+        var choice = MessageBox.Show(this,
             "A new version of PWRU Helper is available!\n\n" +
             $"You have: {UpdateService.CurrentVersion.ToString(3)}\n" +
             $"Latest: {info.LatestVersion.ToString(3)}\n\n" +
@@ -73,7 +85,9 @@ public partial class MainWindow : Window
         }
         catch
         {
-            Process.Start(new ProcessStartInfo(UpdateService.ReleasesPage) { UseShellExecute = true });
+            // Browser association broken, etc. — try the canonical page, then give up gracefully.
+            try { Process.Start(new ProcessStartInfo(UpdateService.ReleasesPage) { UseShellExecute = true }); }
+            catch { ShowToast("Couldn't open the browser — see github.com/Kizotis/PWRU-Helper/releases"); }
         }
     }
 
@@ -82,39 +96,87 @@ public partial class MainWindow : Window
     // ============================================================
     private void LoadPhrases()
     {
+        // The embedded copy always works (it's compiled into the exe) — it's our
+        // guaranteed source so the phrasebook is NEVER empty, even if writing/reading
+        // an editable copy fails (e.g. installed under Program Files with no write access).
+        string? json = ReadEmbeddedPhrases();
+
         try
         {
-            var path = Path.Combine(AppContext.BaseDirectory, "Data", "phrases.json");
+            var editable = FindOrCreateEditablePhrases(json);
+            if (editable != null && File.Exists(editable))
+                json = File.ReadAllText(editable);
+        }
+        catch
+        {
+            // Couldn't read an editable copy — fall back to the embedded one (already set).
+        }
 
-            // Portable single-file build ships phrases embedded. On first run, write an
-            // editable copy next to the exe so the user can add their own phrases.
-            if (!File.Exists(path))
-            {
-                var embedded = ReadEmbeddedPhrases();
-                if (embedded != null)
-                {
-                    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                    File.WriteAllText(path, embedded);
-                }
-            }
-
-            var json = File.Exists(path) ? File.ReadAllText(path) : ReadEmbeddedPhrases();
+        try
+        {
             if (json != null)
             {
                 var items = JsonSerializer.Deserialize<List<Phrase>>(json,
                     new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                if (items != null) _allPhrases.AddRange(items);
+                if (items != null)
+                {
+                    // A user-edited file may have missing/null fields — coalesce so the
+                    // search filter (p.En.Contains…) can never hit a NullReferenceException.
+                    // (Nullable ref types are compile-time only; JSON can still write null.)
+                    static string Safe(string? s) => s ?? "";
+                    foreach (var p in items)
+                    {
+                        p.En = Safe(p.En); p.Ru = Safe(p.Ru); p.Translit = Safe(p.Translit);
+                        p.Category = string.IsNullOrEmpty(p.Category) ? "Other" : p.Category;
+                    }
+                    _allPhrases.AddRange(items.Where(p => p.Ru.Length > 0 || p.En.Length > 0));
+                }
             }
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Could not load phrases.json:\n{ex.Message}", "PWRU Helper");
+            MessageBox.Show($"Could not read the phrase list:\n{ex.Message}", "PWRU Helper");
         }
 
         _phrasesView = new CollectionViewSource { Source = _allPhrases };
         _phrasesView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(Phrase.Category)));
         _phrasesView.Filter += PhrasesFilter;
         PhraseList.ItemsSource = _phrasesView.View;
+    }
+
+    /// <summary>
+    /// Returns the path of an editable phrases.json the user can customise, creating it
+    /// from the embedded copy on first run. Prefers next to the exe (portable), but falls
+    /// back to %AppData%\PWRUHelper when that folder isn't writable (e.g. an MSI install
+    /// under Program Files). Returns null if no editable copy could be provided.
+    /// </summary>
+    private static string? FindOrCreateEditablePhrases(string? embedded)
+    {
+        var candidates = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "Data", "phrases.json"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                         "PWRUHelper", "phrases.json"),
+        };
+
+        // If an editable copy already exists anywhere, use it.
+        foreach (var path in candidates)
+            if (File.Exists(path)) return path;
+
+        // Otherwise try to create one (best-effort) so the user has something to edit.
+        if (embedded != null)
+            foreach (var path in candidates)
+            {
+                try
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                    File.WriteAllText(path, embedded);
+                    return path;
+                }
+                catch { /* not writable here — try the next location */ }
+            }
+
+        return null;
     }
 
     private void PhrasesFilter(object sender, FilterEventArgs e)
