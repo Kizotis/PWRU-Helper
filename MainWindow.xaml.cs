@@ -22,6 +22,7 @@ public partial class MainWindow : Window
 
     private readonly TranslationService _translator = new();
     private readonly UpdateService _updates = new();
+    private readonly AppSettings _settings = SettingsService.Load();
     private OcrService _ocr = new("ru");
     private readonly ObservableCollection<OcrResultItem> _ocrItems = new();
 
@@ -51,14 +52,97 @@ public partial class MainWindow : Window
         ShowAppVersion();
         LoadPhrases();
         CheckOcrAvailability();
+        ApplySettings();
         Loaded += OnWindowLoaded;
     }
 
     private async void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
+        if (!_settings.FirstRunDone)
+        {
+            _settings.FirstRunDone = true;
+            SettingsService.Save(_settings);   // persist now so it can't reappear after a crash
+            MessageBox.Show(this,
+                "Welcome to PWRU Helper!\n\n" +
+                "• Phrasebook — click a Russian phrase to copy it, then paste in game with Ctrl+V.\n" +
+                "• Translator — type in your language, get Russian (auto-copied). Paste Russian and it\n" +
+                "   flips direction automatically.\n" +
+                "• Screen OCR — read & live-translate Russian text off your screen. Install the Russian\n" +
+                "   OCR pack once (one click) for good Cyrillic reading.\n\n" +
+                "Tip: run your game windowed or borderless, and keep \"Always on top\" ticked.",
+                "Welcome", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
         // Run the update check once the window is up, so the dialog has an owner and
         // appears in front of our always-on-top window instead of behind it.
         await CheckForUpdatesAsync();
+    }
+
+    // ============================================================
+    //  SETTINGS (persist between runs)
+    // ============================================================
+    private void ApplySettings()
+    {
+        var s = _settings;
+        SelectTag(FromCombo, s.TranslatorFrom);
+        SelectTag(ToCombo, s.TranslatorTo);
+        SelectTag(OcrTargetCombo, s.OcrTargetLang);
+        SensitivitySlider.Value = Math.Clamp(s.SensitivityPercent, 0, 100);
+        TopmostCheck.IsChecked = s.AlwaysOnTop;
+        Topmost = s.AlwaysOnTop;
+        AutoCopyCheck.IsChecked = s.AutoCopyTranslation;
+        if (s.LastTab >= 0 && s.LastTab < MainTabs.Items.Count)
+            MainTabs.SelectedIndex = s.LastTab;
+
+        // Restore window placement only if it still lands on a visible monitor.
+        if (s.WindowLeft is { } l && s.WindowTop is { } t &&
+            s.WindowWidth is > 200 and { } w && s.WindowHeight is > 200 and { } h &&
+            IsOnScreen(l, t, w, h))
+        {
+            WindowStartupLocation = WindowStartupLocation.Manual;
+            Left = l; Top = t; Width = w; Height = h;
+        }
+
+        UpdateResumeLiveButton();
+    }
+
+    private static bool IsOnScreen(double left, double top, double w, double h)
+    {
+        double vx = SystemParameters.VirtualScreenLeft, vy = SystemParameters.VirtualScreenTop;
+        double vw = SystemParameters.VirtualScreenWidth, vh = SystemParameters.VirtualScreenHeight;
+        // The title bar must be reachable: some horizontal overlap and the top on-screen.
+        return left + w > vx + 60 && left < vx + vw - 60 && top >= vy && top < vy + vh - 20;
+    }
+
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        base.OnClosing(e);
+        try
+        {
+            var s = _settings;
+            s.SensitivityPercent = (int)Math.Round(SensitivitySlider.Value);
+            s.OcrTargetLang = SelectedTag(OcrTargetCombo) ?? s.OcrTargetLang;
+            s.TranslatorFrom = SelectedTag(FromCombo) ?? s.TranslatorFrom;
+            s.TranslatorTo = SelectedTag(ToCombo) ?? s.TranslatorTo;
+            s.AlwaysOnTop = TopmostCheck.IsChecked == true;
+            s.AutoCopyTranslation = AutoCopyCheck.IsChecked == true;
+            s.LastTab = MainTabs.SelectedIndex;
+
+            var b = RestoreBounds;   // correct even if maximised/minimised
+            if (!b.IsEmpty)
+            {
+                s.WindowLeft = b.Left; s.WindowTop = b.Top;
+                s.WindowWidth = b.Width; s.WindowHeight = b.Height;
+            }
+            SettingsService.Save(s);
+        }
+        catch { /* saving preferences is best-effort */ }
+    }
+
+    private void UpdateResumeLiveButton()
+    {
+        bool show = _liveCts == null && _settings.LastLiveRegion is { Length: 4 };
+        ResumeLiveButton.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
     }
 
     /// <summary>Show the real build version in the About tab (never hard-coded).</summary>
@@ -400,7 +484,20 @@ public partial class MainWindow : Window
         if (_liveCts != null) { StopLive(); return; }
 
         var region = await SelectRegionAsync();
-        if (region is not { } rect) return;
+        if (region is { } rect) StartLive(rect);
+    }
+
+    private void ResumeLive_Click(object sender, RoutedEventArgs e)
+    {
+        if (_liveCts != null) return;
+        if (_settings.LastLiveRegion is { Length: 4 } r)
+            StartLive(new System.Drawing.Rectangle(r[0], r[1], r[2], r[3]));
+    }
+
+    private void StartLive(System.Drawing.Rectangle rect)
+    {
+        // Remember the area so it can be resumed next session without re-selecting.
+        _settings.LastLiveRegion = new[] { rect.X, rect.Y, rect.Width, rect.Height };
 
         _liveRegion = rect;
         _prevNorm = new();
@@ -409,7 +506,7 @@ public partial class MainWindow : Window
         _ocrItems.Clear();
         SetLiveUi(true);
         MainTabs.SelectedIndex = 1;
-        ScreenReadStatus.Text = "🔴 Live — watching the selected area. Translations update when the text changes.";
+        ScreenReadStatus.Text = "🔴 Live — watching the selected area. Translations appear when new text shows up.";
 
         _liveCts = new CancellationTokenSource();
         _ = LiveLoop(rect, _liveCts.Token);
@@ -440,6 +537,7 @@ public partial class MainWindow : Window
         LiveIndicator.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
         StopLiveButton.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
         LiveButton.Content = on ? "■  Stop live translation" : "▶  Start live translation";
+        UpdateResumeLiveButton();
         LiveStatus.Text = on
             ? "🔴 Live is running — re-reading the area and re-translating whenever the text changes. Press Stop to end."
             : "Live mode keeps watching the chosen area and re-translates automatically whenever the text changes, until you press Stop.";
@@ -611,22 +709,38 @@ public partial class MainWindow : Window
 
     private async Task RunTranslation()
     {
+        if (!TranslateButton.IsEnabled) return;   // a translation is already running
+
         var text = TranslateInput.Text?.Trim() ?? "";
         if (text.Length == 0) return;
 
         var from = SelectedTag(FromCombo) ?? "en";
         var to = SelectedTag(ToCombo) ?? "ru";
 
+        // Auto-detect: if the text is Russian but we're not translating FROM Russian,
+        // flip the direction so pasting Russian "just works" (was silently wrong before).
+        if (from != "ru" && Regex.IsMatch(text, @"\p{IsCyrillic}"))
+        {
+            from = "ru";
+            if (to == "ru") to = "en";
+            SelectTag(FromCombo, from);
+            SelectTag(ToCombo, to);
+        }
+
         TranslateButton.IsEnabled = false;
         TranslateStatus.Text = "Translating…";
         try
         {
-            TranslateOutput.Text = await _translator.TranslateAsync(text, from, to);
+            var result = await _translator.TranslateAsync(text, from, to);
+            TranslateOutput.Text = result;
             TranslateStatus.Text = $"{from} → {to}";
+
+            if (AutoCopyCheck.IsChecked == true && result.Length > 0 && CopyToClipboard(result))
+                ShowToast("Translated & copied — paste in game with Ctrl+V");
         }
         catch (Exception ex)
         {
-            TranslateStatus.Text = $"Failed: {ex.Message}";
+            TranslateStatus.Text = $"Failed: {Friendly(ex)}";
         }
         finally
         {
@@ -650,6 +764,25 @@ public partial class MainWindow : Window
     {
         if (!string.IsNullOrWhiteSpace(TranslateOutput.Text) && CopyToClipboard(TranslateOutput.Text))
             ShowToast("Result copied");
+    }
+
+    // Copy the original Russian of a screen-read message.
+    private void CopyOriginal_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: OcrResultItem item } && CopyToClipboard(item.Original))
+            ShowToast("Russian copied");
+    }
+
+    // "Reply": set up the translator to write a Russian answer and focus the input.
+    private void ReplyToMessage_Click(object sender, RoutedEventArgs e)
+    {
+        var mine = SelectedTag(FromCombo);
+        if (mine is null or "ru" or "auto") mine = "en";   // reply FROM a real non-Russian language
+        SelectTag(FromCombo, mine);
+        SelectTag(ToCombo, "ru");                            // …TO Russian
+        TranslateInput.Text = "";
+        TranslateInput.Focus();
+        ShowToast("Type your reply — it'll translate to Russian");
     }
 
     // ============================================================
