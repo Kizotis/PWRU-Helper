@@ -882,18 +882,6 @@ public partial class MainWindow : Window
             ShowToast("Russian copied");
     }
 
-    // "Reply": set up the translator to write a Russian answer and focus the input.
-    private void ReplyToMessage_Click(object sender, RoutedEventArgs e)
-    {
-        var mine = SelectedTag(FromCombo);
-        if (mine is null or "ru" or "auto") mine = "en";   // reply FROM a real non-Russian language
-        SelectTag(FromCombo, mine);
-        SelectTag(ToCombo, "ru");                            // …TO Russian
-        TranslateInput.Text = "";
-        TranslateInput.Focus();
-        ShowToast("Type your reply — it'll translate to Russian");
-    }
-
     // ============================================================
     //  SHARED HELPERS
     // ============================================================
@@ -959,20 +947,41 @@ public partial class MainWindow : Window
             }
     }
 
+    private bool _copying;   // guards against re-entrancy while we pump messages below
+
     private bool CopyToClipboard(string text)
     {
-        // The clipboard is a shared, single-owner resource: a clipboard-history tool,
-        // a game overlay or another app can briefly hold it, making the copy fail
-        // ("clipboard busy"). Retry patiently, and use SetDataObject(copy: true) rather
-        // than SetText — it's more reliable and flushes so the text survives after the
-        // app closes. (WPF has no retry-count overload; that one is WinForms-only.)
-        for (int i = 0; i < 10; i++)
+        // The clipboard is single-owner: another app (often Windows' clipboard history)
+        // — or us, still finishing the previous copy — can hold it for a moment.
+        // We retry, but the wait between tries MUST keep our message pump running: if we
+        // blocked the UI thread (Thread.Sleep), our own window couldn't process the
+        // messages that release the clipboard, so every retry would keep failing — which
+        // was exactly the "second copy doesn't work" bug.
+        if (_copying) return false;
+        _copying = true;
+        try
         {
-            try { Clipboard.SetDataObject(text, true); return true; }
-            catch { Thread.Sleep(80); }   // ~0.8s total before we give up
+            for (int i = 0; i < 8; i++)
+            {
+                try { Clipboard.SetDataObject(text, true); return true; }
+                catch { PumpWait(70); }   // ~0.5s total, message pump stays alive
+            }
+            ShowToast("Clipboard busy — another app is using it. Try again in a second.");
+            return false;
         }
-        ShowToast("Clipboard busy — another app is using it. Try again in a second.");
-        return false;
+        finally { _copying = false; }
+    }
+
+    /// <summary>Wait roughly <paramref name="ms"/> ms while still processing window
+    /// messages (unlike Thread.Sleep), so the clipboard's owner can release it.</summary>
+    private static void PumpWait(int ms)
+    {
+        var frame = new DispatcherFrame();
+        var timer = new DispatcherTimer(DispatcherPriority.Background)
+        { Interval = TimeSpan.FromMilliseconds(ms) };
+        timer.Tick += (_, _) => { frame.Continue = false; timer.Stop(); };
+        timer.Start();
+        Dispatcher.PushFrame(frame);
     }
 
     private void ShowToast(string message)

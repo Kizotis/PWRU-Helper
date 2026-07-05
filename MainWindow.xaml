@@ -240,15 +240,9 @@
                                                                Foreground="{StaticResource TextBrush}"
                                                                TextWrapping="Wrap" Margin="0,4,0,0"/>
                                                 </StackPanel>
-                                                <StackPanel Grid.Column="1" Orientation="Horizontal"
-                                                            VerticalAlignment="Top" Margin="8,0,0,0">
-                                                    <Button Content="⧉" Style="{StaticResource GhostButton}"
-                                                            Padding="7,2" Click="CopyOriginal_Click"
-                                                            ToolTip="Copy the Russian text"/>
-                                                    <Button Content="↩" Style="{StaticResource GhostButton}"
-                                                            Padding="7,2" Margin="6,0,0,0" Click="ReplyToMessage_Click"
-                                                            ToolTip="Reply — type in your language, get Russian"/>
-                                                </StackPanel>
+                                                <Button Grid.Column="1" Content="⧉" Style="{StaticResource GhostButton}"
+                                                        Padding="7,2" Margin="8,0,0,0" VerticalAlignment="Top"
+                                                        Click="CopyOriginal_Click" ToolTip="Copy the Russian text"/>
                                             </Grid>
                                         </Border>
                                     </DataTemplate>
