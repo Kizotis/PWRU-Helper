@@ -1,4 +1,5 @@
 using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -18,6 +19,10 @@ public partial class CompactOverlay : Window
     private readonly DispatcherTimer _beat = new() { Interval = TimeSpan.FromMilliseconds(600) };
     private readonly INotifyCollectionChanged _feed;
     private bool _blink;
+
+    /// <summary>Set by the owner when it really wants this window closed (app shutdown);
+    /// otherwise an Alt+F4 / OS close is redirected back to the full window.</summary>
+    public bool AllowClose { get; set; }
 
     public CompactOverlay(MainWindow owner)
     {
@@ -41,7 +46,16 @@ public partial class CompactOverlay : Window
     }
 
     private void UpdateEmptyHint()
-        => EmptyHint.Visibility = _owner.LiveItems.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        => EmptyHint.Visibility = (_owner.LiveItems.Count == 0 && !_owner.IsLive)
+            ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>Show the live status / a routed toast in the overlay's own status line.</summary>
+    public void SetStatus(string msg)
+    {
+        OverlayStatus.Text = msg;
+        OverlayStatus.Visibility = string.IsNullOrEmpty(msg) ? Visibility.Collapsed : Visibility.Visible;
+        UpdateEmptyHint();
+    }
 
     public void ApplyFontScale(double scale)
         => FeedItems.LayoutTransform = new System.Windows.Media.ScaleTransform(scale, scale);
@@ -62,7 +76,7 @@ public partial class CompactOverlay : Window
 
     private void LiveToggle_Click(object sender, RoutedEventArgs e)
     {
-        _owner.ToggleLiveFromOverlay();
+        _owner.ToggleLive();
         UpdateLiveIndicator();
     }
 
@@ -80,18 +94,49 @@ public partial class CompactOverlay : Window
         var text = ReplyBox.Text.Trim();
         if (text.Length == 0) return;
 
-        ReplyResult.Text = "Translating…";
-        var ru = await _owner.QuickReplyTranslateAsync(text);
-        if (ru.Length == 0) { ReplyResult.Text = ""; return; }
+        SetReplyResult("Translating…", error: false);
+        var r = await _owner.QuickReplyTranslateAsync(text);
 
+        if (!r.Ok)
+        {
+            // Keep what the user typed so they don't lose their message; show why it failed.
+            SetReplyResult($"⚠ {r.Error ?? "couldn't translate"} — your text is kept, press Enter to retry.", error: true);
+            return;
+        }
+        if (!r.Copied)
+        {
+            SetReplyResult($"→ {r.Russian}   (clipboard busy — press Enter again to copy)", error: true);
+            return;
+        }
         ReplyBox.Clear();
-        ReplyResult.Text = $"→ {ru}    ✓ copied — paste in game with Ctrl+V";
+        SetReplyResult($"→ {r.Russian}    ✓ copied — paste in game with Ctrl+V", error: false);
+    }
+
+    private void SetReplyResult(string text, bool error)
+    {
+        ReplyResult.Text = text;
+        ReplyResult.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty,
+            error ? "AccentBrush" : "GoldBrush");
     }
 
     private void ResizeGrip_DragDelta(object sender, DragDeltaEventArgs e)
     {
         Width = Math.Max(MinWidth, Width + e.HorizontalChange);
         Height = Math.Max(MinHeight, Height + e.VerticalChange);
+    }
+
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        // The main window is hidden while we're up, so actually closing this window would
+        // leave the app running with no visible window. Redirect Alt+F4 / the OS close to
+        // "return to the full window" instead — unless the owner is shutting the app down.
+        if (!AllowClose)
+        {
+            e.Cancel = true;
+            _owner.ExitCompactMode();
+            return;
+        }
+        base.OnClosing(e);
     }
 
     /// <summary>Detach from the shared collection so we don't keep it (or us) alive.</summary>

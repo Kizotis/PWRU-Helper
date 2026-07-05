@@ -121,7 +121,7 @@
                                    VerticalAlignment="Center" Margin="12,0,0,0"
                                    Foreground="{StaticResource TextMutedBrush}"/>
                     </Grid>
-                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,6,0">
+                    <ScrollViewer x:Name="PhraseScroller" Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,6,0">
                         <ItemsControl x:Name="PhraseList">
                             <!-- items within each group: 4-column grid -->
                             <ItemsControl.ItemsPanel>

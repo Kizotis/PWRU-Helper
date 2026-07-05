@@ -30,8 +30,12 @@ public partial class MainWindow : Window
 
     private readonly DispatcherTimer _toastTimer = new() { Interval = TimeSpan.FromSeconds(1.6) };
 
+    // Tab indices (order must match the TabControl in XAML).
+    private const int TabTranslator = 1, TabScreenOcr = 2;
+
     // --- live screen translation ---
     private CancellationTokenSource? _liveCts;
+    private bool _selectingRegion;                       // a screen-area drag is in progress
     private System.Drawing.Rectangle? _liveRegion;
     private List<string> _prevNorm = new();              // normalised lines from the previous read
     private List<string> _pendingLines = new();          // lines that just appeared, awaiting confirmation
@@ -55,7 +59,22 @@ public partial class MainWindow : Window
         LoadPhrases();
         CheckOcrAvailability();
         ApplySettings();
+        // Track "my language" only from here on, so the init-time combo changes above
+        // (and the translator's auto-flip to Russian) don't overwrite it.
+        FromCombo.SelectionChanged += FromCombo_SelectionChanged;
         Loaded += OnWindowLoaded;
+    }
+
+    // Remember the user's own language whenever they pick a real (non-Russian) source,
+    // so quick replies from the compact overlay always translate FROM the right language.
+    private void FromCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var code = SelectedTag(FromCombo);
+        if (code is not (null or "ru" or "auto"))
+        {
+            _settings.MyLanguage = code;
+            SettingsService.Save(_settings);
+        }
     }
 
     private async void OnWindowLoaded(object sender, RoutedEventArgs e)
@@ -118,6 +137,23 @@ public partial class MainWindow : Window
         return left + w > vx + 60 && left < vx + vw - 60 && top >= vy && top < vy + vh - 20;
     }
 
+    [DllImport("user32.dll")] private static extern int GetSystemMetrics(int nIndex);
+
+    /// <summary>True if a capture rectangle (PHYSICAL pixels) still overlaps the desktop.
+    /// Uses GetSystemMetrics (physical px), not SystemParameters (DIP).</summary>
+    private static bool RegionOnVirtualScreen(System.Drawing.Rectangle r)
+    {
+        const int SM_XVIRTUALSCREEN = 76, SM_YVIRTUALSCREEN = 77,
+                  SM_CXVIRTUALSCREEN = 78, SM_CYVIRTUALSCREEN = 79;
+        int vx = GetSystemMetrics(SM_XVIRTUALSCREEN), vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN), vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+        if (r.Width < 4 || r.Height < 4) return false;
+        var screen = new System.Drawing.Rectangle(vx, vy, vw, vh);
+        var hit = System.Drawing.Rectangle.Intersect(screen, r);
+        // Require a meaningful overlap, not just a corner touching.
+        return hit.Width >= 20 && hit.Height >= 10;
+    }
+
     protected override void OnClosing(CancelEventArgs e)
     {
         base.OnClosing(e);
@@ -156,7 +192,9 @@ public partial class MainWindow : Window
 
     private void ApplyFontScale()
     {
-        double s = _settings.FontScale;
+        // Clamp here too: a hand-edited settings.json could carry an absurd value that
+        // would make the whole UI invisible or freeze layout.
+        double s = _settings.FontScale = Math.Clamp(_settings.FontScale, 1.0, 1.6);
         PhraseList.LayoutTransform = new System.Windows.Media.ScaleTransform(s, s);
         OcrResults.LayoutTransform = new System.Windows.Media.ScaleTransform(s, s);
         _overlay?.ApplyFontScale(s);
@@ -169,6 +207,7 @@ public partial class MainWindow : Window
     {
         _settings.FontScale = Math.Clamp(Math.Round(_settings.FontScale + delta, 1), 1.0, 1.6);
         ApplyFontScale();
+        SettingsService.Save(_settings);
         ShowToast($"Text size {(int)Math.Round(_settings.FontScale * 100)}%");
     }
 
@@ -227,33 +266,55 @@ public partial class MainWindow : Window
         _settings.OverlayWidth = b.Width; _settings.OverlayHeight = b.Height;
     }
 
-    internal void ToggleLiveFromOverlay()
+    /// <summary>Single entry point for the live button / Resume / Ctrl+Alt+L / overlay:
+    /// stop if running, else resume the saved area, else surface the picker.</summary>
+    internal void ToggleLive()
     {
+        if (_selectingRegion) return;
         if (_liveCts != null) { StopLive(); return; }
-        if (_settings.LastLiveRegion is { Length: 4 } r)
-            StartLive(new System.Drawing.Rectangle(r[0], r[1], r[2], r[3]));
-        else
-        {
-            ExitCompactMode();
-            MainTabs.SelectedIndex = 2;   // Screen OCR tab
-            ShowToast("Pick a screen area once — then ▶ Live (or Ctrl+Alt+L) resumes it.");
-        }
+        if (TryGetSavedRegion(out var rect)) { StartLive(rect); return; }
+
+        // Nothing saved (or it was off-screen) — bring the full window up to pick an area.
+        if (_overlay is { IsVisible: true }) ExitCompactMode(); else BringToFront();
+        MainTabs.SelectedIndex = TabScreenOcr;
+        ShowToast("Pick a screen area once — then ▶ Live (or Ctrl+Alt+L) resumes it.");
     }
 
-    /// <summary>Translate a short reply into Russian and copy it. Never throws.</summary>
-    internal async Task<string> QuickReplyTranslateAsync(string text)
+    /// <summary>The saved live area, if there is one AND it still lands on a screen.</summary>
+    private bool TryGetSavedRegion(out System.Drawing.Rectangle rect)
+    {
+        rect = default;
+        if (_settings.LastLiveRegion is not { Length: 4 } r) return false;
+        var candidate = new System.Drawing.Rectangle(r[0], r[1], r[2], r[3]);
+        if (!RegionOnVirtualScreen(candidate))
+        {
+            _settings.LastLiveRegion = null;   // stale (resolution/monitor changed)
+            SettingsService.Save(_settings);
+            return false;
+        }
+        rect = candidate;
+        return true;
+    }
+
+    /// <summary>Result of a quick reply from the overlay.</summary>
+    internal readonly record struct ReplyOutcome(bool Ok, string Russian, bool Copied, string? Error);
+
+    /// <summary>Translate a short reply from the user's language into Russian and copy it.
+    /// Never throws; returns success/failure explicitly so the overlay can react.</summary>
+    internal async Task<ReplyOutcome> QuickReplyTranslateAsync(string text)
     {
         text = text.Trim();
-        if (text.Length == 0) return "";
-        var from = SelectedTag(FromCombo);
+        if (text.Length == 0) return new ReplyOutcome(false, "", false, null);
+
+        var from = _settings.MyLanguage;   // NOT FromCombo, which the auto-flip can set to "ru"
         if (from is null or "ru" or "auto") from = "en";
         try
         {
             var ru = await _translator.TranslateAsync(text, from, "ru");
-            if (ru.Length > 0) CopyToClipboard(ru);
-            return ru;
+            bool copied = ru.Length > 0 && CopyToClipboard(ru);
+            return new ReplyOutcome(true, ru, copied, null);
         }
-        catch (Exception ex) { return $"(couldn't translate: {Friendly(ex)})"; }
+        catch (Exception ex) { return new ReplyOutcome(false, "", false, Friendly(ex)); }
     }
 
     /// <summary>Show the real build version in the About tab (never hard-coded).</summary>
@@ -343,14 +404,18 @@ public partial class MainWindow : Window
     /// group (both cloned from the real phrases) on top, then every phrase by category.</summary>
     private void RebuildPhraseView()
     {
+        // Keep the reader's place: replacing ItemsSource resets the scroll to the top.
+        double offset = PhraseScroller?.VerticalOffset ?? 0;
+
         var fav = new HashSet<string>(_settings.Favourites);
+        var byRu = _allPhrases.GroupBy(p => p.Ru).ToDictionary(g => g.Key, g => g.First());
         foreach (var p in _allPhrases) p.IsFavourite = fav.Contains(p.Ru);
 
         var display = new List<Phrase>();
         foreach (var ru in _settings.Recents)
-            if (_allPhrases.FirstOrDefault(p => p.Ru == ru) is { } src) display.Add(Clone(src, "🕑 Recent"));
+            if (byRu.TryGetValue(ru, out var src)) display.Add(Clone(src, "🕑 Recent"));
         foreach (var ru in _settings.Favourites)
-            if (_allPhrases.FirstOrDefault(p => p.Ru == ru) is { } src) display.Add(Clone(src, "★ Favourites"));
+            if (byRu.TryGetValue(ru, out var src)) display.Add(Clone(src, "★ Favourites"));
         display.AddRange(_allPhrases);
 
         _phrasesView = new CollectionViewSource { Source = display };
@@ -358,22 +423,32 @@ public partial class MainWindow : Window
         _phrasesView.Filter += PhrasesFilter;
         PhraseList.ItemsSource = _phrasesView.View;
 
+        if (PhraseScroller != null && offset > 0)
+            Dispatcher.BeginInvoke(new Action(() => PhraseScroller.ScrollToVerticalOffset(offset)),
+                                   DispatcherPriority.Loaded);
+
         static Phrase Clone(Phrase p, string category) => new()
         { En = p.En, Ru = p.Ru, Translit = p.Translit, Category = category, IsFavourite = p.IsFavourite };
     }
 
     private void RecordRecent(string ru)
     {
+        if (_settings.Recents.Count > 0 && _settings.Recents[0] == ru) return;  // already on top — nothing changes
         _settings.Recents.RemoveAll(x => x == ru);
         _settings.Recents.Insert(0, ru);
         while (_settings.Recents.Count > 8) _settings.Recents.RemoveAt(_settings.Recents.Count - 1);
+        SettingsService.Save(_settings);
         RebuildPhraseView();
     }
 
     private void TogglePin_Click(object sender, RoutedEventArgs e)
     {
+        // The ★ button lives inside the phrase-card button; stop the click from bubbling
+        // up and ALSO copying/recording the phrase.
+        e.Handled = true;
         if (sender is not FrameworkElement { DataContext: Phrase p }) return;
         if (!_settings.Favourites.Remove(p.Ru)) _settings.Favourites.Insert(0, p.Ru);
+        SettingsService.Save(_settings);
         RebuildPhraseView();
     }
 
@@ -551,6 +626,7 @@ public partial class MainWindow : Window
     private async Task<System.Drawing.Rectangle?> SelectRegionAsync()
     {
         var wasTopmost = Topmost;
+        _selectingRegion = true;   // block hotkey-live / a second selection while dragging
         Hide();
         await Task.Delay(150);
         try
@@ -560,6 +636,7 @@ public partial class MainWindow : Window
         }
         finally
         {
+            _selectingRegion = false;
             Show();
             Topmost = wasTopmost;
             Activate();
@@ -568,6 +645,7 @@ public partial class MainWindow : Window
 
     private async void SelectArea_Click(object sender, RoutedEventArgs e)
     {
+        if (_selectingRegion) return;
         StopLive();
         var region = await SelectRegionAsync();
         if (region is not { } rect) return;
@@ -630,23 +708,33 @@ public partial class MainWindow : Window
     // ============================================================
     private async void LiveButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_selectingRegion) return;
         if (_liveCts != null) { StopLive(); return; }
 
         var region = await SelectRegionAsync();
         if (region is { } rect) StartLive(rect);
     }
 
-    private void ResumeLive_Click(object sender, RoutedEventArgs e)
-    {
-        if (_liveCts != null) return;
-        if (_settings.LastLiveRegion is { Length: 4 } r)
-            StartLive(new System.Drawing.Rectangle(r[0], r[1], r[2], r[3]));
-    }
+    private void ResumeLive_Click(object sender, RoutedEventArgs e) => ToggleLive();
 
     private void StartLive(System.Drawing.Rectangle rect)
     {
+        if (!RegionOnVirtualScreen(rect))
+        {
+            _settings.LastLiveRegion = null;
+            SettingsService.Save(_settings);
+            UpdateResumeLiveButton();
+            ShowToast("That area isn't on any screen any more — select it again.");
+            return;
+        }
+
+        // Never leave a previous loop running — otherwise a live started via hotkey while
+        // the area was being selected would be orphaned here (impossible to Stop).
+        if (_liveCts != null) StopLive();
+
         // Remember the area so it can be resumed next session without re-selecting.
         _settings.LastLiveRegion = new[] { rect.X, rect.Y, rect.Width, rect.Height };
+        SettingsService.Save(_settings);
 
         _liveRegion = rect;
         _prevNorm = new();
@@ -654,8 +742,8 @@ public partial class MainWindow : Window
         _liveTicks = 0;
         _ocrItems.Clear();
         SetLiveUi(true);
-        MainTabs.SelectedIndex = 1;
-        ScreenReadStatus.Text = "🔴 Live — watching the selected area. Translations appear when new text shows up.";
+        MainTabs.SelectedIndex = TabTranslator;
+        SetLiveStatus("🔴 Live — watching the area. Translations appear when new text shows up.");
 
         _liveCts = new CancellationTokenSource();
         _ = LiveLoop(rect, _liveCts.Token);
@@ -683,7 +771,15 @@ public partial class MainWindow : Window
         _liveCts = null;
         _liveRegion = null;
         SetLiveUi(false);
-        ScreenReadStatus.Text = "Live stopped.";
+        SetLiveStatus("Live stopped.");
+    }
+
+    /// <summary>Set the live status text on the main window AND (if shown) the overlay,
+    /// so the state is visible whichever window the user is looking at.</summary>
+    private void SetLiveStatus(string msg)
+    {
+        ScreenReadStatus.Text = msg;
+        _overlay?.SetStatus(msg);
     }
 
     private void SetLiveUi(bool on)
@@ -738,10 +834,18 @@ public partial class MainWindow : Window
                 if (confirmed.Count > 0)
                 {
                     var target = SelectedTag(OcrTargetCombo) ?? "en";
-                    ScreenReadStatus.Text = $"🔴 Live — {confirmed.Count} new line(s), translating…";
+                    SetLiveStatus($"🔴 Live — {confirmed.Count} new line(s), translating…");
                     await AppendLinesToHistory(confirmed, target, ct);
                     if (ct.IsCancellationRequested) break;
-                    ScreenReadStatus.Text = $"🔴 Live — {_ocrItems.Count} message(s) in history (check #{_liveTicks}).";
+                    SetLiveStatus($"🔴 Live — {_ocrItems.Count} message(s) so far (check #{_liveTicks}).");
+                }
+                else
+                {
+                    // Reassure the user it's really working even before the first message
+                    // (a calm chat can be silent for minutes) — and show it's reading text.
+                    SetLiveStatus(_ocrItems.Count == 0
+                        ? $"🔴 Live — watching (check #{_liveTicks}, sees {lines.Count} line(s), waiting for new text)…"
+                        : $"🔴 Live — {_ocrItems.Count} message(s) so far (check #{_liveTicks}).");
                 }
                 consecutiveErrors = 0;
             }
@@ -751,11 +855,11 @@ public partial class MainWindow : Window
                 if (ct.IsCancellationRequested) break;
                 if (++consecutiveErrors >= 5)
                 {
-                    ScreenReadStatus.Text = $"Live stopped after repeated errors ({Friendly(ex)}).";
-                    StopLive();
+                    StopLive();   // this sets "Live stopped." first…
+                    SetLiveStatus($"Live stopped after repeated errors ({Friendly(ex)}).");   // …then the real reason
                     break;
                 }
-                ScreenReadStatus.Text = $"Live hiccup ({Friendly(ex)}) — retrying…";
+                SetLiveStatus($"Live hiccup ({Friendly(ex)}) — retrying…");
             }
 
             // Keep a roughly steady cadence: subtract the time the read+translate just took.
@@ -779,7 +883,18 @@ public partial class MainWindow : Window
         }
         ResultsScroller?.ScrollToEnd();
 
-        var translations = await _translator.TranslateLinesAsync(newLines, "ru", target, ct);
+        List<string> translations;
+        try
+        {
+            translations = await _translator.TranslateLinesAsync(newLines, "ru", target, ct);
+        }
+        catch (Exception ex)
+        {
+            // Don't leave the placeholders stuck on "…" forever (e.g. Google rate-limit):
+            // mark them, then let the loop's error handling show the reason.
+            foreach (var it in items) it.Translation = $"({Friendly(ex)})";
+            throw;
+        }
         if (ct.IsCancellationRequested) return;
         for (int i = 0; i < items.Count && i < translations.Count; i++)
             items[i].Translation = translations[i];
@@ -986,9 +1101,13 @@ public partial class MainWindow : Window
 
     private void ShowToast(string message)
     {
+        // In compact mode the main window (and its toast) are hidden — show it in the overlay.
+        if (_overlay is { IsVisible: true }) { _overlay.SetStatus(message); return; }
         ToastText.Text = message;
         Toast.Visibility = Visibility.Visible;
         _toastTimer.Stop();
+        // Give longer messages more time to be read.
+        _toastTimer.Interval = TimeSpan.FromSeconds(message.Length > 40 ? 3.5 : 1.6);
         _toastTimer.Start();
     }
 
@@ -1024,11 +1143,16 @@ public partial class MainWindow : Window
         _hwnd?.AddHook(HotkeyHook);
 
         uint mod = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
-        // Best-effort: if another app already owns a combo, RegisterHotKey just returns false.
-        RegisterHotKey(handle, HK_SHOW, mod, 0x50);       // P
-        RegisterHotKey(handle, HK_TRANSLATE, mod, 0x54);  // T
-        RegisterHotKey(handle, HK_LIVE, mod, 0x4C);       // L
-        RegisterHotKey(handle, HK_COMPACT, mod, 0x4D);    // M
+        // If another app already owns a combo, RegisterHotKey returns false — collect those
+        // so we can tell the user once, instead of a silently dead shortcut.
+        bool ok = RegisterHotKey(handle, HK_SHOW, mod, 0x50)       // P
+                & RegisterHotKey(handle, HK_TRANSLATE, mod, 0x54)   // T
+                & RegisterHotKey(handle, HK_LIVE, mod, 0x4C)        // L
+                & RegisterHotKey(handle, HK_COMPACT, mod, 0x4D);    // M
+        if (!ok)
+            Dispatcher.BeginInvoke(new Action(() =>
+                ShowToast("Some Ctrl+Alt shortcuts are already used by another app.")),
+                DispatcherPriority.ApplicationIdle);
     }
 
     private IntPtr HotkeyHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -1038,8 +1162,8 @@ public partial class MainWindow : Window
         {
             case HK_SHOW: BringToFront(); handled = true; break;
             case HK_TRANSLATE:
-                BringToFront(); MainTabs.SelectedIndex = 1; TranslateInput.Focus(); handled = true; break;
-            case HK_LIVE: ToggleLiveFromHotkey(); handled = true; break;
+                BringToFront(); MainTabs.SelectedIndex = TabTranslator; TranslateInput.Focus(); handled = true; break;
+            case HK_LIVE: ToggleLive(); handled = true; break;
             case HK_COMPACT: ToggleCompact(); handled = true; break;
         }
         return IntPtr.Zero;
@@ -1047,25 +1171,14 @@ public partial class MainWindow : Window
 
     private void BringToFront()
     {
+        // If we're in compact mode, "bring to front" means return to the full window.
+        if (_overlay is { IsVisible: true }) { ExitCompactMode(); return; }
         if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
         Show();
         // Nudge topmost to force ourselves above the game, then restore the user's choice.
         Topmost = true;
         Topmost = TopmostCheck.IsChecked == true;
         Activate();
-    }
-
-    private void ToggleLiveFromHotkey()
-    {
-        if (_liveCts != null) { StopLive(); return; }
-        if (_settings.LastLiveRegion is { Length: 4 } r)
-            StartLive(new System.Drawing.Rectangle(r[0], r[1], r[2], r[3]));
-        else
-        {
-            BringToFront();
-            MainTabs.SelectedIndex = 2;   // Screen OCR tab
-            ShowToast("Pick a screen area once — then Ctrl+Alt+L resumes it.");
-        }
     }
 
     protected override void OnClosed(EventArgs e)
@@ -1079,7 +1192,7 @@ public partial class MainWindow : Window
             UnregisterHotKey(handle, HK_COMPACT);
             _hwnd.RemoveHook(HotkeyHook);
         }
-        _overlay?.Close();
+        if (_overlay != null) { _overlay.AllowClose = true; _overlay.Close(); }
         base.OnClosed(e);
     }
 }
