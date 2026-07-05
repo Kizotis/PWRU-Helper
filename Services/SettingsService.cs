@@ -22,6 +22,12 @@ public class AppSettings
     public double? WindowWidth { get; set; }
     public double? WindowHeight { get; set; }
 
+    // Compact overlay placement
+    public double? OverlayLeft { get; set; }
+    public double? OverlayTop { get; set; }
+    public double? OverlayWidth { get; set; }
+    public double? OverlayHeight { get; set; }
+
     // Last live-translation area (physical px): [x, y, w, h], or null if never used.
     public int[]? LastLiveRegion { get; set; }
 

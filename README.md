@@ -61,9 +61,12 @@ The app makes this easy: open the **Screen OCR** tab and click
 ## 💡 Tips
 
 - Keep **"Always on top"** ticked so the window stays over your game.
+- **Compact overlay:** click **"⤡ Compact"** (or **Ctrl+Alt+M**) to shrink to a small
+  always-on-top window — just the live feed plus a one-line reply box (type → Enter →
+  Russian, copied). Click **⤢** to go back to the full window.
 - **Global shortcuts** (work while you're in the game):
   **Ctrl+Alt+P** brings the app to the front · **Ctrl+Alt+T** jumps to the translator ·
-  **Ctrl+Alt+L** starts/stops live translation on your last area.
+  **Ctrl+Alt+L** starts/stops live translation · **Ctrl+Alt+M** toggles the compact overlay.
 - Your settings, window position and **last live area are remembered** — use
   **"↻ Resume last area"** to restart live without re-drawing the box.
 - Translating **auto-copies** the result (Ctrl+V in game). Pasting Russian flips the

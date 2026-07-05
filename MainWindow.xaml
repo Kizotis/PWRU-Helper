@@ -54,10 +54,15 @@
                 <TextBlock Text="PWRU" FontSize="22" FontWeight="Bold" Foreground="{StaticResource AccentBrush}"/>
                 <TextBlock Text=" Helper" FontSize="22" FontWeight="Bold" Foreground="{StaticResource TextBrush}"/>
             </StackPanel>
-            <CheckBox x:Name="TopmostCheck" Content="Always on top" IsChecked="True"
-                      HorizontalAlignment="Right" VerticalAlignment="Center"
-                      Foreground="{StaticResource TextMutedBrush}"
-                      Checked="TopmostCheck_Changed" Unchecked="TopmostCheck_Changed"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                <CheckBox x:Name="TopmostCheck" Content="Always on top" IsChecked="True"
+                          VerticalAlignment="Center"
+                          Foreground="{StaticResource TextMutedBrush}"
+                          Checked="TopmostCheck_Changed" Unchecked="TopmostCheck_Changed"/>
+                <Button x:Name="CompactButton" Style="{StaticResource GhostButton}" Padding="8,3"
+                        Margin="10,0,0,0" Content="⤡ Compact" Click="CompactButton_Click"
+                        ToolTip="Shrink to a small overlay for playing (Ctrl+Alt+M)"/>
+            </StackPanel>
         </Grid>
 
         <!-- ===== Tabs ===== -->
@@ -354,6 +359,10 @@
                         <TextBlock Margin="0,2" Foreground="{StaticResource TextMutedBrush}">
                             <Run Text="Ctrl+Alt+L" Foreground="{StaticResource TealBrush}" FontWeight="SemiBold"/>
                             <Run Text="  start / stop live translation on your last area"/>
+                        </TextBlock>
+                        <TextBlock Margin="0,2" Foreground="{StaticResource TextMutedBrush}">
+                            <Run Text="Ctrl+Alt+M" Foreground="{StaticResource TealBrush}" FontWeight="SemiBold"/>
+                            <Run Text="  toggle the compact overlay (small in-game window)"/>
                         </TextBlock>
 
                         <!-- author links -->

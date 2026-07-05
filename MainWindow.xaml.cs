@@ -136,6 +136,7 @@ public partial class MainWindow : Window
                 s.WindowLeft = b.Left; s.WindowTop = b.Top;
                 s.WindowWidth = b.Width; s.WindowHeight = b.Height;
             }
+            SaveOverlayBounds();
             SettingsService.Save(s);
         }
         catch { /* saving preferences is best-effort */ }
@@ -145,6 +146,90 @@ public partial class MainWindow : Window
     {
         bool show = _liveCts == null && _settings.LastLiveRegion is { Length: 4 };
         ResumeLiveButton.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    // ============================================================
+    //  COMPACT OVERLAY MODE
+    // ============================================================
+    private CompactOverlay? _overlay;
+
+    /// <summary>The live feed, shared with the compact overlay so both show the same thing.</summary>
+    internal ObservableCollection<OcrResultItem> LiveItems => _ocrItems;
+    internal bool IsLive => _liveCts != null;
+
+    private void CompactButton_Click(object sender, RoutedEventArgs e) => EnterCompactMode();
+
+    private void ToggleCompact()
+    {
+        if (_overlay is { IsVisible: true }) ExitCompactMode();
+        else EnterCompactMode();
+    }
+
+    internal void EnterCompactMode()
+    {
+        if (_overlay == null)
+        {
+            _overlay = new CompactOverlay(this);
+            if (_settings.OverlayWidth is > 200 and { } ow) _overlay.Width = ow;
+            if (_settings.OverlayHeight is > 150 and { } oh) _overlay.Height = oh;
+            if (_settings.OverlayLeft is { } ol && _settings.OverlayTop is { } ot && IsOnScreen(ol, ot, 240, 180))
+            { _overlay.Left = ol; _overlay.Top = ot; }
+            else
+            {
+                // First time: park it near the top-right of the primary work area.
+                _overlay.Left = SystemParameters.WorkArea.Right - _overlay.Width - 20;
+                _overlay.Top = SystemParameters.WorkArea.Top + 40;
+            }
+        }
+        _overlay.Show();
+        _overlay.Activate();
+        Hide();
+    }
+
+    internal void ExitCompactMode()
+    {
+        if (_overlay != null) { SaveOverlayBounds(); _overlay.Hide(); }
+        Show();
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Activate();
+    }
+
+    private void SaveOverlayBounds()
+    {
+        if (_overlay == null) return;
+        var b = _overlay.RestoreBounds;
+        if (b.IsEmpty) return;
+        _settings.OverlayLeft = b.Left; _settings.OverlayTop = b.Top;
+        _settings.OverlayWidth = b.Width; _settings.OverlayHeight = b.Height;
+    }
+
+    internal void ToggleLiveFromOverlay()
+    {
+        if (_liveCts != null) { StopLive(); return; }
+        if (_settings.LastLiveRegion is { Length: 4 } r)
+            StartLive(new System.Drawing.Rectangle(r[0], r[1], r[2], r[3]));
+        else
+        {
+            ExitCompactMode();
+            MainTabs.SelectedIndex = 2;   // Screen OCR tab
+            ShowToast("Pick a screen area once — then ▶ Live (or Ctrl+Alt+L) resumes it.");
+        }
+    }
+
+    /// <summary>Translate a short reply into Russian and copy it. Never throws.</summary>
+    internal async Task<string> QuickReplyTranslateAsync(string text)
+    {
+        text = text.Trim();
+        if (text.Length == 0) return "";
+        var from = SelectedTag(FromCombo);
+        if (from is null or "ru" or "auto") from = "en";
+        try
+        {
+            var ru = await _translator.TranslateAsync(text, from, "ru");
+            if (ru.Length > 0) CopyToClipboard(ru);
+            return ru;
+        }
+        catch (Exception ex) { return $"(couldn't translate: {Friendly(ex)})"; }
     }
 
     /// <summary>Show the real build version in the About tab (never hard-coded).</summary>
@@ -856,10 +941,11 @@ public partial class MainWindow : Window
     //    Ctrl+Alt+P — bring PWRU Helper to the front
     //    Ctrl+Alt+T — bring to front + focus the translator input
     //    Ctrl+Alt+L — start/stop live on the last area
+    //    Ctrl+Alt+M — toggle the compact overlay
     // ============================================================
     private const int WM_HOTKEY = 0x0312;
     private const uint MOD_ALT = 0x0001, MOD_CONTROL = 0x0002, MOD_NOREPEAT = 0x4000;
-    private const int HK_SHOW = 1, HK_TRANSLATE = 2, HK_LIVE = 3;
+    private const int HK_SHOW = 1, HK_TRANSLATE = 2, HK_LIVE = 3, HK_COMPACT = 4;
     private HwndSource? _hwnd;
 
     [DllImport("user32.dll")] private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
@@ -877,6 +963,7 @@ public partial class MainWindow : Window
         RegisterHotKey(handle, HK_SHOW, mod, 0x50);       // P
         RegisterHotKey(handle, HK_TRANSLATE, mod, 0x54);  // T
         RegisterHotKey(handle, HK_LIVE, mod, 0x4C);       // L
+        RegisterHotKey(handle, HK_COMPACT, mod, 0x4D);    // M
     }
 
     private IntPtr HotkeyHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -888,6 +975,7 @@ public partial class MainWindow : Window
             case HK_TRANSLATE:
                 BringToFront(); MainTabs.SelectedIndex = 1; TranslateInput.Focus(); handled = true; break;
             case HK_LIVE: ToggleLiveFromHotkey(); handled = true; break;
+            case HK_COMPACT: ToggleCompact(); handled = true; break;
         }
         return IntPtr.Zero;
     }
@@ -923,8 +1011,10 @@ public partial class MainWindow : Window
             UnregisterHotKey(handle, HK_SHOW);
             UnregisterHotKey(handle, HK_TRANSLATE);
             UnregisterHotKey(handle, HK_LIVE);
+            UnregisterHotKey(handle, HK_COMPACT);
             _hwnd.RemoveHook(HotkeyHook);
         }
+        _overlay?.Close();
         base.OnClosed(e);
     }
 }
