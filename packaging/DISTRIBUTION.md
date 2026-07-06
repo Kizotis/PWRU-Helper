@@ -11,10 +11,14 @@ PWRU Helper is public on GitHub, so it's eligible for SignPath's free OSS plan, 
 signs your binaries with a trusted certificate (kills most of the SmartScreen warning
 over time).
 
+**→ Full walkthrough (ready-to-paste application answers + the exact, already-drafted
+release-workflow signing steps) is in [`signpath-signing.md`](signpath-signing.md).**
+
+Short version:
 1. Apply for the OSS plan: https://about.signpath.io/product/open-source
 2. Connect the `Kizotis/PWRU-Helper` repo and define a signing policy.
-3. In your release build, upload `PWRUHelper.exe` and the `.msi` to SignPath (they
-   have a GitHub Action) and publish the **signed** artifacts to the GitHub release.
+3. Add the SignPath secrets/variables — the drafted workflow steps activate automatically
+   and publish the **signed** exe + `.msi` to the GitHub release.
 
 > A **self-signed** certificate does NOT help against SmartScreen — don't bother with one.
 
