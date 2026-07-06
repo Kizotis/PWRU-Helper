@@ -22,7 +22,9 @@ public partial class MainWindow : Window
     private CollectionViewSource? _phrasesView;
     private bool _recentsDirty;   // a phrase was copied; refresh "Recent" next time the tab is shown
 
-    private readonly ITranslator _translator = new TranslationService();
+    // Wrap the backend in a cache so repeated chat lines (LFM spam, re-read live messages) are
+    // served instantly and don't hammer the translation endpoint — see CachingTranslator.
+    private readonly ITranslator _translator = new CachingTranslator(new TranslationService());
     private readonly UpdateService _updates = new();
     private readonly AppSettings _settings = SettingsService.Load();
     private OcrService _ocr = new("ru");
