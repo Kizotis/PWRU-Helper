@@ -830,7 +830,7 @@ public partial class MainWindow : Window
         }
 
         List<string> translations;
-        try { translations = await _translator.TranslateLinesAsync(parts.Select(p => p.Body).ToList(), "ru", target); }
+        try { translations = await TranslateBodiesAsync(parts.Select(p => p.Body).ToList(), target, default); }
         catch (Exception ex)
         {
             foreach (var it in items) it.Translation = $"({Friendly(ex)})";
@@ -1032,7 +1032,7 @@ public partial class MainWindow : Window
         List<string> translations;
         try
         {
-            translations = await _translator.TranslateLinesAsync(parts.Select(p => p.Body).ToList(), "ru", target, ct);
+            translations = await TranslateBodiesAsync(parts.Select(p => p.Body).ToList(), target, ct);
         }
         catch (Exception ex)
         {
@@ -1045,6 +1045,35 @@ public partial class MainWindow : Window
         for (int i = 0; i < items.Count && i < translations.Count; i++)
             items[i].Translation = TextMatching.WithSpeaker(parts[i].Speaker, translations[i]);
         ResultsScroller?.ScrollToEnd();
+    }
+
+    /// <summary>Translate message bodies, picking the source language per message: real Russian
+    /// (Cyrillic) is translated FROM "ru", but English/other-language messages are sent with
+    /// "auto" so Google detects them instead of mangling plain English into invented Cyrillic.
+    /// The two groups are still batched (one request each) and reassembled in the original order.</summary>
+    private async Task<List<string>> TranslateBodiesAsync(List<string> bodies, string target, CancellationToken ct)
+    {
+        var ru = new List<string>(); var ruIdx = new List<int>();
+        var auto = new List<string>(); var autoIdx = new List<int>();
+        for (int i = 0; i < bodies.Count; i++)
+        {
+            if (TextMatching.IsProbablyRussian(bodies[i])) { ru.Add(bodies[i]); ruIdx.Add(i); }
+            else { auto.Add(bodies[i]); autoIdx.Add(i); }
+        }
+
+        var result = new string?[bodies.Count];
+        if (ru.Count > 0)
+        {
+            var t = await _translator.TranslateLinesAsync(ru, "ru", target, ct);
+            for (int i = 0; i < ruIdx.Count && i < t.Count; i++) result[ruIdx[i]] = t[i];
+        }
+        if (auto.Count > 0)
+        {
+            var t = await _translator.TranslateLinesAsync(auto, "auto", target, ct);
+            for (int i = 0; i < autoIdx.Count && i < t.Count; i++) result[autoIdx[i]] = t[i];
+        }
+        // Any gap (shouldn't happen) falls back to the original text rather than a null.
+        return result.Select((r, i) => r ?? bodies[i]).ToList();
     }
 
     /// <summary>Map the sensitivity slider (0–100%) to the "same message" fuzzy threshold used

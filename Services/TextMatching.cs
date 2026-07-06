@@ -244,6 +244,14 @@ public static class TextMatching
         return letters == 0 ? 0 : (double)cyrillic / letters;
     }
 
+    /// <summary>True if a line is written mostly in Cyrillic, i.e. it really is Russian and
+    /// should be translated FROM Russian. English chat/system messages (little or no Cyrillic)
+    /// return false so the caller can auto-detect their language instead of forcing "ru" — which
+    /// makes Google spit out invented Cyrillic for what was plain English. A line with no letters
+    /// at all (pure numbers/slang) counts as Russian, since it's typically RU chat shorthand.</summary>
+    public static bool IsProbablyRussian(string s, double threshold = 0.2)
+        => !s.Any(char.IsLetter) || CyrillicShare(s) >= threshold;
+
     /// <summary>Lower-case, collapse whitespace, drop edge punctuation — so trivial OCR
     /// variations of the same line compare equal.</summary>
     public static string Normalize(string s)
