@@ -1,8 +1,10 @@
 name: Release
 
-# Tag a commit with e.g. v0.9.0 and push the tag to build the portable exe and publish a
-# GitHub Release. The app's built-in update check reads this release's tag, and winget can
-# point at the attached exe + SHA-256.
+# Tag a commit with e.g. v0.9.0 and push the tag to build BOTH release artifacts and
+# publish a GitHub Release:
+#   • PWRUHelper.exe                 — portable single-file build (no install)
+#   • PWRUHelper-<version>-setup.msi — WiX installer (Start-menu/desktop shortcuts, ARP entry)
+# The app's built-in update check reads this release's tag; winget points at the exe/msi.
 on:
   push:
     tags: [ 'v*' ]
@@ -25,6 +27,11 @@ jobs:
       - name: Run unit tests
         run: dotnet test tests/PWRUHelper.Tests -c Release
 
+      - name: Install WiX v5 toolset
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add -g WixToolset.UI.wixext/5.0.2
+
       - name: Publish portable single-file exe
         run: >
           dotnet publish PWRUHelper.csproj -c Release -r win-x64 --self-contained true
@@ -33,19 +40,32 @@ jobs:
           -p:EnableCompressionInSingleFile=true
           -p:DebugType=none
 
-      - name: Stage artifact + checksum
+      - name: Build MSI installer + stage both artifacts
         shell: pwsh
         run: |
-          $out = "bin/Release/net8.0-windows10.0.19041.0/win-x64/publish/PWRUHelper.exe"
+          $version = "${{ github.ref_name }}".TrimStart('v')     # "v0.9.0" -> "0.9.0"
+          $exe = "bin/Release/net8.0-windows10.0.19041.0/win-x64/publish/PWRUHelper.exe"
+          if (-not (Test-Path $exe)) { throw "Published exe not found at $exe" }
+
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item $out dist/PWRUHelper.exe
-          (Get-FileHash dist/PWRUHelper.exe -Algorithm SHA256).Hash |
-            Out-File dist/PWRUHelper.exe.sha256.txt -Encoding ascii
+
+          # The installer wraps the very exe we just published, so the portable download and
+          # the MSI ship the exact same build.
+          wix build installer/Product.wxs -ext WixToolset.UI.wixext -arch x64 `
+            -d Version="$version.0" `
+            -d ExeFile="$exe" `
+            -d IconFile="assets/icon.ico" `
+            -d LicenseFile="installer/license.rtf" `
+            -o "dist/PWRUHelper-$version-setup.msi"
+
+          Copy-Item $exe "dist/PWRUHelper.exe"
+          Get-ChildItem dist
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          name: PWRU Helper ${{ github.ref_name }}
           files: |
             dist/PWRUHelper.exe
-            dist/PWRUHelper.exe.sha256.txt
+            dist/PWRUHelper-*-setup.msi
           generate_release_notes: true
