@@ -33,7 +33,7 @@ Get-FileHash .\PWRUHelper.exe, .\PWRUHelper-0.7.0-setup.msi -Algorithm SHA256 |
 
 ## 3. Submit to winget (free) — a trusted install channel
 `winget install Kizotis.PWRUHelper` is a clean path for technical players. The MSI
-(perMachine, stable `UpgradeCode`) is a good fit.
+(perMachine, stable `UpgradeCode`, MIT-licensed) is a good fit.
 
 Easiest is **wingetcreate**, which fills in the SHA-256 and MSI ProductCode for you
 from the release URL:
@@ -46,10 +46,26 @@ wingetcreate update Kizotis.PWRUHelper `
   --submit    # opens a PR to microsoft/winget-pkgs
 ```
 
-For the very first submission use `wingetcreate new` instead of `update`. Hand-authored
-manifest templates are in `packaging/winget/` if you prefer to edit them directly — but
-note the MSI `ProductCode` changes on every WiX build (`Product Id="*"`), so let
-wingetcreate read it from the actual released file rather than hard-coding it.
+**First time only:** the package doesn't exist on winget yet, so do the initial
+submission by hand with `wingetcreate new` (walks you through it) instead of `update`.
+After that, `update` — and the automation below — keep it current.
+
+### Automated on every release
+The Release workflow has a **"Submit to winget"** step that runs `wingetcreate update … --submit`
+for each tagged release. It's **opt-in and safe**:
+
+1. Create a GitHub **classic PAT** with `public_repo` scope (it needs to fork/PR
+   `microsoft/winget-pkgs` on your behalf).
+2. Add it as the repository secret **`WINGET_TOKEN`** (Settings → Secrets → Actions).
+
+With the secret set, tagging `vX.Y.Z` publishes the release **and** opens the winget PR
+automatically. Without it, the step just prints these instructions and the release still
+succeeds. (Remember: the *first* package version must be submitted once by hand as above,
+because `update` only works on a package winget already knows.)
+
+Hand-authored manifest templates are in `packaging/winget/` for reference / manual edits —
+but the MSI `ProductCode` changes on every WiX build (`Product Id="*"`), so let wingetcreate
+read it from the actual released file rather than hard-coding it.
 
 To read the ProductCode of a built MSI yourself:
 
