@@ -255,4 +255,39 @@ public class TextMatchingTests
         Assert.Equal("proBlemka: LF Terrace", TextMatching.WithSpeaker("proBlemka", "LF Terrace"));
         Assert.Equal("LF Terrace", TextMatching.WithSpeaker("", "LF Terrace"));
     }
+
+    // ---- IsProbablyRussian (pick "ru" vs "auto" source, so English isn't forced through ru) ----
+
+    [Fact]
+    public void IsProbablyRussian_TrueForCyrillicChat()
+        => Assert.True(TextMatching.IsProbablyRussian("ТС ЛЕГА 2 ДД"));
+
+    [Fact]
+    public void IsProbablyRussian_FalseForPlainEnglish()
+        => Assert.False(TextMatching.IsProbablyRussian("becomes the owner of a real rarity"));
+
+    [Fact]
+    public void IsProbablyRussian_TrueForNumbersOrSlangWithNoLetters()
+        => Assert.True(TextMatching.IsProbablyRussian("2 3 999"));   // RU chat shorthand, not "English"
+
+    [Fact]
+    public void IsProbablyRussian_TrueForMostlyCyrillicWithAStrayLatinLetter()
+        => Assert.True(TextMatching.IsProbablyRussian("привет всем gl"));
+
+    [Fact]
+    public void LatinNickname_SpeakingRussian_IsStillDetectedAsRussian()
+    {
+        // A player whose name is in English but who writes in Russian must translate FROM ru:
+        // detection runs on the BODY (after the nick is split off), not the nickname.
+        var (_, body) = TextMatching.SplitSpeaker("proBlemka: ТС ЛЕГА 2 ДД");
+        Assert.True(TextMatching.IsProbablyRussian(body));
+    }
+
+    [Fact]
+    public void RussianNickname_SpeakingEnglish_IsDetectedAsNonRussian()
+    {
+        // …and the reverse: a Cyrillic name writing English translates via auto-detect, not ru.
+        var (_, body) = TextMatching.SplitSpeaker("Вася: hello guys where are you");
+        Assert.False(TextMatching.IsProbablyRussian(body));
+    }
 }
