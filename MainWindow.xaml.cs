@@ -62,6 +62,7 @@ public partial class MainWindow : Window
         PopulateLanguageCombos();
         LoadPhrases();
         LoadSlang();
+        BuildSquadTab();
         CheckOcrAvailability();
         ApplySettings();
         // Track "my language" only from here on, so the init-time combo changes above
@@ -532,6 +533,70 @@ public partial class MainWindow : Window
                 RecordRecent(p.Ru);
             }
         }
+    }
+
+    // ============================================================
+    //  SQUAD BUILDER  (tick dungeons/classes/roles → LFM chat phrase)
+    // ============================================================
+
+    /// <summary>Fill the three tick-lists from the slang glossary (see <see cref="SquadCatalog"/>)
+    /// and wire every checkbox to rebuild the phrase. Called once, after the glossary loads.</summary>
+    private void BuildSquadTab()
+    {
+        var (dungeons, classes, roles) = SquadCatalog.Build(_slang.Entries);
+        PopulateSquadPanel(SquadDungeons, dungeons);
+        PopulateSquadPanel(SquadClasses, classes);
+        PopulateSquadPanel(SquadRoles, roles);
+        SquadEmptyHint.Visibility =
+            (dungeons.Count + classes.Count + roles.Count) > 0 ? Visibility.Collapsed : Visibility.Visible;
+        RebuildSquadPhrase();
+    }
+
+    private void PopulateSquadPanel(WrapPanel panel, List<SquadOption> options)
+    {
+        panel.Children.Clear();
+        var fg = (System.Windows.Media.Brush)FindResource("TextBrush");
+        foreach (var opt in options)
+        {
+            var cb = new CheckBox
+            {
+                Content = opt.Label,
+                Tag = opt.Token,
+                Foreground = fg,
+                Margin = new Thickness(0, 4, 16, 4),
+                ToolTip = $"Adds “{opt.Token}” to the message",
+            };
+            cb.Checked += SquadCheck_Changed;
+            cb.Unchecked += SquadCheck_Changed;
+            panel.Children.Add(cb);
+        }
+    }
+
+    private void SquadCheck_Changed(object sender, RoutedEventArgs e) => RebuildSquadPhrase();
+
+    /// <summary>Rebuild the "в &lt;dungeons&gt; &lt;classes&gt; &lt;roles&gt;" LFM line from the ticks.</summary>
+    private void RebuildSquadPhrase()
+    {
+        if (SquadPhraseBox == null) return;
+        SquadPhraseBox.Text = SquadCatalog.BuildPhrase("в",
+            TickedTokens(SquadDungeons), TickedTokens(SquadClasses), TickedTokens(SquadRoles));
+    }
+
+    private static IEnumerable<string> TickedTokens(WrapPanel panel)
+        => panel.Children.OfType<CheckBox>().Where(c => c.IsChecked == true).Select(c => (string)c.Tag);
+
+    private async void SquadCopy_Click(object sender, RoutedEventArgs e)
+    {
+        var text = SquadPhraseBox.Text?.Trim() ?? "";
+        if (text.Length == 0) { ShowToast("Tick at least one dungeon, class or role first."); return; }
+        if (await CopyToClipboardAsync(text)) ShowToast($"Copied:  {text}");
+    }
+
+    private void SquadClear_Click(object sender, RoutedEventArgs e)
+    {
+        foreach (var panel in new[] { SquadDungeons, SquadClasses, SquadRoles })
+            foreach (var cb in panel.Children.OfType<CheckBox>())
+                cb.IsChecked = false;   // fires SquadCheck_Changed, which rebuilds the phrase
     }
 
     // ============================================================

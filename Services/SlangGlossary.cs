@@ -13,6 +13,9 @@ public class SlangEntry
     public List<string> Keys { get; set; } = new();
     public string Meaning { get; set; } = "";
     public bool Context { get; set; }
+    /// <summary>Optional grouping for the squad builder: "class", "dungeon" or "role"
+    /// (see <see cref="SquadCatalog"/>). Absent on plain decode-only entries.</summary>
+    public string Category { get; set; } = "";
 }
 
 /// <summary>
@@ -24,9 +27,14 @@ public class SlangEntry
 public class SlangGlossary
 {
     private readonly Dictionary<string, SlangEntry> _byKey = new();
+    private readonly List<SlangEntry> _entries = new();
     private int _maxWords = 1;
 
     public bool IsEmpty => _byKey.Count == 0;
+
+    /// <summary>All glossary entries in file order (each once), for consumers like the squad
+    /// builder that need to group them — as opposed to <see cref="Decode"/>'s per-key lookup.</summary>
+    public IReadOnlyList<SlangEntry> Entries => _entries;
 
     private class Root { public List<SlangEntry>? Entries { get; set; } }
 
@@ -48,6 +56,7 @@ public class SlangGlossary
                 foreach (var e in doc.Entries)
                 {
                     if (string.IsNullOrWhiteSpace(e.Meaning) || e.Keys == null) continue;
+                    g._entries.Add(e);
                     foreach (var k in e.Keys)
                     {
                         var nk = NormalizeKey(k);
