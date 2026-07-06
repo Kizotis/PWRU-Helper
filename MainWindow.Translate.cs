@@ -120,4 +120,38 @@ public partial class MainWindow
         if (sender is FrameworkElement { DataContext: OcrResultItem item } && await CopyToClipboardAsync(item.Original))
             ShowToast("Russian copied");
     }
+
+    // ============================================================
+    //  TRANSLATION BACKEND (Google default, optional DeepL)
+    // ============================================================
+
+    /// <summary>Build the active translator from settings: DeepL (with Google fallback) when an
+    /// API key is set, otherwise plain Google — always wrapped in the cache. Rebuilt on key change.</summary>
+    private ITranslator BuildTranslator()
+    {
+        var key = (_settings.DeepLApiKey ?? "").Trim();
+        ITranslator backend = key.Length > 0
+            ? new FallbackTranslator(new DeepLTranslator(key), new TranslationService())
+            : new TranslationService();
+        return new CachingTranslator(backend);
+    }
+
+    private void DeepLSaveKey_Click(object sender, RoutedEventArgs e)
+    {
+        _settings.DeepLApiKey = (DeepLKeyBox.Password ?? "").Trim();
+        SettingsService.Save(_settings);
+        _translator = BuildTranslator();   // apply immediately (starts with a fresh cache)
+        UpdateDeepLStatus();
+        ShowToast(_settings.DeepLApiKey.Length > 0
+            ? "DeepL key saved — translations now use DeepL"
+            : "DeepL key cleared — using Google");
+    }
+
+    private void UpdateDeepLStatus()
+    {
+        bool on = (_settings.DeepLApiKey ?? "").Trim().Length > 0;
+        DeepLStatus.Text = on
+            ? "● Using DeepL — falls back to Google if DeepL errors"
+            : "○ Using Google (free, no key needed)";
+    }
 }

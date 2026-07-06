@@ -22,9 +22,9 @@ public partial class MainWindow : Window
     private CollectionViewSource? _phrasesView;
     private bool _recentsDirty;   // a phrase was copied; refresh "Recent" next time the tab is shown
 
-    // Wrap the backend in a cache so repeated chat lines (LFM spam, re-read live messages) are
-    // served instantly and don't hammer the translation endpoint — see CachingTranslator.
-    private readonly ITranslator _translator = new CachingTranslator(new TranslationService());
+    // Built from settings in the constructor: DeepL (with Google fallback) when an API key is
+    // set, otherwise Google — wrapped in a cache either way. Rebuilt when the key changes.
+    private ITranslator _translator;
     private readonly UpdateService _updates = new();
     private readonly AppSettings _settings = SettingsService.Load();
     private OcrService _ocr = new("ru");
@@ -58,6 +58,7 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        _translator = BuildTranslator();   // depends on _settings, which is already loaded above
         InitializeComponent();
         _toastTimer.Tick += (_, _) => { Toast.Visibility = Visibility.Collapsed; _toastTimer.Stop(); };
 
@@ -125,6 +126,9 @@ public partial class MainWindow : Window
             WindowStartupLocation = WindowStartupLocation.Manual;
             Left = l; Top = t; Width = w; Height = h;
         }
+
+        DeepLKeyBox.Password = s.DeepLApiKey ?? "";
+        UpdateDeepLStatus();
 
         UpdateResumeLiveButton();
         ApplyFontScale();

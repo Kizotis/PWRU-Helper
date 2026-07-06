@@ -27,6 +27,11 @@ public class AppSettings
     // Tracked separately so the translator's auto-flip-to-Russian can't corrupt it.
     public string MyLanguage { get; set; } = "en";
 
+    // Optional DeepL API key. Empty = use the free Google endpoint (the default). When set, the
+    // app translates via DeepL and falls back to Google if DeepL fails. Stored in the local
+    // settings file like every other preference.
+    public string DeepLApiKey { get; set; } = "";
+
     // Window / behaviour
     public bool AlwaysOnTop { get; set; } = true;
     public bool AutoCopyTranslation { get; set; } = true;
@@ -93,6 +98,7 @@ public static class SettingsService
         s.TranslatorFrom ??= "en";
         s.TranslatorTo ??= "ru";
         s.MyLanguage ??= "en";
+        s.DeepLApiKey ??= "";
         if (s.LastLiveRegion is { Length: not 4 }) s.LastLiveRegion = null;
         return s;
     }

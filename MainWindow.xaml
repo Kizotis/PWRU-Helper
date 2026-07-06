@@ -516,6 +516,23 @@
                         <TextBlock x:Name="HotkeyWarning" Margin="0,8,0,0" TextWrapping="Wrap"
                                    Visibility="Collapsed" Foreground="{StaticResource GoldBrush}"/>
 
+                        <!-- optional DeepL key -->
+                        <TextBlock Text="Better translations (optional)" FontSize="15" FontWeight="Bold"
+                                   Foreground="{StaticResource GoldBrush}" Margin="0,18,0,6"/>
+                        <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextMutedBrush}" Margin="0,0,0,6">
+                            <Run Text="By default translation uses Google (free, no setup). If you have a free "/><Hyperlink
+                                    NavigateUri="https://www.deepl.com/pro-api" RequestNavigate="OpenLink"
+                                    Foreground="{StaticResource TealBrush}">DeepL API key</Hyperlink><Run
+                                    Text=" you can paste it here for higher-quality translations — the app falls back to Google if DeepL is unavailable. The key is stored only on your PC."/>
+                        </TextBlock>
+                        <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                            <PasswordBox x:Name="DeepLKeyBox" Width="300" VerticalContentAlignment="Center"/>
+                            <Button Content="Save" Style="{StaticResource GhostButton}" Padding="12,4"
+                                    Margin="8,0,0,0" Click="DeepLSaveKey_Click"/>
+                        </StackPanel>
+                        <TextBlock x:Name="DeepLStatus" Margin="0,6,0,0" FontSize="12"
+                                   Foreground="{StaticResource TextMutedBrush}"/>
+
                         <!-- troubleshooting -->
                         <TextBlock Text="Something went wrong?" FontSize="15" FontWeight="Bold"
                                    Foreground="{StaticResource GoldBrush}" Margin="0,18,0,6"/>
