@@ -789,7 +789,9 @@ public partial class MainWindow : Window
         try
         {
             using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
-            var sentences = TextMatching.ToSentences(await _ocr.ReadLinesAsync(bmp));
+            var sentences = TextMatching.SplitChatMessages(await _ocr.ReadLinesAsync(bmp))
+                .Select(TextMatching.StripNoise)
+                .Where(l => l.Length > 0).ToList();
             if (sentences.Count == 0)
             {
                 ScreenReadStatus.Text = IsOcrReady()
@@ -813,10 +815,12 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>Fill the reading list with each Russian sentence and its translation.</summary>
+    /// <summary>Fill the reading list with each Russian message and its translation. Only the
+    /// message body is translated; the speaker's nickname is kept verbatim as a prefix.</summary>
     private async Task TranslateSentencesInto(List<string> sentences, string target)
     {
         _ocrItems.Clear();
+        var parts = sentences.Select(TextMatching.SplitSpeaker).ToList();   // (Speaker, Body)
         var items = new List<OcrResultItem>();
         foreach (var s in sentences)
         {
@@ -826,14 +830,14 @@ public partial class MainWindow : Window
         }
 
         List<string> translations;
-        try { translations = await _translator.TranslateLinesAsync(sentences, "ru", target); }
+        try { translations = await _translator.TranslateLinesAsync(parts.Select(p => p.Body).ToList(), "ru", target); }
         catch (Exception ex)
         {
             foreach (var it in items) it.Translation = $"({Friendly(ex)})";
             return;
         }
         for (int i = 0; i < items.Count && i < translations.Count; i++)
-            items[i].Translation = translations[i];
+            items[i].Translation = TextMatching.WithSpeaker(parts[i].Speaker, translations[i]);
     }
 
     // ============================================================
@@ -957,7 +961,9 @@ public partial class MainWindow : Window
 
                 using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
                 int minLetters = MinFragmentLetters();
-                var lines = TextMatching.ToSentences(await _ocr.ReadLinesAsync(bmp))
+                // Split into whole chat messages by their "[Channel] Nick:" structure rather than
+                // by punctuation (players rarely type any) — see TextMatching.SplitChatMessages.
+                var lines = TextMatching.SplitChatMessages(await _ocr.ReadLinesAsync(bmp))
                     .Select(TextMatching.StripNoise)                    // drop animated-emoji artifacts
                     .Where(l => TextMatching.LooksLikeText(l, minLetters)).ToList();
                 if (ct.IsCancellationRequested) break;
@@ -1010,6 +1016,9 @@ public partial class MainWindow : Window
     /// keep the last MaxHistory, and auto-scroll. Respects the live cancellation token.</summary>
     private async Task AppendLinesToHistory(List<string> newLines, string target, CancellationToken ct)
     {
+        // Keep each speaker's nickname out of the translation — translate only the message body,
+        // then re-attach "Nick: " to the result (a name is a proper noun, not something to translate).
+        var parts = newLines.Select(TextMatching.SplitSpeaker).ToList();
         var items = new List<OcrResultItem>();
         foreach (var s in newLines)
         {
@@ -1023,7 +1032,7 @@ public partial class MainWindow : Window
         List<string> translations;
         try
         {
-            translations = await _translator.TranslateLinesAsync(newLines, "ru", target, ct);
+            translations = await _translator.TranslateLinesAsync(parts.Select(p => p.Body).ToList(), "ru", target, ct);
         }
         catch (Exception ex)
         {
@@ -1034,7 +1043,7 @@ public partial class MainWindow : Window
         }
         if (ct.IsCancellationRequested) return;
         for (int i = 0; i < items.Count && i < translations.Count; i++)
-            items[i].Translation = translations[i];
+            items[i].Translation = TextMatching.WithSpeaker(parts[i].Speaker, translations[i]);
         ResultsScroller?.ScrollToEnd();
     }
 
