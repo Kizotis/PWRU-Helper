@@ -5,7 +5,7 @@ set "DOTNET=C:\Program Files\dotnet\dotnet.exe"
 set "WIX=%USERPROFILE%\.dotnet\tools\wix.exe"
 
 REM ---- version: keep in sync with <Version> in PWRUHelper.csproj ----
-set "VERSION=0.10.0"
+set "VERSION=0.11.0"
 
 echo ============================================================
 echo  Building the PWRU Helper MSI installer (v%VERSION%)
