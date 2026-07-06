@@ -516,6 +516,15 @@
                         <TextBlock x:Name="HotkeyWarning" Margin="0,8,0,0" TextWrapping="Wrap"
                                    Visibility="Collapsed" Foreground="{StaticResource GoldBrush}"/>
 
+                        <!-- troubleshooting -->
+                        <TextBlock Text="Something went wrong?" FontSize="15" FontWeight="Bold"
+                                   Foreground="{StaticResource GoldBrush}" Margin="0,18,0,6"/>
+                        <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextMutedBrush}" Margin="0,0,0,6">
+                            Copy the recent error log and send it to me on Discord so I can see what happened.
+                        </TextBlock>
+                        <Button Content="📋 Copy error report" Style="{StaticResource GhostButton}" Padding="10,4"
+                                HorizontalAlignment="Left" Click="CopyErrorReport_Click"/>
+
                         <!-- author links -->
                         <TextBlock Text="Made by Kizotis" FontSize="15" FontWeight="Bold"
                                    Foreground="{StaticResource GoldBrush}" Margin="0,18,0,8"/>
