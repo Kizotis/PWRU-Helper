@@ -81,6 +81,21 @@ public class LiveDedupTests
     }
 
     [Fact]
+    public void OrphanedWrappedFragment_IsNotReEmitted()
+    {
+        var d = new LiveDedup();
+        var full = "Reyna: В ХХ4-1 Ежа прист мист вар син сик дру 3дд";
+        Feed(d, full);
+        Assert.Single(Feed(d, full));                             // confirmed full message
+        // The "Nick:" line scrolls off the top; only the wrapped tail remains as a standalone read.
+        // Its short signature can't fuzzy-match the full one, but the full one CONTAINS it, so it
+        // must be recognised as the same message still on screen — never a partial duplicate.
+        var tail = "мист вар син сик дру 3дд";
+        Assert.Empty(Feed(d, tail));
+        Assert.Empty(Feed(d, tail));
+    }
+
+    [Fact]
     public void PureNoiseLines_AreNeverEmitted()
     {
         var d = new LiveDedup();

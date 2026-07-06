@@ -65,6 +65,12 @@ public static class TextMatching
     /// than this is almost certainly inside the message body, not a nickname separator.</summary>
     private const int MaxHeaderChars = 28;
 
+    /// <summary>Extra colon-search slack allowed in front of the nick to leave room for a channel
+    /// tag ("[Торговля] "). A tag can be a whole word plus its brackets and spacing, so the raw
+    /// colon may sit past <see cref="MaxHeaderChars"/>; the tight limit is re-applied to the nick
+    /// alone once the tag is peeled off. Untagged lines get no such slack.</summary>
+    private const int MaxTagChars = 14;
+
     /// <summary>Perfect World RU channel-tag tokens (folded, lower-case). Seeing one at the very
     /// start of a line marks a new chat message even when the nickname after it is garbled.</summary>
     private static readonly HashSet<string> ChatTags = new()
@@ -127,6 +133,29 @@ public static class TextMatching
             ? (sp, bd)
             : ("", (message ?? "").Trim());
 
+    /// <summary>Like <see cref="SplitSpeaker"/>, but only peels a speaker off when the nick really
+    /// looks like a player name — used on the live/read pipeline where a message body can itself
+    /// start "word:" and be mistaken for a header. <see cref="TryParseHeader"/> happily treats a
+    /// bare lowercase-Cyrillic token as a nick, so "тс: сбор у входа" would otherwise lose "тс" as
+    /// a fake speaker and hide it from the translator. We keep the split only when the nick either
+    /// sat behind a recognised channel tag, or carries a capital / Latin letter / digit — real
+    /// nicknames do, a lowercase Cyrillic slang word ("тс") does not. Returns ("", message) otherwise.</summary>
+    public static (string Speaker, string Body) SplitSpeakerStrict(string message)
+    {
+        var s = (message ?? "").Trim();
+        if (!TryParseHeader(s, out var sp, out var bd) || sp.Length == 0) return ("", s);
+
+        int colon = s.IndexOf(':');
+        var head = colon > 0 ? s[..colon].Trim() : "";
+        var firstToken = head.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        bool hadTag = firstToken != null && IsChatTag(firstToken);
+
+        bool looksLikeName = hadTag || sp.Any(ch => char.IsUpper(ch) || IsLatin(ch) || char.IsDigit(ch));
+        return looksLikeName ? (sp, bd) : ("", s);
+    }
+
+    private static bool IsLatin(char ch) => ch is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z');
+
     /// <summary>Re-attach a speaker prefix to a translated body: "Nick: translation".</summary>
     public static string WithSpeaker(string speaker, string translation)
         => string.IsNullOrEmpty(speaker) ? translation : $"{speaker}: {translation}";
@@ -140,7 +169,10 @@ public static class TextMatching
         speaker = ""; body = "";
         var s = (line ?? "").Trim();
         int colon = s.IndexOf(':');
-        if (colon <= 0 || colon > MaxHeaderChars) return false;
+        // Search for the colon with a wider window (room for a leading channel tag) so a tagged
+        // line like "[Торговля] Продавец_Мечей_777: …" isn't rejected before the tag is peeled.
+        // A colon at position 0 (":)" smiley start) is never a header.
+        if (colon <= 0 || colon > MaxHeaderChars + MaxTagChars) return false;
 
         var head = s[..colon].Trim();
         body = s[(colon + 1)..].Trim();
@@ -149,6 +181,10 @@ public static class TextMatching
         var tokens = head.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).ToList();
         bool hadTag = tokens.Count > 0 && IsChatTag(tokens[0]);
         if (hadTag) tokens.RemoveAt(0);
+
+        // Only a recognised tag earns the wider colon window: on an untagged line a colon past
+        // MaxHeaderChars is a colon inside the body ("… a colon: here"), not a nick separator.
+        if (!hadTag && colon > MaxHeaderChars) return false;
 
         var nick = string.Join(" ", tokens)
             .Trim(' ', '[', ']', '(', ')', '<', '>', '+', '.', ',', '-', '*');

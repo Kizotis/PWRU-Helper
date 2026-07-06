@@ -42,6 +42,7 @@ public partial class MainWindow : Window
     // --- live screen translation ---
     private CancellationTokenSource? _liveCts;
     private bool _selectingRegion;                       // a screen-area drag is in progress
+    private bool _readingOnce;                            // a one-shot Ctrl+Alt+R / read-once is mid-flight
     private System.Drawing.Rectangle? _liveRegion;
     private LiveDedup _dedup = new();                     // decides which lines are genuinely new
     private int _liveTicks;
@@ -273,7 +274,7 @@ public partial class MainWindow : Window
     /// stop if running, else resume the saved area, else surface the picker.</summary>
     internal void ToggleLive()
     {
-        if (_selectingRegion) return;
+        if (_selectingRegion || _readingOnce) return;   // a read-once owns the shared OCR engine
         if (_liveCts != null) { StopLive(); return; }
         if (TryGetSavedRegion(out var rect)) { StartLive(rect); return; }
 
@@ -827,6 +828,12 @@ public partial class MainWindow : Window
     /// Translator tab. Shared by the "read once" button and the Ctrl+Alt+R shortcut.</summary>
     private async Task ReadRegionOnceAsync(System.Drawing.Rectangle rect)
     {
+        // Only one read-once may run at a time: the OCR engine is shared and non-reentrant, so a
+        // second Ctrl+Alt+R (or a live start) that fired RecognizeAsync on it concurrently would
+        // race — and its _ocrItems.Clear() below would wipe a just-started live feed. The flag
+        // gates ToggleLive/StartLive/ReadLastAreaOnce too; button disabling stays as a UI cue.
+        if (_readingOnce) return;
+        _readingOnce = true;
         MainTabs.SelectedIndex = TabTranslator;   // results show on the Translator page
         SelectAreaButton.IsEnabled = false;
         LiveButton.IsEnabled = false;        // don't let live start mid-read (shared OCR engine)
@@ -858,6 +865,7 @@ public partial class MainWindow : Window
         {
             SelectAreaButton.IsEnabled = true;
             LiveButton.IsEnabled = true;
+            _readingOnce = false;
         }
     }
 
@@ -866,7 +874,9 @@ public partial class MainWindow : Window
     private async Task TranslateSentencesInto(List<string> sentences, string target)
     {
         _ocrItems.Clear();
-        var parts = sentences.Select(TextMatching.SplitSpeaker).ToList();   // (Speaker, Body)
+        // SplitSpeakerStrict, not SplitSpeaker: a body that itself starts "word:" (e.g. the slang
+        // "тс: сбор у входа") must not lose its first word as a fake nickname and skip translation.
+        var parts = sentences.Select(TextMatching.SplitSpeakerStrict).ToList();   // (Speaker, Body)
         var items = new List<OcrResultItem>();
         for (int i = 0; i < sentences.Count; i++)
         {
@@ -908,6 +918,7 @@ public partial class MainWindow : Window
 
     private void StartLive(System.Drawing.Rectangle rect)
     {
+        if (_readingOnce) return;   // a read-once is driving the shared OCR engine — don't race it
         if (!RegionOnVirtualScreen(rect))
         {
             _settings.LastLiveRegion = null;
@@ -1070,7 +1081,8 @@ public partial class MainWindow : Window
     {
         // Keep each speaker's nickname out of the translation — translate only the message body,
         // then re-attach "Nick: " to the result (a name is a proper noun, not something to translate).
-        var parts = newLines.Select(TextMatching.SplitSpeaker).ToList();
+        // SplitSpeakerStrict avoids stealing a body's leading "word:" (e.g. slang "тс:") as a nick.
+        var parts = newLines.Select(TextMatching.SplitSpeakerStrict).ToList();
         var items = new List<OcrResultItem>();
         for (int i = 0; i < newLines.Count; i++)
         {
@@ -1408,7 +1420,11 @@ public partial class MainWindow : Window
         {
             case HK_SHOW: BringToFront(); handled = true; break;
             case HK_TRANSLATE:
-                BringToFront(); MainTabs.SelectedIndex = TabTranslator; TranslateInput.Focus(); handled = true; break;
+                BringToFront(); MainTabs.SelectedIndex = TabTranslator;
+                // The tab's content isn't attached yet the instant we switch to it, so a synchronous
+                // Focus() lands nowhere. Defer it until the input has been realised.
+                Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, () => TranslateInput.Focus());
+                handled = true; break;
             case HK_LIVE: ToggleLive(); handled = true; break;
             case HK_COMPACT: ToggleCompact(); handled = true; break;
             case HK_READ: ReadLastAreaOnce(); handled = true; break;
@@ -1420,7 +1436,7 @@ public partial class MainWindow : Window
     /// running we leave it alone; if there's no saved area we surface the picker.</summary>
     private async void ReadLastAreaOnce()
     {
-        if (_selectingRegion) return;
+        if (_selectingRegion || _readingOnce) return;   // ignore a double Ctrl+Alt+R (shared OCR engine)
         if (_liveCts != null) { ShowToast("Live is already running (Ctrl+Alt+L to stop)."); return; }
         if (!TryGetSavedRegion(out var rect))
         {

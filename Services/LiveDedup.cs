@@ -65,6 +65,13 @@ public sealed class LiveDedup
         foreach (var x in cur)
         {
             var e = BestMatch(x.sig, matchThreshold);
+            // A wrapped message can lose its "Nick:" line off the top of the capture, leaving only
+            // the tail as a short headerless read. That fragment's signature is far shorter than
+            // the remembered full one, so the length gap alone fails SimilarEnough and it looks
+            // "new" — re-emitting a duplicate partial translation. Catch it: if no fuzzy match, a
+            // remembered signature that CONTAINS this candidate (min length 10, so tiny strings
+            // don't match spuriously) is the same message still on screen.
+            if (e == null && x.sig.Length >= 10) e = ContainingMatch(x.sig);
             if (e != null && _tick - e.LastSeen <= ReappearAfterFrames)
                 e.LastSeen = _tick;          // still on screen → keep alive, don't re-translate
             else
@@ -98,6 +105,17 @@ public sealed class LiveDedup
         Entry? best = null;
         foreach (var e in _seen)
             if (TextMatching.SimilarEnough(e.Sig, sig, threshold) && (best == null || e.LastSeen > best.LastSeen))
+                best = e;
+        return best;
+    }
+
+    /// <summary>Most-recently-seen remembered entry whose signature CONTAINS <paramref name="sig"/>
+    /// — catches an orphaned wrapped-line fragment whose "Nick:" header scrolled off the top.</summary>
+    private Entry? ContainingMatch(string sig)
+    {
+        Entry? best = null;
+        foreach (var e in _seen)
+            if (e.Sig.Contains(sig) && (best == null || e.LastSeen > best.LastSeen))
                 best = e;
         return best;
     }

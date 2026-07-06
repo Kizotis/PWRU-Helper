@@ -234,6 +234,40 @@ public class TextMatchingTests
         => Assert.False(TextMatching.TryParseHeader("this is a long sentence with a colon: here", out _, out _));
 
     [Fact]
+    public void TryParseHeader_TaggedLine_AcceptsALongNickWithColonPast28()
+    {
+        // "[Торговля] Продавец_Мечей_777:" — the tag pushes the colon to 29, past MaxHeaderChars,
+        // yet the 18-char nick after the peeled tag is well within the tight nick limit.
+        Assert.True(TextMatching.TryParseHeader("[Торговля] Продавец_Мечей_777: продам меч", out var sp, out var body));
+        Assert.Equal("Продавец_Мечей_777", sp);
+        Assert.Equal("продам меч", body);
+    }
+
+    [Fact]
+    public void TryParseHeader_UntaggedLine_StillRejectsAColonPast28()
+        // No recognised tag → the wider window doesn't apply; a colon at 30 is a body colon.
+        => Assert.False(TextMatching.TryParseHeader("aaaaa bbbbb ccccc ddddd eeeeee: nope", out _, out _));
+
+    // ---- SplitSpeakerStrict (live/read path: don't steal a body's leading "word:" as a nick) ----
+
+    [Fact]
+    public void SplitSpeakerStrict_DoesNotStealLowercaseCyrillicSlangAsNick()
+    {
+        // "тс" is chat slang for a dungeon, not a nickname — it must stay in the translated body.
+        var (speaker, body) = TextMatching.SplitSpeakerStrict("тс: сбор у входа");
+        Assert.Equal("", speaker);
+        Assert.Equal("тс: сбор у входа", body);
+    }
+
+    [Fact]
+    public void SplitSpeakerStrict_KeepsARealNickname()
+    {
+        var (speaker, body) = TextMatching.SplitSpeakerStrict("proBlemka: ТС ЛЕГА 2 ДД");
+        Assert.Equal("proBlemka", speaker);
+        Assert.Equal("ТС ЛЕГА 2 ДД", body);
+    }
+
+    [Fact]
     public void SplitSpeaker_SeparatesNickFromBody()
     {
         var (speaker, body) = TextMatching.SplitSpeaker("proBlemka: ТС ЛЕГА 2 ДД");
