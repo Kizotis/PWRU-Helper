@@ -11,7 +11,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>PWRUHelper</AssemblyName>
     <RootNamespace>PWRUHelper</RootNamespace>
-    <Version>0.9.0</Version>
+    <Version>0.10.0</Version>
     <ApplicationIcon>assets\icon.ico</ApplicationIcon>
     <!-- The test project lives under tests\ inside this folder; keep its sources out of the
          app's default .cs/.xaml globbing (it has its own csproj). -->
