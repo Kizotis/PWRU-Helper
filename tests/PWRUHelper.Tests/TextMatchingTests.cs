@@ -159,4 +159,100 @@ public class TextMatchingTests
     [Fact]
     public void StripNoise_LeavesPlainTextUntouched()
         => Assert.Equal("привет мир", TextMatching.StripNoise("привет мир"));
+
+    // ---- SplitChatMessages: group by "[Tag] Nick:" instead of punctuation ----
+
+    [Fact]
+    public void SplitChatMessages_SplitsByNickColonWithoutAnyPunctuation()
+    {
+        // The whole point: no periods anywhere, yet the two messages are separated.
+        var result = TextMatching.SplitChatMessages(new[]
+        {
+            "proBlemka: ТС ЛЕГА 2 ДД",
+            "Wups: В ТС легу 2ДД",
+        });
+        Assert.Equal(new[] { "proBlemka: ТС ЛЕГА 2 ДД", "Wups: В ТС легу 2ДД" }, result);
+    }
+
+    [Fact]
+    public void SplitChatMessages_DropsTheChannelTagKeepsTheNick()
+    {
+        Assert.Equal(new[] { "Kizotis: Салют" },
+            TextMatching.SplitChatMessages(new[] { "Клан Kizotis: Салют" }));
+        Assert.Equal(new[] { "proBlemka: привет" },
+            TextMatching.SplitChatMessages(new[] { "[Мир] proBlemka: привет" }));
+    }
+
+    [Fact]
+    public void SplitChatMessages_GluesWrappedContinuationOntoTheMessage()
+    {
+        var result = TextMatching.SplitChatMessages(new[]
+        {
+            "Reyna: В ХХ4-1 Ежа прист",
+            "мист вар син сик дру 3дд",     // wrapped 2nd line, no "Nick:" → continuation
+        });
+        Assert.Equal(new[] { "Reyna: В ХХ4-1 Ежа прист мист вар син сик дру 3дд" }, result);
+    }
+
+    [Fact]
+    public void SplitChatMessages_SameSpeakerTwice_StaysTwoMessages()
+    {
+        var result = TextMatching.SplitChatMessages(new[] { "Kizotis: Салют", "Kizotis: Салют" });
+        Assert.Equal(2, result.Count);   // detecting "Nick:" beats detecting a nickname *change*
+    }
+
+    [Fact]
+    public void SplitChatMessages_BlankLineBreaksTheRun()
+    {
+        var result = TextMatching.SplitChatMessages(new[] { "Nick: hello", "", "loose line" });
+        Assert.Equal(new[] { "Nick: hello", "loose line" }, result);
+    }
+
+    [Fact]
+    public void SplitChatMessages_CapsRunawayStitchWhenNoHeaderEverAppears()
+    {
+        var result = TextMatching.SplitChatMessages(new[] { "a", "b", "c", "d", "e", "f" });
+        Assert.True(result.Count >= 2);   // never glue a whole screen into one blob
+    }
+
+    // ---- TryParseHeader / SplitSpeaker / WithSpeaker ----
+
+    [Fact]
+    public void TryParseHeader_ParsesTagNickAndBody()
+    {
+        Assert.True(TextMatching.TryParseHeader("Сист Wei Xiaobao: becomes owner", out var sp, out var body));
+        Assert.Equal("Wei Xiaobao", sp);
+        Assert.Equal("becomes owner", body);
+    }
+
+    [Fact]
+    public void TryParseHeader_RejectsATimestampColon()
+        => Assert.False(TextMatching.TryParseHeader("12:30 го", out _, out _));
+
+    [Fact]
+    public void TryParseHeader_RejectsAColonDeepInTheLine()
+        => Assert.False(TextMatching.TryParseHeader("this is a long sentence with a colon: here", out _, out _));
+
+    [Fact]
+    public void SplitSpeaker_SeparatesNickFromBody()
+    {
+        var (speaker, body) = TextMatching.SplitSpeaker("proBlemka: ТС ЛЕГА 2 ДД");
+        Assert.Equal("proBlemka", speaker);
+        Assert.Equal("ТС ЛЕГА 2 ДД", body);
+    }
+
+    [Fact]
+    public void SplitSpeaker_NoHeader_ReturnsWholeLineAsBody()
+    {
+        var (speaker, body) = TextMatching.SplitSpeaker("прист мист вар");
+        Assert.Equal("", speaker);
+        Assert.Equal("прист мист вар", body);
+    }
+
+    [Fact]
+    public void WithSpeaker_PrefixesNickOrLeavesBodyAlone()
+    {
+        Assert.Equal("proBlemka: LF Terrace", TextMatching.WithSpeaker("proBlemka", "LF Terrace"));
+        Assert.Equal("LF Terrace", TextMatching.WithSpeaker("", "LF Terrace"));
+    }
 }
