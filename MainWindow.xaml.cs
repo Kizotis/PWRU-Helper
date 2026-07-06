@@ -27,12 +27,14 @@ public partial class MainWindow : Window
     private readonly AppSettings _settings = SettingsService.Load();
     private OcrService _ocr = new("ru");
     private SlangGlossary _slang = SlangGlossary.FromJson(null);
+    private SquadCatalog _squad = SquadCatalog.FromJson(null);
     private readonly ObservableCollection<OcrResultItem> _ocrItems = new();
 
     private readonly DispatcherTimer _toastTimer = new() { Interval = TimeSpan.FromSeconds(1.6) };
 
-    // Tab indices (order must match the TabControl in XAML).
-    private const int TabTranslator = 1, TabScreenOcr = 2;
+    // Tab indices (order must match the TabControl in XAML):
+    // Phrasebook(0) · Squad(1) · Translator(2) · Screen OCR(3) · About(4).
+    private const int TabTranslator = 2, TabScreenOcr = 3;
 
     // The Windows OCR language pack we install / show the command for (single source).
     private const string OcrCapability = "Language.OCR~~~ru-RU~0.0.1.0";
@@ -62,6 +64,7 @@ public partial class MainWindow : Window
         PopulateLanguageCombos();
         LoadPhrases();
         LoadSlang();
+        LoadSquad();
         BuildSquadTab();
         CheckOcrAvailability();
         ApplySettings();
@@ -539,63 +542,90 @@ public partial class MainWindow : Window
     //  SQUAD BUILDER  (tick dungeons/classes/roles → LFM chat phrase)
     // ============================================================
 
-    /// <summary>Fill the three tick-lists from the slang glossary (see <see cref="SquadCatalog"/>)
-    /// and wire every checkbox to rebuild the phrase. Called once, after the glossary loads.</summary>
+    /// <summary>Fill the dungeon/class column grids from <c>squad.json</c> (see
+    /// <see cref="SquadCatalog"/>) and wire every checkbox to rebuild the phrase. Once, at start.</summary>
     private void BuildSquadTab()
     {
-        var (dungeons, classes, roles) = SquadCatalog.Build(_slang.Entries);
-        PopulateSquadPanel(SquadDungeons, dungeons);
-        PopulateSquadPanel(SquadClasses, classes);
-        PopulateSquadPanel(SquadRoles, roles);
-        SquadEmptyHint.Visibility =
-            (dungeons.Count + classes.Count + roles.Count) > 0 ? Visibility.Collapsed : Visibility.Visible;
+        PopulateSquadColumns(SquadDungeonGrid, _squad.Dungeons);
+        PopulateSquadColumns(SquadClassGrid, _squad.Classes);
+        SquadEmptyHint.Visibility = _squad.IsEmpty ? Visibility.Visible : Visibility.Collapsed;
         RebuildSquadPhrase();
     }
 
-    private void PopulateSquadPanel(WrapPanel panel, List<SquadOption> options)
+    /// <summary>Render one section as side-by-side titled columns of tick-boxes. Each box shows
+    /// "CODE «ru» name" (code gold, ru grey, name white) and carries its paste token in Tag.</summary>
+    private void PopulateSquadColumns(Grid grid, List<SquadColumn> columns)
     {
-        panel.Children.Clear();
-        var fg = (System.Windows.Media.Brush)FindResource("TextBrush");
-        foreach (var opt in options)
+        grid.Children.Clear();
+        grid.ColumnDefinitions.Clear();
+        var gold = (System.Windows.Media.Brush)FindResource("GoldBrush");
+        var muted = (System.Windows.Media.Brush)FindResource("TextMutedBrush");
+        var text = (System.Windows.Media.Brush)FindResource("TextBrush");
+
+        for (int c = 0; c < columns.Count; c++)
         {
-            var cb = new CheckBox
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var panel = new StackPanel { Margin = new Thickness(0, 0, 12, 0) };
+            panel.Children.Add(new TextBlock
             {
-                Content = opt.Label,
-                Tag = opt.Token,
-                Foreground = fg,
-                Margin = new Thickness(0, 4, 16, 4),
-                ToolTip = $"Adds “{opt.Token}” to the message",
-            };
-            cb.Checked += SquadCheck_Changed;
-            cb.Unchecked += SquadCheck_Changed;
-            panel.Children.Add(cb);
+                Text = columns[c].Title,
+                Foreground = gold,
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 0, 0, 4),
+            });
+            foreach (var opt in columns[c].Items)
+            {
+                var content = new TextBlock { TextWrapping = TextWrapping.Wrap };
+                content.Inlines.Add(new System.Windows.Documents.Run(opt.Code) { Foreground = gold, FontWeight = FontWeights.SemiBold });
+                if (!string.IsNullOrWhiteSpace(opt.Ru))
+                    content.Inlines.Add(new System.Windows.Documents.Run($"  “{opt.Ru}”") { Foreground = muted });
+                if (!string.IsNullOrWhiteSpace(opt.Name))
+                    content.Inlines.Add(new System.Windows.Documents.Run($"  {opt.Name}") { Foreground = text });
+
+                var cb = new CheckBox
+                {
+                    Content = content,
+                    Tag = opt.Token,
+                    Margin = new Thickness(0, 3, 0, 3),
+                    HorizontalContentAlignment = HorizontalAlignment.Left,
+                    ToolTip = $"Adds “{opt.Token}” to the message",
+                };
+                cb.Checked += SquadCheck_Changed;
+                cb.Unchecked += SquadCheck_Changed;
+                panel.Children.Add(cb);
+            }
+            Grid.SetColumn(panel, c);
+            grid.Children.Add(panel);
         }
     }
 
     private void SquadCheck_Changed(object sender, RoutedEventArgs e) => RebuildSquadPhrase();
 
-    /// <summary>Rebuild the "в &lt;dungeons&gt; &lt;classes&gt; &lt;roles&gt;" LFM line from the ticks.</summary>
+    /// <summary>Rebuild the "в &lt;dungeons&gt; &lt;classes&gt;" LFM line from the ticks.</summary>
     private void RebuildSquadPhrase()
     {
         if (SquadPhraseBox == null) return;
         SquadPhraseBox.Text = SquadCatalog.BuildPhrase("в",
-            TickedTokens(SquadDungeons), TickedTokens(SquadClasses), TickedTokens(SquadRoles));
+            TickedTokens(SquadDungeonGrid), TickedTokens(SquadClassGrid));
     }
 
-    private static IEnumerable<string> TickedTokens(WrapPanel panel)
-        => panel.Children.OfType<CheckBox>().Where(c => c.IsChecked == true).Select(c => (string)c.Tag);
+    private static IEnumerable<string> TickedTokens(Grid grid)
+        => grid.Children.OfType<StackPanel>()
+               .SelectMany(p => p.Children.OfType<CheckBox>())
+               .Where(c => c.IsChecked == true)
+               .Select(c => (string)c.Tag);
 
     private async void SquadCopy_Click(object sender, RoutedEventArgs e)
     {
         var text = SquadPhraseBox.Text?.Trim() ?? "";
-        if (text.Length == 0) { ShowToast("Tick at least one dungeon, class or role first."); return; }
+        if (text.Length == 0) { ShowToast("Tick at least one dungeon or class first."); return; }
         if (await CopyToClipboardAsync(text)) ShowToast($"Copied:  {text}");
     }
 
     private void SquadClear_Click(object sender, RoutedEventArgs e)
     {
-        foreach (var panel in new[] { SquadDungeons, SquadClasses, SquadRoles })
-            foreach (var cb in panel.Children.OfType<CheckBox>())
+        foreach (var grid in new[] { SquadDungeonGrid, SquadClassGrid })
+            foreach (var cb in grid.Children.OfType<StackPanel>().SelectMany(p => p.Children.OfType<CheckBox>()))
                 cb.IsChecked = false;   // fires SquadCheck_Changed, which rebuilds the phrase
     }
 
@@ -723,6 +753,22 @@ public partial class MainWindow : Window
         catch { _slang = SlangGlossary.FromJson(null); }
     }
 
+    /// <summary>Load the squad-builder catalogue (dungeon/class columns). Same editable-copy
+    /// strategy as the glossary, so the user can reorder or extend it in squad.json.</summary>
+    private void LoadSquad()
+    {
+        try
+        {
+            var embedded = ReadEmbeddedJson("squad.json");
+            var path = FindOrCreateEditable("squad.json", embedded);
+            string? json = embedded;
+            if (path != null)
+                try { json = File.ReadAllText(path); } catch { /* keep embedded */ }
+            _squad = SquadCatalog.FromJson(json ?? embedded);
+        }
+        catch { _squad = SquadCatalog.FromJson(null); }
+    }
+
     /// <summary>Editable-copy locator shared by the phrasebook and the slang glossary:
     /// prefer an existing copy next to the exe or in %AppData%, else create one from the
     /// embedded text so the user has something to edit. Returns null if none is possible.</summary>
@@ -822,9 +868,15 @@ public partial class MainWindow : Window
         _ocrItems.Clear();
         var parts = sentences.Select(TextMatching.SplitSpeaker).ToList();   // (Speaker, Body)
         var items = new List<OcrResultItem>();
-        foreach (var s in sentences)
+        for (int i = 0; i < sentences.Count; i++)
         {
-            var item = new OcrResultItem { Original = s, Translation = "…", Glossary = _slang.Decode(s) };
+            var item = new OcrResultItem
+            {
+                Speaker = parts[i].Speaker,
+                OriginalBody = parts[i].Body,
+                TranslationBody = "…",
+                Glossary = _slang.Decode(sentences[i]),
+            };
             _ocrItems.Add(item);
             items.Add(item);
         }
@@ -833,11 +885,11 @@ public partial class MainWindow : Window
         try { translations = await TranslateBodiesAsync(parts.Select(p => p.Body).ToList(), target, default); }
         catch (Exception ex)
         {
-            foreach (var it in items) it.Translation = $"({Friendly(ex)})";
+            foreach (var it in items) it.TranslationBody = $"({Friendly(ex)})";
             return;
         }
         for (int i = 0; i < items.Count && i < translations.Count; i++)
-            items[i].Translation = TextMatching.WithSpeaker(parts[i].Speaker, translations[i]);
+            items[i].TranslationBody = translations[i];
     }
 
     // ============================================================
@@ -1020,9 +1072,15 @@ public partial class MainWindow : Window
         // then re-attach "Nick: " to the result (a name is a proper noun, not something to translate).
         var parts = newLines.Select(TextMatching.SplitSpeaker).ToList();
         var items = new List<OcrResultItem>();
-        foreach (var s in newLines)
+        for (int i = 0; i < newLines.Count; i++)
         {
-            var item = new OcrResultItem { Original = s, Translation = "…", Glossary = _slang.Decode(s) };
+            var item = new OcrResultItem
+            {
+                Speaker = parts[i].Speaker,
+                OriginalBody = parts[i].Body,
+                TranslationBody = "…",
+                Glossary = _slang.Decode(newLines[i]),
+            };
             _ocrItems.Add(item);
             items.Add(item);
             while (_ocrItems.Count > MaxHistory) _ocrItems.RemoveAt(0);   // drop the oldest
@@ -1038,12 +1096,12 @@ public partial class MainWindow : Window
         {
             // Don't leave the placeholders stuck on "…" forever (e.g. Google rate-limit):
             // mark them, then let the loop's error handling show the reason.
-            foreach (var it in items) it.Translation = $"({Friendly(ex)})";
+            foreach (var it in items) it.TranslationBody = $"({Friendly(ex)})";
             throw;
         }
         if (ct.IsCancellationRequested) return;
         for (int i = 0; i < items.Count && i < translations.Count; i++)
-            items[i].Translation = TextMatching.WithSpeaker(parts[i].Speaker, translations[i]);
+            items[i].TranslationBody = translations[i];
         ResultsScroller?.ScrollToEnd();
     }
 
@@ -1406,13 +1464,34 @@ public partial class MainWindow : Window
 /// <summary>One OCR line + its translation (updates the UI when translated).</summary>
 public class OcrResultItem : INotifyPropertyChanged
 {
-    private string _translation = "";
-    public string Original { get; set; } = "";
-    public string Translation
+    /// <summary>Speaker nickname (empty when none), set once when the item is created.</summary>
+    public string Speaker { get; set; } = "";
+
+    /// <summary>"Nick: " prefix shown greyed before the body on both lines; "" when no speaker.</summary>
+    public string SpeakerPrefix => string.IsNullOrEmpty(Speaker) ? "" : Speaker + ": ";
+
+    /// <summary>The Russian message body, with the nickname split off.</summary>
+    public string OriginalBody { get; set; } = "";
+
+    /// <summary>Full Russian line (speaker + body) — what the copy button puts on the clipboard.</summary>
+    public string Original => TextMatching.WithSpeaker(Speaker, OriginalBody);
+
+    private string _translationBody = "";
+    /// <summary>The translated body (the nickname is never translated). Updating it refreshes the
+    /// two-tone translator line and the single-string <see cref="Translation"/> the overlay binds.</summary>
+    public string TranslationBody
     {
-        get => _translation;
-        set { _translation = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Translation))); }
+        get => _translationBody;
+        set
+        {
+            _translationBody = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TranslationBody)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Translation)));
+        }
     }
+
+    /// <summary>Full translated line (speaker + translated body), for the compact overlay.</summary>
+    public string Translation => TextMatching.WithSpeaker(Speaker, _translationBody);
 
     // Slang decode ("🔑 В = LFM · ПП = Full Moon Pavilion"), "" when the line has no slang.
     private string _glossary = "";

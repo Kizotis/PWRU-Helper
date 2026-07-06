@@ -44,6 +44,10 @@
     <EmbeddedResource Include="Data\slang.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </EmbeddedResource>
+    <None Remove="Data\squad.json" />
+    <EmbeddedResource Include="Data\squad.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </EmbeddedResource>
   </ItemGroup>
 
 </Project>
