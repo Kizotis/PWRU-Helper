@@ -307,8 +307,8 @@
                                                     <ColumnDefinition Width="Auto"/>
                                                 </Grid.ColumnDefinitions>
                                                 <StackPanel Grid.Column="0">
-                                                    <TextBlock FontSize="13" TextWrapping="Wrap"><Run Text="{Binding SpeakerPrefix}" Foreground="{StaticResource TextMutedBrush}" FontWeight="SemiBold"/><Run Text="{Binding OriginalBody}" Foreground="{StaticResource TextMutedBrush}"/></TextBlock>
-                                                    <TextBlock FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,4,0,0"><Run Text="{Binding SpeakerPrefix}" Foreground="{StaticResource TextMutedBrush}"/><Run Text="{Binding TranslationBody}" Foreground="{StaticResource TextBrush}"/></TextBlock>
+                                                    <TextBlock FontSize="13" TextWrapping="Wrap"><Run Text="{Binding SpeakerPrefix, Mode=OneWay}" Foreground="{StaticResource TextMutedBrush}" FontWeight="SemiBold"/><Run Text="{Binding OriginalBody, Mode=OneWay}" Foreground="{StaticResource TextMutedBrush}"/></TextBlock>
+                                                    <TextBlock FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,4,0,0"><Run Text="{Binding SpeakerPrefix, Mode=OneWay}" Foreground="{StaticResource TextMutedBrush}"/><Run Text="{Binding TranslationBody, Mode=OneWay}" Foreground="{StaticResource TextBrush}"/></TextBlock>
                                                     <TextBlock Text="{Binding Glossary}" FontSize="12"
                                                                Foreground="{StaticResource GoldBrush}"
                                                                TextWrapping="Wrap" Margin="0,3,0,0">

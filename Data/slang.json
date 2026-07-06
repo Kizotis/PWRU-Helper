@@ -5,7 +5,7 @@
     { "keys": ["лфг", "lfg"], "meaning": "LFG (looking for group)" },
     { "keys": ["или"], "meaning": "or", "context": true },
 
-    { "keys": ["ара", "apa"], "meaning": "Cave of Eternity (EU/AEU — low/high)", "category": "dungeon" },
+    { "keys": ["ара", "апа", "apa"], "meaning": "Cave of Eternity (EU/AEU — low/high)", "category": "dungeon" },
     { "keys": ["пп"], "meaning": "Full Moon Pavilion (MWT)", "category": "dungeon" },
     { "keys": ["ми", "море", "mope"], "meaning": "Illusions Sea (UPD)", "category": "dungeon" },
     { "keys": ["гш"], "meaning": "Whispers Tomb (WM)", "category": "dungeon" },
