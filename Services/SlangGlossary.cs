@@ -16,6 +16,11 @@ public class SlangEntry
     /// <summary>Optional grouping for the squad builder: "class", "dungeon" or "role"
     /// (see <see cref="SquadCatalog"/>). Absent on plain decode-only entries.</summary>
     public string Category { get; set; } = "";
+    /// <summary>Optional Russian long-form used to REWRITE this term before machine translation
+    /// (e.g. "хил" → "лекарь"), so the translation reads properly instead of leaving the raw
+    /// abbreviation. Empty = leave the term unchanged. Only <see cref="SlangGlossary.Expand"/>
+    /// uses it; the 🔑 decode line still shows <see cref="Meaning"/>.</summary>
+    public string Full { get; set; } = "";
 }
 
 /// <summary>
@@ -117,6 +122,46 @@ public class SlangGlossary
             sb.Append(pair);
         }
         return sb.Length == 0 ? "" : "🔑 " + sb;
+    }
+
+    /// <summary>
+    /// Rewrite a line for the translation backend: replace each known slang term that has a
+    /// Russian long-form (<see cref="SlangEntry.Full"/>) with that long-form, so the machine
+    /// translation is meaningful (e.g. "нужен хил" → "нужен лекарь" → "need a healer"). Terms
+    /// without a Full form — and context-only terms like "в" — are left untouched, and a line
+    /// with no expandable term comes back unchanged. This affects ONLY the text sent to the
+    /// translator; the displayed original and the 🔑 decode still use the raw line.
+    /// </summary>
+    public string Expand(string line)
+    {
+        if (IsEmpty || string.IsNullOrWhiteSpace(line)) return line;
+
+        var raw = SplitTokens(line);
+        var norm = raw.Select(NormalizeToken).ToList();
+
+        var outp = new List<string>(raw.Count);
+        bool changed = false;
+        int i = 0;
+        while (i < raw.Count)
+        {
+            bool matched = false;
+            int maxSpan = Math.Min(_maxWords, raw.Count - i);
+            for (int w = maxSpan; w >= 1 && !matched; w--)
+            {
+                var key = string.Join(" ", norm.GetRange(i, w)).Trim();
+                if (key.Length == 0) continue;
+                if (TryLookup(key, out var entry) && !entry.Context && !string.IsNullOrWhiteSpace(entry.Full))
+                {
+                    outp.Add(entry.Full.Trim());
+                    i += w;
+                    matched = true;
+                    changed = true;
+                }
+            }
+            if (!matched) { outp.Add(raw[i]); i++; }
+        }
+
+        return changed ? string.Join(" ", outp) : line;
     }
 
     private bool TryLookup(string key, out SlangEntry entry)

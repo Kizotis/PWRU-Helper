@@ -276,12 +276,18 @@ public partial class MainWindow
     /// The two groups are still batched (one request each) and reassembled in the original order.</summary>
     private async Task<List<string>> TranslateBodiesAsync(List<string> bodies, string target, CancellationToken ct)
     {
+        // Expand known slang to its Russian long form BEFORE translating, so the machine
+        // translation is meaningful (e.g. "нужен хил" → "нужен лекарь" → "need a healer").
+        // Only the text SENT to the translator changes — the displayed original and the 🔑 decode
+        // still use the raw line. Terms without a Full form pass through unchanged.
+        var texts = bodies.Select(b => _slang.Expand(b)).ToList();
+
         var ru = new List<string>(); var ruIdx = new List<int>();
         var auto = new List<string>(); var autoIdx = new List<int>();
-        for (int i = 0; i < bodies.Count; i++)
+        for (int i = 0; i < texts.Count; i++)
         {
-            if (TextMatching.IsProbablyRussian(bodies[i])) { ru.Add(bodies[i]); ruIdx.Add(i); }
-            else { auto.Add(bodies[i]); autoIdx.Add(i); }
+            if (TextMatching.IsProbablyRussian(texts[i])) { ru.Add(texts[i]); ruIdx.Add(i); }
+            else { auto.Add(texts[i]); autoIdx.Add(i); }
         }
 
         var result = new string?[bodies.Count];
@@ -295,8 +301,8 @@ public partial class MainWindow
             var t = await _translator.TranslateLinesAsync(auto, "auto", target, ct);
             for (int i = 0; i < autoIdx.Count && i < t.Count; i++) result[autoIdx[i]] = t[i];
         }
-        // Any gap (shouldn't happen) falls back to the original text rather than a null.
-        return result.Select((r, i) => r ?? bodies[i]).ToList();
+        // Any gap (shouldn't happen) falls back to the (expanded) text rather than a null.
+        return result.Select((r, i) => r ?? texts[i]).ToList();
     }
 
     /// <summary>Map the sensitivity slider (0–100%) to the "same message" fuzzy threshold used
