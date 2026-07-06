@@ -1,6 +1,7 @@
 <Window x:Class="PWRUHelper.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:PWRUHelper"
         Title="PWRU Helper" Height="720" Width="640"
         MinHeight="480" MinWidth="460"
         Icon="assets/icon.png"
@@ -8,6 +9,9 @@
         Topmost="True">
 
     <Window.Resources>
+        <!-- Available width → phrase-grid column count (keeps cards a comfortable size) -->
+        <local:WidthToColumnsConverter x:Key="WidthToColumns" ItemMinWidth="210" MaxColumns="6"/>
+
         <!-- ★ pin/unpin toggle used on each phrase card -->
         <Style x:Key="PinButton" TargetType="Button">
             <Setter Property="Cursor" Value="Hand"/>
@@ -15,6 +19,7 @@
             <Setter Property="FontSize" Value="16"/>
             <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}"/>
             <Setter Property="ToolTip" Value="Pin to Favourites"/>
+            <Setter Property="AutomationProperties.Name" Value="Pin to Favourites"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
@@ -30,6 +35,7 @@
                     <Setter Property="Content" Value="★"/>
                     <Setter Property="Foreground" Value="{StaticResource GoldBrush}"/>
                     <Setter Property="ToolTip" Value="Unpin from Favourites"/>
+                    <Setter Property="AutomationProperties.Name" Value="Unpin from Favourites"/>
                 </DataTrigger>
             </Style.Triggers>
         </Style>
@@ -94,17 +100,21 @@
                           Foreground="{StaticResource TextMutedBrush}"
                           Checked="TopmostCheck_Changed" Unchecked="TopmostCheck_Changed"/>
                 <Button Style="{StaticResource GhostButton}" Padding="7,3" Margin="10,0,0,0"
-                        Content="A−" Click="FontSmaller_Click" ToolTip="Smaller text"/>
+                        Content="A−" Click="FontSmaller_Click" ToolTip="Smaller text"
+                        AutomationProperties.Name="Smaller text"/>
                 <Button Style="{StaticResource GhostButton}" Padding="7,3" Margin="4,0,0,0"
-                        Content="A+" Click="FontLarger_Click" ToolTip="Larger text"/>
+                        Content="A+" Click="FontLarger_Click" ToolTip="Larger text"
+                        AutomationProperties.Name="Larger text"/>
                 <Button x:Name="CompactButton" Style="{StaticResource GhostButton}" Padding="8,3"
                         Margin="10,0,0,0" Content="⤡ Compact" Click="CompactButton_Click"
-                        ToolTip="Shrink to a small overlay for playing (Ctrl+Alt+M)"/>
+                        ToolTip="Shrink to a small overlay for playing (Ctrl+Alt+M)"
+                        AutomationProperties.Name="Switch to compact overlay"/>
             </StackPanel>
         </Grid>
 
         <!-- ===== Tabs ===== -->
-        <TabControl x:Name="MainTabs" Grid.Row="1" Background="Transparent">
+        <TabControl x:Name="MainTabs" Grid.Row="1" Background="Transparent"
+                    SelectionChanged="MainTabs_SelectionChanged">
 
             <!-- ===================== TAB 1: PHRASEBOOK ===================== -->
             <TabItem Header="Phrasebook">
@@ -123,10 +133,13 @@
                     </Grid>
                     <ScrollViewer x:Name="PhraseScroller" Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,6,0">
                         <ItemsControl x:Name="PhraseList">
-                            <!-- items within each group: 4-column grid -->
+                            <!-- columns adapt to the window width (see WidthToColumnsConverter),
+                                 so cards stay a comfortable size instead of a fixed 4-up -->
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
-                                    <UniformGrid Columns="4"/>
+                                    <UniformGrid Columns="{Binding ActualWidth,
+                                                     RelativeSource={RelativeSource AncestorType=ItemsControl},
+                                                     Converter={StaticResource WidthToColumns}}"/>
                                 </ItemsPanelTemplate>
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.GroupStyle>
@@ -169,16 +182,19 @@
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
-                    <TextBlock Grid.Row="0" Text="✍  Write — type and get the translation"
-                               FontWeight="Bold" FontSize="13" Foreground="{StaticResource GoldBrush}"
-                               Margin="0,0,0,6"/>
+                    <TextBlock Grid.Row="0" Margin="0,0,0,6" FontSize="13">
+                        <Run Text="✍  Write — type and get the translation"
+                             FontWeight="Bold" Foreground="{StaticResource GoldBrush}"/><Run
+                             Text="    ·  press Ctrl+Enter to translate" Foreground="{StaticResource TextMutedBrush}"/>
+                    </TextBlock>
 
                     <!-- direction controls -->
                     <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
                         <!-- items filled in code from a single language list (see PopulateLanguageCombos) -->
                         <ComboBox x:Name="FromCombo" Width="120" VerticalAlignment="Center"/>
                         <Button Content="&#8646;" Style="{StaticResource GhostButton}" Margin="8,0"
-                                Click="Swap_Click" ToolTip="Swap languages"/>
+                                Click="Swap_Click" ToolTip="Swap languages"
+                                AutomationProperties.Name="Swap languages"/>
                         <ComboBox x:Name="ToCombo" Width="120" VerticalAlignment="Center"/>
                     </StackPanel>
 
@@ -255,7 +271,8 @@
                                                 </StackPanel>
                                                 <Button Grid.Column="1" Content="⧉" Style="{StaticResource GhostButton}"
                                                         Padding="7,2" Margin="8,0,0,0" VerticalAlignment="Top"
-                                                        Click="CopyOriginal_Click" ToolTip="Copy the Russian text"/>
+                                                        Click="CopyOriginal_Click" ToolTip="Copy the Russian text"
+                                                        AutomationProperties.Name="Copy the Russian text"/>
                                             </Grid>
                                         </Border>
                                     </DataTemplate>
@@ -276,7 +293,8 @@
 
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                             <Button x:Name="SelectAreaButton" Style="{StaticResource AccentButton}"
-                                    Content="Select area &amp; read once" Click="SelectArea_Click"/>
+                                    Content="Select area &amp; read once" Click="SelectArea_Click"
+                                    ToolTip="Draw a box over Russian text and read it once. Ctrl+Alt+R re-reads the same area while in game."/>
                             <TextBlock Text="translate to" VerticalAlignment="Center" Margin="12,0,6,0"
                                        Foreground="{StaticResource TextMutedBrush}"/>
                             <ComboBox x:Name="OcrTargetCombo" VerticalAlignment="Center" Width="120"/>
@@ -436,6 +454,13 @@
                             <Run Text="Ctrl+Alt+M" Foreground="{StaticResource TealBrush}" FontWeight="SemiBold"/>
                             <Run Text="  toggle the compact overlay (small in-game window)"/>
                         </TextBlock>
+                        <TextBlock Margin="0,2" Foreground="{StaticResource TextMutedBrush}">
+                            <Run Text="Ctrl+Alt+R" Foreground="{StaticResource TealBrush}" FontWeight="SemiBold"/>
+                            <Run Text="  read your last area once (no live loop)"/>
+                        </TextBlock>
+                        <!-- Made visible in code (OnSourceInitialized) listing any combo another app already owns -->
+                        <TextBlock x:Name="HotkeyWarning" Margin="0,8,0,0" TextWrapping="Wrap"
+                                   Visibility="Collapsed" Foreground="{StaticResource GoldBrush}"/>
 
                         <!-- author links -->
                         <TextBlock Text="Made by Kizotis" FontSize="15" FontWeight="Bold"

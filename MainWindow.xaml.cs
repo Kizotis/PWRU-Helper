@@ -5,7 +5,6 @@ using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -21,8 +20,9 @@ public partial class MainWindow : Window
 {
     private readonly List<Phrase> _allPhrases = new();
     private CollectionViewSource? _phrasesView;
+    private bool _recentsDirty;   // a phrase was copied; refresh "Recent" next time the tab is shown
 
-    private readonly TranslationService _translator = new();
+    private readonly ITranslator _translator = new TranslationService();
     private readonly UpdateService _updates = new();
     private readonly AppSettings _settings = SettingsService.Load();
     private OcrService _ocr = new("ru");
@@ -437,7 +437,22 @@ public partial class MainWindow : Window
         _settings.Recents.Insert(0, ru);
         while (_settings.Recents.Count > 8) _settings.Recents.RemoveAt(_settings.Recents.Count - 1);
         SettingsService.Save(_settings);
-        RebuildPhraseView();
+        // Don't rebuild the list right now: the user just clicked a card, and reshuffling the
+        // "Recent" group would slide the cards out from under their cursor. Refresh it the next
+        // time they come back to the Phrasebook tab instead.
+        _recentsDirty = true;
+    }
+
+    /// <summary>Refresh the deferred "Recent" group when the user returns to the Phrasebook.</summary>
+    private void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // TabControl.SelectionChanged also bubbles up from inner ComboBoxes — ignore those.
+        if (e.Source is not TabControl) return;
+        if (MainTabs.SelectedIndex == 0 && _recentsDirty)
+        {
+            _recentsDirty = false;
+            RebuildPhraseView();
+        }
     }
 
     private void TogglePin_Click(object sender, RoutedEventArgs e)
@@ -694,9 +709,14 @@ public partial class MainWindow : Window
         if (_selectingRegion) return;
         StopLive();
         var region = await SelectRegionAsync();
-        if (region is not { } rect) return;
+        if (region is { } rect) await ReadRegionOnceAsync(rect);
+    }
 
-        MainTabs.SelectedIndex = 1;          // results show on the Translator page
+    /// <summary>Capture a region once, OCR it into sentences and translate them onto the
+    /// Translator tab. Shared by the "read once" button and the Ctrl+Alt+R shortcut.</summary>
+    private async Task ReadRegionOnceAsync(System.Drawing.Rectangle rect)
+    {
+        MainTabs.SelectedIndex = TabTranslator;   // results show on the Translator page
         SelectAreaButton.IsEnabled = false;
         LiveButton.IsEnabled = false;        // don't let live start mid-read (shared OCR engine)
         _ocrItems.Clear();
@@ -881,8 +901,9 @@ public partial class MainWindow : Window
                 // CONFIRM: lines that appeared in the previous read AND are still on screen
                 // now are real new messages (they survived a frame, so they aren't flicker
                 // from the game moving behind the chat). Those get translated.
+                double stabThr = StabilityThreshold();
                 var confirmed = _pendingLines
-                    .Where(p => TextMatching.ContainsSimilar(cur, TextMatching.Normalize(p), StabilityThreshold()))
+                    .Where(p => TextMatching.ContainsSimilar(cur, TextMatching.Normalize(p), stabThr))
                     .Distinct()
                     .ToList();
 
@@ -891,9 +912,11 @@ public partial class MainWindow : Window
                 // sensitivity = stricter = smaller changes register as new. Repeats work
                 // naturally — a line that scrolled off leaves _prevNorm, so if it's sent
                 // again it reads as fresh and gets translated again.
+                // (Reuse cur[i] — the already-normalised form of lines[i] — instead of
+                // re-normalising every raw line a second time each tick.)
                 double freshThr = SensitivityThreshold();
                 _pendingLines = lines
-                    .Where(l => !TextMatching.ContainsSimilar(_prevNorm, TextMatching.Normalize(l), freshThr))
+                    .Where((l, i) => !TextMatching.ContainsSimilar(_prevNorm, cur[i], freshThr))
                     .ToList();
                 _prevNorm = cur;
 
@@ -1020,9 +1043,11 @@ public partial class MainWindow : Window
         var from = SelectedTag(FromCombo) ?? "en";
         var to = SelectedTag(ToCombo) ?? "ru";
 
-        // Auto-detect: if the text is Russian but we're not translating FROM Russian,
-        // flip the direction so pasting Russian "just works" (was silently wrong before).
-        if (from != "ru" && Regex.IsMatch(text, @"\p{IsCyrillic}"))
+        // Auto-detect: if the text is mostly Russian but we're not translating FROM Russian,
+        // flip the direction so pasting Russian "just works". We require a real share of
+        // Cyrillic (not a single stray character) so a French sentence with one Cyrillic
+        // smiley or name doesn't wrongly flip to translating FROM Russian.
+        if (from != "ru" && TextMatching.CyrillicShare(text) >= 0.3)
         {
             from = "ru";
             if (to == "ru") to = "en";
@@ -1188,11 +1213,13 @@ public partial class MainWindow : Window
     //    Ctrl+Alt+T — bring to front + focus the translator input
     //    Ctrl+Alt+L — start/stop live on the last area
     //    Ctrl+Alt+M — toggle the compact overlay
+    //    Ctrl+Alt+R — read the last area once (no live loop)
     // ============================================================
     private const int WM_HOTKEY = 0x0312;
     private const uint MOD_ALT = 0x0001, MOD_CONTROL = 0x0002, MOD_NOREPEAT = 0x4000;
-    private const int HK_SHOW = 1, HK_TRANSLATE = 2, HK_LIVE = 3, HK_COMPACT = 4;
+    private const int HK_SHOW = 1, HK_TRANSLATE = 2, HK_LIVE = 3, HK_COMPACT = 4, HK_READ = 5;
     private HwndSource? _hwnd;
+    private IntPtr _hwndHandle;   // cached so OnClosed unregisters against the real handle
 
     [DllImport("user32.dll")] private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
     [DllImport("user32.dll")] private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
@@ -1200,21 +1227,32 @@ public partial class MainWindow : Window
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
-        var handle = new WindowInteropHelper(this).Handle;
-        _hwnd = HwndSource.FromHwnd(handle);
+        _hwndHandle = new WindowInteropHelper(this).Handle;
+        _hwnd = HwndSource.FromHwnd(_hwndHandle);
         _hwnd?.AddHook(HotkeyHook);
 
         uint mod = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
-        // If another app already owns a combo, RegisterHotKey returns false — collect those
-        // so we can tell the user once, instead of a silently dead shortcut.
-        bool ok = RegisterHotKey(handle, HK_SHOW, mod, 0x50)       // P
-                & RegisterHotKey(handle, HK_TRANSLATE, mod, 0x54)   // T
-                & RegisterHotKey(handle, HK_LIVE, mod, 0x4C)        // L
-                & RegisterHotKey(handle, HK_COMPACT, mod, 0x4D);    // M
-        if (!ok)
-            Dispatcher.BeginInvoke(new Action(() =>
-                ShowToast("Some Ctrl+Alt shortcuts are already used by another app.")),
-                DispatcherPriority.ApplicationIdle);
+        // If another app already owns a combo, RegisterHotKey returns false — collect exactly
+        // which ones failed so we can name them for the user (a silently dead shortcut with no
+        // explanation is worse than none).
+        var failed = new List<string>();
+        void Reg(int id, uint vk, string label)
+        { if (!RegisterHotKey(_hwndHandle, id, mod, vk)) failed.Add(label); }
+
+        Reg(HK_SHOW, 0x50, "Ctrl+Alt+P");       // P
+        Reg(HK_TRANSLATE, 0x54, "Ctrl+Alt+T");  // T
+        Reg(HK_LIVE, 0x4C, "Ctrl+Alt+L");       // L
+        Reg(HK_COMPACT, 0x4D, "Ctrl+Alt+M");    // M
+        Reg(HK_READ, 0x52, "Ctrl+Alt+R");       // R
+
+        if (failed.Count > 0)
+        {
+            // Persistent, specific note in the About tab (a transient toast would scroll away
+            // before the user could read which shortcuts are dead).
+            HotkeyWarning.Text = "⚠ Already used by another app, so these won't work here: "
+                                 + string.Join(", ", failed) + ".";
+            HotkeyWarning.Visibility = Visibility.Visible;
+        }
     }
 
     private IntPtr HotkeyHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -1227,8 +1265,26 @@ public partial class MainWindow : Window
                 BringToFront(); MainTabs.SelectedIndex = TabTranslator; TranslateInput.Focus(); handled = true; break;
             case HK_LIVE: ToggleLive(); handled = true; break;
             case HK_COMPACT: ToggleCompact(); handled = true; break;
+            case HK_READ: ReadLastAreaOnce(); handled = true; break;
         }
         return IntPtr.Zero;
+    }
+
+    /// <summary>Ctrl+Alt+R: read the saved area once (no live loop). If live is already
+    /// running we leave it alone; if there's no saved area we surface the picker.</summary>
+    private async void ReadLastAreaOnce()
+    {
+        if (_selectingRegion) return;
+        if (_liveCts != null) { ShowToast("Live is already running (Ctrl+Alt+L to stop)."); return; }
+        if (!TryGetSavedRegion(out var rect))
+        {
+            BringToFront();
+            MainTabs.SelectedIndex = TabScreenOcr;
+            ShowToast("Pick a screen area once — then Ctrl+Alt+R reads it again.");
+            return;
+        }
+        BringToFront();
+        await ReadRegionOnceAsync(rect);
     }
 
     private void BringToFront()
@@ -1247,11 +1303,11 @@ public partial class MainWindow : Window
     {
         if (_hwnd != null)
         {
-            var handle = new WindowInteropHelper(this).Handle;
-            UnregisterHotKey(handle, HK_SHOW);
-            UnregisterHotKey(handle, HK_TRANSLATE);
-            UnregisterHotKey(handle, HK_LIVE);
-            UnregisterHotKey(handle, HK_COMPACT);
+            UnregisterHotKey(_hwndHandle, HK_SHOW);
+            UnregisterHotKey(_hwndHandle, HK_TRANSLATE);
+            UnregisterHotKey(_hwndHandle, HK_LIVE);
+            UnregisterHotKey(_hwndHandle, HK_COMPACT);
+            UnregisterHotKey(_hwndHandle, HK_READ);
             _hwnd.RemoveHook(HotkeyHook);
         }
         if (_overlay != null) { _overlay.AllowClose = true; _overlay.Close(); }

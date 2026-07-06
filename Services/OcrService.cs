@@ -17,6 +17,12 @@ public class OcrService
     private OcrEngine? _engine;
     private readonly string _languageTag;
 
+    // Enlarge captures whose longest side is under this many pixels, up to MaxUpscale×.
+    // 1600 keeps upscaled images comfortably below the engine's MaxImageDimension while
+    // making small chat text big enough to read reliably.
+    private const int UpscaleTargetPx = 1600;
+    private const double MaxUpscale = 3.0;
+
     public OcrService(string languageTag = "ru")
     {
         _languageTag = languageTag;
@@ -55,17 +61,28 @@ public class OcrService
     {
         if (_engine == null) return new List<string>();
 
-        // Windows.Media.Ocr rejects images whose width or height exceeds
-        // OcrEngine.MaxImageDimension (~2600 px) — RecognizeAsync would throw.
-        // Downscale proportionally so the largest side fits within the limit.
+        // Pick a scale factor before recognition:
+        //  • DOWNSCALE huge captures — Windows.Media.Ocr rejects images whose width or
+        //    height exceeds OcrEngine.MaxImageDimension (~2600 px), RecognizeAsync throws.
+        //  • UPSCALE small captures — the engine reads game chat far more accurately when
+        //    glyphs are bigger, and a tight "last few chat lines" selection is usually only
+        //    a couple hundred pixels tall. Enlarging it (bicubic) is the single biggest
+        //    accuracy win for the typical use case.
         Bitmap? scaled = null;
         var source = bitmap;
         int maxDim = (int)OcrEngine.MaxImageDimension;
-        if (maxDim > 0 && (bitmap.Width > maxDim || bitmap.Height > maxDim))
+        int longSide = Math.Max(bitmap.Width, bitmap.Height);
+
+        double factor = 1.0;
+        if (maxDim > 0 && longSide > maxDim)
+            factor = (double)maxDim / longSide;                       // shrink to fit the engine limit
+        else if (longSide > 0 && longSide < UpscaleTargetPx)
+            factor = Math.Min((double)UpscaleTargetPx / longSide, MaxUpscale);   // enlarge small captures
+
+        if (factor is > 1.01 or < 0.99)
         {
-            double factor = (double)maxDim / Math.Max(bitmap.Width, bitmap.Height);
-            int newWidth = Math.Max(1, (int)(bitmap.Width * factor));
-            int newHeight = Math.Max(1, (int)(bitmap.Height * factor));
+            int newWidth = Math.Max(1, (int)Math.Round(bitmap.Width * factor));
+            int newHeight = Math.Max(1, (int)Math.Round(bitmap.Height * factor));
             scaled = new Bitmap(newWidth, newHeight, PixelFormat.Format32bppArgb);
             using (var g = Graphics.FromImage(scaled))
             {

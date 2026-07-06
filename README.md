@@ -61,6 +61,21 @@ The app makes this easy: open the **Screen OCR** tab and click
 
 ---
 
+## 🔒 Privacy & fair play
+
+- **Screen reading is 100% on your PC.** The Russian OCR runs on Windows' built-in engine
+  locally — no screenshot ever leaves your computer.
+- **Translations go through Google Translate.** The text you translate (typed, or read from
+  the screen) is sent to Google's free public translate endpoint to be translated, exactly
+  like using translate.google.com. No account, no API key, and nothing else is sent. If a
+  line is private, don't translate it.
+- **No game memory, no injection, no automation.** The app only takes a picture of a screen
+  area you choose and puts text on your clipboard for *you* to paste. It never reads or
+  writes the game's memory and never types or clicks for you — so it doesn't touch anything
+  an anti-cheat cares about. It's the same as taking a screenshot and pasting a phrase yourself.
+
+---
+
 ## 💡 Tips
 
 - Keep **"Always on top"** ticked so the window stays over your game.
@@ -131,6 +146,21 @@ The portable build ends up in `bin/Release/.../win-x64/publish/PWRUHelper.exe`.
 Reducing the SmartScreen "unknown publisher" warning (free code-signing via SignPath OSS,
 winget submission, publishing SHA-256 hashes) is documented in
 [`packaging/DISTRIBUTION.md`](packaging/DISTRIBUTION.md).
+
+### Running the tests
+
+```powershell
+dotnet test tests/PWRUHelper.Tests
+```
+
+Unit tests cover the pure logic (OCR sentence-stitching, chat splitting, fuzzy line-matching,
+the slang decoder and version parsing). They run headless — no window, no network.
+
+---
+
+## 📄 License
+
+Released under the [MIT License](LICENSE) — free to use, modify and share.
 
 ---
 

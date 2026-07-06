@@ -12,12 +12,22 @@ public class TranslationException : Exception
     public TranslationException(string message) : base(message) { }
 }
 
+/// <summary>Anything that can translate text. Kept as an interface so the app depends on
+/// the capability, not on Google specifically — a different backend (or a test double) can
+/// be dropped in without touching the UI.</summary>
+public interface ITranslator
+{
+    Task<string> TranslateAsync(string text, string source, string target, CancellationToken ct = default);
+    Task<List<string>> TranslateLinesAsync(IReadOnlyList<string> lines, string source, string target,
+        CancellationToken ct = default);
+}
+
 /// <summary>
 /// Translates text using Google's free (unofficial) translate endpoint — the same
 /// one translate.google.com uses. No API key, no cost. All work happens on Google's
 /// servers, so this uses no local CPU/GPU.
 /// </summary>
-public class TranslationService
+public class TranslationService : ITranslator
 {
     private static readonly HttpClient Http = CreateClient();
 
@@ -82,9 +92,19 @@ public class TranslationService
             catch { /* fall through to per-line */ }
         }
 
+        // Per-line fallback. Translate as many as possible and KEEP the successes even if a
+        // later line gets rate-limited — otherwise translating line 30 of 40 and hitting a
+        // 429 would throw away the 29 good translations we already had.
         var result = new List<string>(lines.Count);
+        bool rateLimited = false;
         foreach (var l in lines)
-            result.Add(await SafeOne(l));
+        {
+            if (rateLimited) { result.Add("(skipped — rate-limited, try again shortly)"); continue; }
+            try { result.Add(await TranslateAsync(l, source, target, ct)); }
+            catch (OperationCanceledException) { throw; }   // a real cancel must propagate
+            catch (TranslationException) { rateLimited = true; result.Add("(rate-limited — try again shortly)"); }
+            catch (Exception ex) { result.Add($"(translation failed: {ex.Message})"); }
+        }
         return result;
 
         async Task<string> SafeOne(string line)
@@ -158,7 +178,7 @@ public class TranslationService
     }
 
     /// <summary>Split long text into &lt;= maxBytes chunks on sentence boundaries.</summary>
-    private static IEnumerable<string> ChunkText(string text, int maxBytes)
+    internal static IEnumerable<string> ChunkText(string text, int maxBytes)
     {
         var pieces = Regex.Split(text, @"(?<=[\.\!\?…\n])");
         var current = new StringBuilder();
