@@ -1,0 +1,50 @@
+{
+  "_comment": "Perfect World RU squad builder. Two sections (dungeons, classes), each shown as columns of tick-boxes. Each item: 'code' (EN abbreviation, shown first), 'ru' (the Russian form shown in quotes), 'name' (English name), 'token' (what actually gets pasted into chat). Edit freely — reorder, add columns or items; the tab rebuilds from this file.",
+  "dungeons": [
+    { "title": "WEAPON", "items": [
+      { "code": "EU",      "ru": "APA",        "name": "Cave of Eternity (low)",  "token": "апа" },
+      { "code": "MWT",     "ru": "ПП",         "name": "Full Moon Pavilion",      "token": "пп" },
+      { "code": "DUP/UPD", "ru": "МИ / MOPE",  "name": "Illusions Sea",           "token": "ми" },
+      { "code": "WM",      "ru": "ГШ",         "name": "Whispers Tomb",           "token": "гш" }
+    ]},
+    { "title": "ARMOR", "items": [
+      { "code": "AEU",     "ru": "APA",        "name": "Cave of Eternity (high)", "token": "апа" },
+      { "code": "FSP",     "ru": "СЦ",         "name": "Silver Citadel",          "token": "сц" },
+      { "code": "4-1",     "ru": "xx1 / 4-1",  "name": "Twilight Library",        "token": "4-1" },
+      { "code": "4-2",     "ru": "xx2 / 4-2",  "name": "Heavenly Palace",         "token": "4-2" },
+      { "code": "5-1",     "ru": "ТС простой", "name": "Terrace of Dreams (normal)",    "token": "тс простой" },
+      { "code": "5-2",     "ru": "ТС сложка",  "name": "Terrace of Dreams (hard)",      "token": "тс сложка" },
+      { "code": "5-3",     "ru": "Лега",       "name": "Terrace of Dreams (legendary)", "token": "лега" }
+    ]},
+    { "title": "ARTIFACT", "items": [
+      { "code": "UCH",     "ru": "ХС",         "name": "Temple of Elements",      "token": "хс" },
+      { "code": "IU/999",  "ru": "ЛА",         "name": "Ice Hell",                "token": "ла" },
+      { "code": "JDH/DHJ", "ru": "ДР",         "name": "Dawn Palace",             "token": "др" },
+      { "code": "ICW",     "ru": "ОР",         "name": "Knights Island",          "token": "ор" }
+    ]}
+  ],
+  "classes": [
+    { "title": "DD", "items": [
+      { "code": "Sin",    "ru": "син",          "name": "assassin",   "token": "син" },
+      { "code": "EA",     "ru": "лук",          "name": "archer",     "token": "лук" },
+      { "code": "Psy",    "ru": "шам",          "name": "psychic",    "token": "шам" },
+      { "code": "Edge",   "ru": "пал",          "name": "duskblade",  "token": "пал" },
+      { "code": "DB",     "ru": "гост",         "name": "",           "token": "гост" },
+      { "code": "Monkey", "ru": "макака",       "name": "",           "token": "макака" },
+      { "code": "Tech",   "ru": "ганер / пушка","name": "gunner",     "token": "ганер" },
+      { "code": "Bard",   "ru": "бард",         "name": "",           "token": "бард" },
+      { "code": "Reaper", "ru": "ДК",           "name": "",           "token": "дк" }
+    ]},
+    { "title": "Heal / Buff", "items": [
+      { "code": "EP",   "ru": "прист", "name": "cleric", "token": "прист" },
+      { "code": "Myst", "ru": "мист",  "name": "mystic", "token": "мист" },
+      { "code": "WB",   "ru": "танк",  "name": "tank",   "token": "танк" }
+    ]},
+    { "title": "Debuff", "items": [
+      { "code": "Seek", "ru": "сик / страж", "name": "seeker",      "token": "сик" },
+      { "code": "SB",   "ru": "коса",        "name": "stormbringer","token": "коса" },
+      { "code": "WF",   "ru": "дру",         "name": "veno",        "token": "дру" },
+      { "code": "WR",   "ru": "вар",         "name": "BM",          "token": "вар" }
+    ]}
+  ]
+}

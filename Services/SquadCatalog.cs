@@ -1,87 +1,84 @@
+using System.Text.Json;
+
 namespace PWRUHelper.Services;
 
-/// <summary>One tickable option in the squad builder: the Russian token to drop into the
-/// chat phrase, and the readable English label shown next to the checkbox.</summary>
+/// <summary>One tickable option in the squad builder.</summary>
 public sealed class SquadOption
 {
-    public string Token { get; init; } = "";   // the RU token pasted into chat (e.g. "лега")
-    public string Label { get; init; } = "";   // the English meaning shown to the user
+    public string Code { get; set; } = "";    // EN abbreviation shown first (EU, MWT, Sin…)
+    public string Ru { get; set; } = "";       // the Russian form shown in quotes (APA, ПП, син…)
+    public string Name { get; set; } = "";     // English name (Cave of Eternity, assassin…)
+    public string Token { get; set; } = "";    // what actually gets pasted into chat (апа, пп, син…)
+}
+
+/// <summary>A titled column of options (a dungeon/class group like WEAPON or DD).</summary>
+public sealed class SquadColumn
+{
+    public string Title { get; set; } = "";
+    public List<SquadOption> Items { get; set; } = new();
 }
 
 /// <summary>
-/// Turns the shared slang glossary (<see cref="SlangGlossary"/>) into the three tick-lists the
-/// squad builder shows — dungeons, classes and roles — and assembles the LFM chat phrase from
-/// what the user ticked. Pure and UI-free, so it's unit-tested directly.
-///
-/// Categories come from the glossary entry's <see cref="SlangEntry.Category"/> when present
-/// (new/edited <c>slang.json</c>), and fall back to a built-in token map so an older editable
-/// <c>slang.json</c> without categories still populates the tab. That keeps the JSON the source
-/// of truth for new terms while never leaving an existing user with an empty tab.
+/// The squad builder's catalogue, loaded from <c>Data/squad.json</c>: dungeons and classes,
+/// each as a list of titled columns of tick-boxes, plus the LFM phrase assembly. Pure and
+/// UI-free so it's unit-tested directly; a missing/broken file just yields empty lists.
 /// </summary>
-public static class SquadCatalog
+public sealed class SquadCatalog
 {
-    public const string Dungeon = "dungeon", Class = "class", Role = "role";
+    public List<SquadColumn> Dungeons { get; private set; } = new();
+    public List<SquadColumn> Classes { get; private set; } = new();
 
-    // Built-in fallback: canonical token (first key, folded to Cyrillic look-alikes) → category.
-    // Covers every class/dungeon/role currently in slang.json so the tab works even if the user's
-    // editable copy predates the "category" field.
-    private static readonly Dictionary<string, string> Fallback = new()
+    public bool IsEmpty => Dungeons.Count == 0 && Classes.Count == 0;
+
+    private static readonly JsonSerializerOptions Opts = new()
     {
-        // dungeons / instances
-        ["ара"] = Dungeon, ["пп"] = Dungeon, ["ми"] = Dungeon, ["гш"] = Dungeon, ["сц"] = Dungeon,
-        ["4-1"] = Dungeon, ["4-2"] = Dungeon, ["тс"] = Dungeon, ["5-1"] = Dungeon, ["5-2"] = Dungeon,
-        ["5-3"] = Dungeon, ["хс"] = Dungeon, ["ла"] = Dungeon, ["др"] = Dungeon, ["ор"] = Dungeon,
-        // roles
-        ["дд"] = Role, ["хил"] = Role, ["танк"] = Role,
-        // classes
-        ["прист"] = Class, ["мист"] = Class, ["сик"] = Class, ["вар"] = Class, ["дру"] = Class,
-        ["син"] = Class, ["жнец"] = Class, ["лук"] = Class, ["шам"] = Class, ["пал"] = Class,
-        ["гост"] = Class, ["макака"] = Class, ["ганер"] = Class, ["бард"] = Class, ["дк"] = Class,
+        PropertyNameCaseInsensitive = true,
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true,
     };
 
-    /// <summary>Category of an entry: its explicit <c>category</c>, else the built-in fallback
-    /// keyed on its first token, else "" (not shown in the squad builder).</summary>
-    public static string CategoryOf(SlangEntry e)
+    private sealed class Root
     {
-        var explicitCat = (e.Category ?? "").Trim().ToLowerInvariant();
-        if (explicitCat is Dungeon or Class or Role) return explicitCat;
-        var token = e.Keys != null && e.Keys.Count > 0 ? Fold(e.Keys[0]) : "";
-        return Fallback.TryGetValue(token, out var cat) ? cat : "";
+        public List<SquadColumn>? Dungeons { get; set; }
+        public List<SquadColumn>? Classes { get; set; }
     }
 
-    /// <summary>Split the glossary into the three ordered tick-lists for the tab. Order follows
-    /// the glossary (i.e. slang.json) so the user controls it by editing the file.</summary>
-    public static (List<SquadOption> Dungeons, List<SquadOption> Classes, List<SquadOption> Roles)
-        Build(IEnumerable<SlangEntry> entries)
+    public static SquadCatalog FromJson(string? json)
     {
-        var dungeons = new List<SquadOption>();
-        var classes = new List<SquadOption>();
-        var roles = new List<SquadOption>();
-        var seen = new HashSet<string>();
-
-        foreach (var e in entries)
+        var cat = new SquadCatalog();
+        if (string.IsNullOrWhiteSpace(json)) return cat;
+        try
         {
-            if (e.Keys == null || e.Keys.Count == 0) continue;
-            var token = e.Keys[0].Trim();
-            if (token.Length == 0 || !seen.Add(token.ToLowerInvariant())) continue;
-
-            var opt = new SquadOption { Token = token, Label = e.Meaning };
-            switch (CategoryOf(e))
+            var doc = JsonSerializer.Deserialize<Root>(json, Opts);
+            if (doc != null)
             {
-                case Dungeon: dungeons.Add(opt); break;
-                case Class: classes.Add(opt); break;
-                case Role: roles.Add(opt); break;
+                cat.Dungeons = Clean(doc.Dungeons);
+                cat.Classes = Clean(doc.Classes);
             }
         }
-        return (dungeons, classes, roles);
+        catch { /* bad json → empty catalogue (tab shows a hint) */ }
+        return cat;
     }
 
-    /// <summary>Assemble the LFM chat phrase: <c>prefix dungeons classes roles</c>, each group in
-    /// the order it was ticked. Empty groups and a blank prefix are simply skipped.</summary>
-    public static string BuildPhrase(string prefix,
-        IEnumerable<string> dungeons, IEnumerable<string> classes, IEnumerable<string> roles)
+    // Drop empty columns/items and any item without a paste token, so the UI never renders blanks.
+    private static List<SquadColumn> Clean(List<SquadColumn>? columns)
     {
-        var body = dungeons.Concat(classes).Concat(roles)
+        var result = new List<SquadColumn>();
+        if (columns == null) return result;
+        foreach (var col in columns)
+        {
+            var items = (col.Items ?? new()).Where(i => !string.IsNullOrWhiteSpace(i.Token)).ToList();
+            if (items.Count == 0) continue;
+            result.Add(new SquadColumn { Title = col.Title ?? "", Items = items });
+        }
+        return result;
+    }
+
+    /// <summary>Assemble the LFM chat phrase: <c>prefix dungeons classes</c>, each group in the
+    /// order it was ticked. Empty groups and a blank prefix are skipped; nothing ticked → "".</summary>
+    public static string BuildPhrase(string prefix, IEnumerable<string> dungeons, IEnumerable<string> classes)
+    {
+        var body = dungeons.Concat(classes)
             .Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => p.Trim()).ToList();
         if (body.Count == 0) return "";   // nothing ticked → no phrase (never a lone "в")
 
@@ -89,22 +86,5 @@ public static class SquadCatalog
         if (!string.IsNullOrWhiteSpace(prefix)) parts.Add(prefix.Trim());
         parts.AddRange(body);
         return string.Join(" ", parts);
-    }
-
-    // Same Latin→Cyrillic homoglyph folding SlangGlossary uses, so a fallback key written in
-    // Latin look-alikes (rare, but possible in a hand-edited file) still matches.
-    private static readonly Dictionary<char, char> Homoglyphs = new()
-    {
-        ['a'] = 'а', ['b'] = 'в', ['c'] = 'с', ['e'] = 'е', ['h'] = 'н', ['k'] = 'к',
-        ['m'] = 'м', ['o'] = 'о', ['p'] = 'р', ['t'] = 'т', ['x'] = 'х', ['y'] = 'у',
-    };
-
-    private static string Fold(string s)
-    {
-        s = (s ?? "").Trim().ToLowerInvariant();
-        if (s.Length == 0) return s;
-        var sb = new System.Text.StringBuilder(s.Length);
-        foreach (var c in s) sb.Append(Homoglyphs.TryGetValue(c, out var cyr) ? cyr : c);
-        return sb.ToString();
     }
 }
