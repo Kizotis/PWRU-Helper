@@ -41,15 +41,15 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _liveCts;
     private bool _selectingRegion;                       // a screen-area drag is in progress
     private System.Drawing.Rectangle? _liveRegion;
-    private List<string> _prevNorm = new();              // normalised lines from the previous read
-    private List<string> _pendingLines = new();          // lines that just appeared, awaiting confirmation
+    private LiveDedup _dedup = new();                     // decides which lines are genuinely new
     private int _liveTicks;
     private const int MaxHistory = 50;                   // keep the last 50 translated messages
-    // A newly-appeared line must survive into the NEXT read before we translate it. That
-    // one-frame confirmation filters OCR flicker from the game moving behind the chat
-    // (camera panning), which only ever shows up for a single frame. How strict this
-    // confirmation is comes from the "Stability" slider (see StabilityThreshold()); the
-    // sensitivity slider only controls how "new" a line must look to count at all.
+    // Which lines are "new enough" to translate is decided by LiveDedup: it works on a
+    // letter/digit-only signature (so animated emojis and colour flicker don't register as new
+    // text), remembers what it has already shown, and only re-translates a message after it has
+    // actually scrolled off screen for a while. A two-frame confirmation still guards OCR
+    // garbage. The Sensitivity slider tunes how similar counts as "the same message", the
+    // Stability slider how strict the confirmation is.
 
     public MainWindow()
     {
@@ -805,8 +805,7 @@ public partial class MainWindow : Window
         SettingsService.Save(_settings);
 
         _liveRegion = rect;
-        _prevNorm = new();
-        _pendingLines = new();
+        _dedup = new();
         _liveTicks = 0;
         _ocrItems.Clear();
         SetLiveUi(true);
@@ -894,31 +893,15 @@ public partial class MainWindow : Window
                 using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
                 int minLetters = MinFragmentLetters();
                 var lines = TextMatching.ToSentences(await _ocr.ReadLinesAsync(bmp))
+                    .Select(TextMatching.StripNoise)                    // drop animated-emoji artifacts
                     .Where(l => TextMatching.LooksLikeText(l, minLetters)).ToList();
                 if (ct.IsCancellationRequested) break;
-                var cur = lines.Select(TextMatching.Normalize).ToList();
 
-                // CONFIRM: lines that appeared in the previous read AND are still on screen
-                // now are real new messages (they survived a frame, so they aren't flicker
-                // from the game moving behind the chat). Those get translated.
-                double stabThr = StabilityThreshold();
-                var confirmed = _pendingLines
-                    .Where(p => TextMatching.ContainsSimilar(cur, TextMatching.Normalize(p), stabThr))
-                    .Distinct()
-                    .ToList();
-
-                // FRESH: lines on screen now that aren't (fuzzily) in the previous read.
-                // The sensitivity slider sets how similar counts as "already seen": higher
-                // sensitivity = stricter = smaller changes register as new. Repeats work
-                // naturally — a line that scrolled off leaves _prevNorm, so if it's sent
-                // again it reads as fresh and gets translated again.
-                // (Reuse cur[i] — the already-normalised form of lines[i] — instead of
-                // re-normalising every raw line a second time each tick.)
-                double freshThr = SensitivityThreshold();
-                _pendingLines = lines
-                    .Where((l, i) => !TextMatching.ContainsSimilar(_prevNorm, cur[i], freshThr))
-                    .ToList();
-                _prevNorm = cur;
+                // Ask the de-dup filter which of these lines are genuinely new. It ignores
+                // emoji/colour flicker (compares on a letter-only signature) and only re-emits
+                // a message after it has really scrolled off screen for a while. The Sensitivity
+                // slider tunes "same message" strictness; Stability tunes the confirmation frame.
+                var confirmed = _dedup.Next(lines, SensitivityThreshold(), StabilityThreshold());
 
                 if (confirmed.Count > 0)
                 {
@@ -990,13 +973,15 @@ public partial class MainWindow : Window
         ResultsScroller?.ScrollToEnd();
     }
 
-    /// <summary>Map the sensitivity slider (0–100%) to a fuzzy-match threshold. Higher
-    /// sensitivity → stricter "same line" test → smaller changes count as new text.
-    /// (The text-matching helpers themselves live in <see cref="TextMatching"/>.)</summary>
+    /// <summary>Map the sensitivity slider (0–100%) to the "same message" fuzzy threshold used
+    /// by <see cref="LiveDedup"/>. It runs on letter/digit-only signatures (emoji/colour noise
+    /// already stripped), so genuine repeats of a message are near-identical — the band stays
+    /// high (0.80…0.95) so two *different* short chat lines are never merged (which would drop a
+    /// real message). Higher sensitivity → stricter → smaller wording changes count as new text.</summary>
     private double SensitivityThreshold()
     {
         double sens = SensitivitySlider?.Value ?? 5;    // default matches the XAML slider
-        return 0.60 + (sens / 100.0) * 0.38;            // 0.60 (calm) … 0.98 (very sensitive)
+        return 0.80 + (sens / 100.0) * 0.15;            // 0.80 (forgiving) … 0.95 (very sensitive)
     }
 
     /// <summary>Smallest text fragment (in letters) that live mode will bother translating.</summary>

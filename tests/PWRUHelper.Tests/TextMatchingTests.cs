@@ -114,4 +114,49 @@ public class TextMatchingTests
     [Fact]
     public void CyrillicShare_MostlyCyrillic_IsAboveFlipThreshold()
         => Assert.True(TextMatching.CyrillicShare("привет hi") >= 0.3);
+
+    // ---- Signature (the de-dup core) ----
+
+    [Fact]
+    public void Signature_KeepsOnlyLettersAndDigitsLowercased()
+        => Assert.Equal("problemkaтслега2дд", TextMatching.Signature("proBlemka: ТС ЛЕГА 2 ДД"));
+
+    [Fact]
+    public void Signature_IgnoresTrailingEmojiArtifacts()
+    {
+        // Same message, two frames: one read with an emoji artifact, one without → same signature.
+        var a = TextMatching.Signature("proBlemka: ТС ЛЕГА 2 ДД ❤❤");
+        var b = TextMatching.Signature("proBlemka: ТС ЛЕГА 2 ДД W");   // heart mis-read as a stray letter
+        // The letters differ by the stray 'w', but the Cyrillic core is identical and dominates.
+        Assert.StartsWith("problemkaтслега2дд", a);
+        Assert.StartsWith("problemkaтслега2дд", b);
+        Assert.True(TextMatching.SimilarEnough(a, b, 0.9));
+    }
+
+    [Fact]
+    public void Signature_DistinctMessagesStayDistinct()
+    {
+        // proBlemka's line and Wups's line must NOT collapse together (sender name differentiates).
+        var a = TextMatching.Signature("proBlemka: ТС ЛЕГА 2 ДД");
+        var b = TextMatching.Signature("Wups: В ТС легу 2ДД");
+        Assert.False(TextMatching.SimilarEnough(a, b, 0.80));
+    }
+
+    [Fact]
+    public void Signature_EmptyForPureNoise()
+        => Assert.Equal("", TextMatching.Signature("  ❤❤ !!! …  "));
+
+    // ---- StripNoise ----
+
+    [Fact]
+    public void StripNoise_RemovesSymbolsKeepsWordsAndPunctuation()
+        => Assert.Equal("proBlemka: ТС ЛЕГА 2 ДД", TextMatching.StripNoise("proBlemka: ТС ЛЕГА 2 ДД ❤❤"));
+
+    [Fact]
+    public void StripNoise_DropsEmojiSurrogatePairs()
+        => Assert.Equal("Салют", TextMatching.StripNoise("Салют 🐷🦊"));
+
+    [Fact]
+    public void StripNoise_LeavesPlainTextUntouched()
+        => Assert.Equal("привет мир", TextMatching.StripNoise("привет мир"));
 }
