@@ -13,6 +13,18 @@ Made for English/French (and now Spanish/German) speakers who play on the Russia
 
 ---
 
+<div align="center">
+
+## 🎥 See it in action
+
+[![Watch the PWRU Helper demo on YouTube](https://img.youtube.com/vi/ibonXRB0vsI/hqdefault.jpg)](https://www.youtube.com/watch?v=ibonXRB0vsI)
+
+*(click to watch on YouTube)*
+
+</div>
+
+---
+
 ## ✨ What it does
 
 <img src="assets/screenshot-phrasebook.png" width="480" alt="Phrasebook"/>
@@ -34,6 +46,12 @@ each translation — e.g. `В ПП хил` shows *🔑 В = LFM · ПП = Full M
 **3. Translator** — one page for **reading + writing**: type in your language and get
 Russian instantly (or the other way around) at the top, and see the live screen
 translations underneath.
+
+**4. Squad builder** — tick the **dungeon(s)**, **class(es)** and **role(s)** you're looking
+for and it builds the Russian group-forming (LFM) message for you — e.g. tick *Terrace
+legendary* + *cleric* + *BM* + *DD* and copy `в лега прист вар дд` straight into chat. The
+lists come from the same slang book as the decoder, so adding a `category` to a line in
+`slang.json` adds a new tick-box.
 
 ---
 
