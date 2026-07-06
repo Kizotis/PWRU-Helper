@@ -134,6 +134,9 @@ public partial class MainWindow : Window
         OcrToleranceSlider.Value = Math.Clamp(s.OcrColorTolerance, 0, 441);
         SetOcrFilterCombo(s.OcrFilterMode ?? "off");   // fires the change handler → sets visibility/label
 
+        ScreenCapture.SetMode(s.CaptureBackend);
+        SetCaptureBackendCombo(s.CaptureBackend ?? "gdi");
+
         UpdateResumeLiveButton();
         ApplyFontScale();
     }

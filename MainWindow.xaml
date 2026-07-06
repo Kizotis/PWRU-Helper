@@ -453,6 +453,20 @@
                             </StackPanel>
                         </StackPanel>
 
+                        <!-- Capture method -->
+                        <StackPanel Margin="0,0,0,14">
+                            <TextBlock Text="Capture method" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextBrush}"/>
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMutedBrush}"
+                                       Margin="0,2,0,4"
+                                       Text="How the screen is grabbed. Default (GDI) works for windowed / borderless games. Try 'Windows Graphics (experimental)' only if capture comes out black in full-screen — it automatically falls back to GDI if it can't run."/>
+                            <ComboBox x:Name="CaptureBackendCombo" Width="300" HorizontalAlignment="Left"
+                                      SelectionChanged="CaptureBackend_Changed">
+                                <ComboBoxItem Content="Default (GDI)" Tag="gdi"/>
+                                <ComboBoxItem Content="Windows Graphics — experimental" Tag="wgc"/>
+                            </ComboBox>
+                        </StackPanel>
+
                         <!-- Screen OCR settings: Russian OCR language pack -->
                         <Border x:Name="OcrSettingsPanel" Margin="0,0,0,10"
                                 Background="{StaticResource PanelBrush}" CornerRadius="8"

@@ -324,4 +324,28 @@ public partial class MainWindow
             }
         OcrFilterCombo.SelectedIndex = 0;   // "off"
     }
+
+    // ============================================================
+    //  CAPTURE METHOD (GDI default, experimental Windows.Graphics)
+    // ============================================================
+
+    private void CaptureBackend_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (CaptureBackendCombo is null) return;   // still building the XAML
+        var mode = (CaptureBackendCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "gdi";
+        _settings.CaptureBackend = mode;
+        ScreenCapture.SetMode(mode);
+        SettingsService.Save(_settings);
+    }
+
+    private void SetCaptureBackendCombo(string mode)
+    {
+        foreach (var obj in CaptureBackendCombo.Items)
+            if (obj is ComboBoxItem item && (item.Tag as string) == mode)
+            {
+                CaptureBackendCombo.SelectedItem = item;
+                return;
+            }
+        CaptureBackendCombo.SelectedIndex = 0;   // "gdi"
+    }
 }
