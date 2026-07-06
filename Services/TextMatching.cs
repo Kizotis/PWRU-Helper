@@ -126,6 +126,51 @@ public static class TextMatching
         return s.Trim(' ', '.', ',', '!', '?', ':', ';', '"', '\'', '-', '…', '(', ')');
     }
 
+    /// <summary>The stable "core" of a chat line for de-duplication: lower-cased letters and
+    /// digits only, everything else (spaces, punctuation, symbols, and the garbage the OCR
+    /// emits for animated emojis/icons) removed. Two frames of the SAME message — one read as
+    /// "proBlemka: ТС ЛЕГА 2 ДД ❤❤" and the next as "proBlemka: ТС ЛЕГА 2 ДД W" because a
+    /// heart animated — collapse to the same signature, so the live loop stops treating the
+    /// flicker as a brand-new message to translate.</summary>
+    public static string Signature(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        var sb = new System.Text.StringBuilder(s.Length);
+        foreach (var ch in s)
+            if (char.IsLetterOrDigit(ch)) sb.Append(char.ToLowerInvariant(ch));
+        return sb.ToString();
+    }
+
+    /// <summary>Drop the visual noise the OCR picks up from animated emojis, hearts and game
+    /// icons — Unicode symbol/other-punctuation runs and emoji surrogate pairs — while keeping
+    /// letters, digits and ordinary sentence punctuation. Used to clean a line before it is
+    /// shown and sent to the translator, so a stray "❤"-artifact doesn't ride along.</summary>
+    public static string StripNoise(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        var sb = new System.Text.StringBuilder(s.Length);
+        for (int i = 0; i < s.Length; i++)
+        {
+            char ch = s[i];
+            // Emoji and pictographs live in the astral planes (surrogate pairs) — skip both halves.
+            if (char.IsHighSurrogate(ch) && i + 1 < s.Length && char.IsLowSurrogate(s[i + 1]))
+            {
+                i++;
+                continue;
+            }
+            var cat = System.Globalization.CharUnicodeInfo.GetUnicodeCategory(ch);
+            // Symbols (hearts, arrows, dingbats) and "other" marks are OCR noise; keep the rest.
+            if (cat is System.Globalization.UnicodeCategory.OtherSymbol
+                    or System.Globalization.UnicodeCategory.OtherNotAssigned
+                    or System.Globalization.UnicodeCategory.PrivateUse
+                    or System.Globalization.UnicodeCategory.Surrogate)
+                continue;
+            sb.Append(ch);
+        }
+        // Collapse any whitespace the removals left behind.
+        return Regex.Replace(sb.ToString(), @"\s+", " ").Trim();
+    }
+
     /// <summary>True if <paramref name="line"/> fuzzy-matches any entry in the set.</summary>
     public static bool ContainsSimilar(IEnumerable<string> set, string line, double threshold)
         => set.Any(s => SimilarEnough(s, line, threshold));
