@@ -175,7 +175,8 @@ public partial class MainWindow
         try
         {
             using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
-            var sentences = TextMatching.SplitChatMessages(await _ocr.ReadLinesAsync(bmp))
+            using var forOcr = ApplyOcrFilter(bmp);   // null when the filter is off
+            var sentences = TextMatching.SplitChatMessages(await _ocr.ReadLinesAsync(forOcr ?? bmp))
                 .Select(TextMatching.StripNoise)
                 .Where(l => l.Length > 0).ToList();
             if (sentences.Count == 0)
@@ -250,5 +251,77 @@ public partial class MainWindow
         }
         BringToFront();
         await ReadRegionOnceAsync(rect);
+    }
+
+    // ============================================================
+    //  BACKGROUND FILTER (optional pre-OCR clean-up)
+    // ============================================================
+
+    /// <summary>Apply the configured pre-OCR filter to a capture. Returns a NEW bitmap, or null
+    /// when filtering is off (the caller then reads the original). Best-effort: any failure just
+    /// falls back to the unfiltered capture.</summary>
+    private System.Drawing.Bitmap? ApplyOcrFilter(System.Drawing.Bitmap capture)
+    {
+        try
+        {
+            switch ((_settings.OcrFilterMode ?? "off").ToLowerInvariant())
+            {
+                case "contrast":
+                    return OcrImageFilter.BoostContrast(capture);
+                case "color":
+                    var c = ParseHexColor(_settings.OcrKeepColorHex) ?? System.Drawing.Color.White;
+                    return OcrImageFilter.KeepColor(capture, c, Math.Clamp(_settings.OcrColorTolerance, 0, 441));
+                default:
+                    return null;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logging.Warn("OCR background filter failed, using raw capture: " + ex.Message);
+            return null;
+        }
+    }
+
+    private static System.Drawing.Color? ParseHexColor(string? hex)
+    {
+        hex = (hex ?? "").Trim().TrimStart('#');
+        if (hex.Length == 6 &&
+            int.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out var v))
+            return System.Drawing.Color.FromArgb((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
+        return null;
+    }
+
+    // Three thin event handlers (different WPF delegate signatures) feed one save routine.
+    private void OcrFilterCombo_Changed(object sender, SelectionChangedEventArgs e) => SaveOcrFilterSettings();
+    private void OcrColorHex_LostFocus(object sender, RoutedEventArgs e) => SaveOcrFilterSettings();
+    private void OcrTolerance_Changed(object sender, RoutedPropertyChangedEventArgs<double> e) => SaveOcrFilterSettings();
+
+    private void SaveOcrFilterSettings()
+    {
+        // Handlers can fire while the XAML is still being built; ignore until all controls exist.
+        if (OcrFilterCombo is null || OcrColorHexBox is null || OcrToleranceSlider is null) return;
+
+        var mode = (OcrFilterCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "off";
+        _settings.OcrFilterMode = mode;
+        _settings.OcrKeepColorHex = (OcrColorHexBox.Text ?? "#FFFFFF").Trim();
+        _settings.OcrColorTolerance = (int)Math.Round(OcrToleranceSlider.Value);
+
+        if (OcrToleranceValue != null) OcrToleranceValue.Text = _settings.OcrColorTolerance.ToString();
+        if (OcrColorOptions != null)
+            OcrColorOptions.Visibility = mode == "color" ? Visibility.Visible : Visibility.Collapsed;
+
+        SettingsService.Save(_settings);
+    }
+
+    /// <summary>Select the filter-mode combo item whose Tag matches the saved mode.</summary>
+    private void SetOcrFilterCombo(string mode)
+    {
+        foreach (var obj in OcrFilterCombo.Items)
+            if (obj is ComboBoxItem item && (item.Tag as string) == mode)
+            {
+                OcrFilterCombo.SelectedItem = item;
+                return;
+            }
+        OcrFilterCombo.SelectedIndex = 0;   // "off"
     }
 }

@@ -423,6 +423,36 @@
                                        Text="How strictly a new line must stay put for one read before it's translated. Higher = fewer false lines from flicker, but a touch slower to confirm real text."/>
                         </StackPanel>
 
+                        <!-- Background filter (optional pre-OCR clean-up) -->
+                        <StackPanel Margin="0,0,0,14">
+                            <TextBlock Text="Background filter" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextBrush}"/>
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMutedBrush}"
+                                       Margin="0,2,0,4"
+                                       Text="Clean up the moving 3D scene behind the chat before reading. 'Boost contrast' keeps bright text of any colour; 'Keep one colour' isolates a single chat channel by its colour (paste a hex like #FFDC50 and widen the tolerance until only that channel shows)."/>
+                            <ComboBox x:Name="OcrFilterCombo" Width="260" HorizontalAlignment="Left"
+                                      SelectionChanged="OcrFilterCombo_Changed">
+                                <ComboBoxItem Content="Off" Tag="off"/>
+                                <ComboBoxItem Content="Boost contrast (any colour)" Tag="contrast"/>
+                                <ComboBoxItem Content="Keep one colour" Tag="color"/>
+                            </ComboBox>
+                            <StackPanel x:Name="OcrColorOptions" Orientation="Horizontal" Margin="0,8,0,0"
+                                        Visibility="Collapsed">
+                                <TextBlock Text="Colour" VerticalAlignment="Center"
+                                           Foreground="{StaticResource TextMutedBrush}"/>
+                                <TextBox x:Name="OcrColorHexBox" Width="90" Margin="6,0,0,0"
+                                         VerticalContentAlignment="Center" Text="#FFFFFF"
+                                         LostFocus="OcrColorHex_LostFocus"/>
+                                <TextBlock Text="tolerance" VerticalAlignment="Center" Margin="14,0,0,0"
+                                           Foreground="{StaticResource TextMutedBrush}"/>
+                                <Slider x:Name="OcrToleranceSlider" Minimum="0" Maximum="441" Value="70" Width="130"
+                                        VerticalAlignment="Center" Margin="6,0,0,0"
+                                        ValueChanged="OcrTolerance_Changed"/>
+                                <TextBlock x:Name="OcrToleranceValue" Text="70" VerticalAlignment="Center"
+                                           Margin="6,0,0,0" Foreground="{StaticResource GoldBrush}" FontWeight="Bold"/>
+                            </StackPanel>
+                        </StackPanel>
+
                         <!-- Screen OCR settings: Russian OCR language pack -->
                         <Border x:Name="OcrSettingsPanel" Margin="0,0,0,10"
                                 Background="{StaticResource PanelBrush}" CornerRadius="8"

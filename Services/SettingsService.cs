@@ -32,6 +32,12 @@ public class AppSettings
     // settings file like every other preference.
     public string DeepLApiKey { get; set; } = "";
 
+    // Optional pre-OCR background filter (helps read chat over a busy 3D scene).
+    // "off" (default) · "contrast" (brightness boost, any colour) · "color" (keep one chat colour).
+    public string OcrFilterMode { get; set; } = "off";
+    public string OcrKeepColorHex { get; set; } = "#FFFFFF";   // target colour for "color" mode
+    public int OcrColorTolerance { get; set; } = 70;           // RGB distance kept around the target
+
     // Window / behaviour
     public bool AlwaysOnTop { get; set; } = true;
     public bool AutoCopyTranslation { get; set; } = true;
@@ -99,6 +105,9 @@ public static class SettingsService
         s.TranslatorTo ??= "ru";
         s.MyLanguage ??= "en";
         s.DeepLApiKey ??= "";
+        s.OcrFilterMode = s.OcrFilterMode is "contrast" or "color" ? s.OcrFilterMode : "off";
+        s.OcrKeepColorHex ??= "#FFFFFF";
+        s.OcrColorTolerance = Math.Clamp(s.OcrColorTolerance, 0, 441);
         if (s.LastLiveRegion is { Length: not 4 }) s.LastLiveRegion = null;
         return s;
     }

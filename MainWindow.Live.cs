@@ -175,10 +175,11 @@ public partial class MainWindow
                 LiveIndicator.Text = (_liveTicks % 2 == 0) ? "●  LIVE" : "○  LIVE";  // heartbeat
 
                 using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
+                using var forOcr = ApplyOcrFilter(bmp);   // null when the filter is off
                 int minLetters = MinFragmentLetters();
                 // Split into whole chat messages by their "[Channel] Nick:" structure rather than
                 // by punctuation (players rarely type any) — see TextMatching.SplitChatMessages.
-                var lines = TextMatching.SplitChatMessages(await _ocr.ReadLinesAsync(bmp))
+                var lines = TextMatching.SplitChatMessages(await _ocr.ReadLinesAsync(forOcr ?? bmp))
                     .Select(TextMatching.StripNoise)                    // drop animated-emoji artifacts
                     .Where(l => TextMatching.LooksLikeText(l, minLetters)).ToList();
                 if (ct.IsCancellationRequested) break;

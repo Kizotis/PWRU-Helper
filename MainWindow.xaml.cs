@@ -130,6 +130,10 @@ public partial class MainWindow : Window
         DeepLKeyBox.Password = s.DeepLApiKey ?? "";
         UpdateDeepLStatus();
 
+        OcrColorHexBox.Text = s.OcrKeepColorHex ?? "#FFFFFF";
+        OcrToleranceSlider.Value = Math.Clamp(s.OcrColorTolerance, 0, 441);
+        SetOcrFilterCombo(s.OcrFilterMode ?? "off");   // fires the change handler → sets visibility/label
+
         UpdateResumeLiveButton();
         ApplyFontScale();
     }
