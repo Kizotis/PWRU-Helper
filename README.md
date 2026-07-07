@@ -1,13 +1,13 @@
 <div align="center">
 
-<img src="assets/icon.png" width="140" alt="PWRU Helper icon"/>
-
 # PWRU Helper
 
 **A free little app to chat, read and translate Russian faster while playing on the
 Perfect World RU server ([pwonline.ru](https://pwonline.ru/)).**
 
 Made for English/French (and now Spanish/German) speakers who play on the Russian server.
+
+[![Download PWRU Helper for Windows](https://img.shields.io/badge/⬇%20Download%20for%20Windows-2ea44f?style=for-the-badge&logo=windows&logoColor=white)](../../releases/latest)
 
 </div>
 
@@ -17,7 +17,7 @@ Made for English/French (and now Spanish/German) speakers who play on the Russia
 
 ## 🎥 See it in action
 
-[![Watch the PWRU Helper demo on YouTube](https://img.youtube.com/vi/ibonXRB0vsI/hqdefault.jpg)](https://www.youtube.com/watch?v=ibonXRB0vsI)
+[![Watch the PWRU Helper demo on YouTube](https://img.youtube.com/vi/6WpfOJiD4XU/hqdefault.jpg)](https://www.youtube.com/watch?v=6WpfOJiD4XU)
 
 *(click to watch on YouTube)*
 
@@ -62,7 +62,13 @@ roles and columns without touching the code.
 
 ## ⬇️ Download & use
 
-Go to the **[Releases](../../releases)** page and pick whichever you prefer:
+<div align="center">
+
+[![Download PWRU Helper for Windows](https://img.shields.io/badge/⬇%20Download%20Latest%20Version-2ea44f?style=for-the-badge&logo=windows&logoColor=white)](../../releases/latest)
+
+</div>
+
+Both builds are on the **[Releases](../../releases)** page — pick whichever you prefer:
 
 - **`PWRUHelper.exe`** — *no installation.* Download and double-click; everything is inside
   the one file. Great for putting it on a USB stick or running it anywhere.
