@@ -3,6 +3,7 @@
   "entries": [
     { "keys": ["в"], "meaning": "LFM (looking for members)", "context": true },
     { "keys": ["лфг", "lfg"], "meaning": "LFG (looking for group)", "full": "ищу группу" },
+    { "keys": ["стук"], "meaning": "knock — whisper me for an invite", "full": "напишите мне для приглашения" },
     { "keys": ["или"], "meaning": "or", "context": true },
 
     { "keys": ["ара", "апа", "apa"], "meaning": "Cave of Eternity (EU/AEU — low/high)", "category": "dungeon" },
