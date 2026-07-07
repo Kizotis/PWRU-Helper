@@ -412,11 +412,11 @@
                             <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                                 <TextBlock Text="Stability" FontWeight="SemiBold"
                                            Foreground="{StaticResource TextBrush}" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="StabilityValue" Text="49%" Margin="8,0,0,0"
+                                <TextBlock x:Name="StabilityValue" Text="60%" Margin="8,0,0,0"
                                            Foreground="{StaticResource GoldBrush}" FontWeight="Bold"
                                            VerticalAlignment="Center"/>
                             </StackPanel>
-                            <Slider x:Name="StabilitySlider" Minimum="0" Maximum="100" Value="49"
+                            <Slider x:Name="StabilitySlider" Minimum="0" Maximum="100" Value="60"
                                     TickFrequency="10" Width="280" HorizontalAlignment="Left"
                                     Margin="0,4,0,2" ValueChanged="StabilitySlider_ValueChanged"/>
                             <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMutedBrush}"

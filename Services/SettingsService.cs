@@ -16,9 +16,9 @@ public class AppSettings
 
     // Fine OCR tuning (live mode). MinFragmentLetters = the smallest text fragment (in
     // letters) worth translating; StabilityPercent = how strictly a newly-appeared line
-    // must persist across a frame before it's treated as a real message (→ ~0.72 by default).
+    // must persist across a frame before it's treated as a real message (→ ~0.77 by default).
     public int MinFragmentLetters { get; set; } = 2;
-    public int StabilityPercent { get; set; } = 49;   // → StabilityThreshold() ≈ 0.72
+    public int StabilityPercent { get; set; } = 60;   // → StabilityThreshold() ≈ 0.77
     public string OcrTargetLang { get; set; } = "en";
     public string TranslatorFrom { get; set; } = "en";
     public string TranslatorTo { get; set; } = "ru";
@@ -33,8 +33,8 @@ public class AppSettings
     public string DeepLApiKey { get; set; } = "";
 
     // Optional pre-OCR background filter (helps read chat over a busy 3D scene).
-    // "off" (default) · "contrast" (brightness boost, any colour) · "color" (keep one chat colour).
-    public string OcrFilterMode { get; set; } = "off";
+    // "contrast" (default — brightness boost, any colour) · "off" · "color" (keep one chat colour).
+    public string OcrFilterMode { get; set; } = "contrast";
     public string OcrKeepColorHex { get; set; } = "#FFFFFF";   // target colour for "color" mode
     public int OcrColorTolerance { get; set; } = 70;           // RGB distance kept around the target
 

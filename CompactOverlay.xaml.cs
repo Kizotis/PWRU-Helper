@@ -1,8 +1,8 @@
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Windows;
-using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Threading;
 using PWRUHelper.Services;
 
@@ -188,10 +188,58 @@ public partial class CompactOverlay : Window
             error ? "AccentBrush" : "GoldBrush");
     }
 
-    private void ResizeGrip_DragDelta(object sender, DragDeltaEventArgs e)
+    // ===== Resize from any edge/corner, like a normal window =====
+    // The overlay is a borderless (WindowStyle=None + AllowsTransparency) window, so it has no
+    // native sizing border. We hook WM_NCHITTEST and report the cursor as sitting on a window
+    // edge/corner when it's within ResizeBorder of one; Windows then does the real resize —
+    // native cursors, edge snapping, MinWidth/MinHeight all handled by the OS. (Replaces the old
+    // bottom-right-only drag grip.)
+    private const double ResizeBorder = 8.0;   // DIP band around the edge that starts a resize
+
+    private const int WM_NCHITTEST = 0x0084;
+    private const int HTCLIENT = 1, HTLEFT = 10, HTRIGHT = 11, HTTOP = 12, HTTOPLEFT = 13,
+        HTTOPRIGHT = 14, HTBOTTOM = 15, HTBOTTOMLEFT = 16, HTBOTTOMRIGHT = 17;
+
+    protected override void OnSourceInitialized(EventArgs e)
     {
-        Width = Math.Max(MinWidth, Width + e.HorizontalChange);
-        Height = Math.Max(MinHeight, Height + e.VerticalChange);
+        base.OnSourceInitialized(e);
+        ((HwndSource)PresentationSource.FromVisual(this)!).AddHook(WndProc);
+    }
+
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg != WM_NCHITTEST) return IntPtr.Zero;
+
+        // lParam packs the cursor's SCREEN position (physical px) as two signed 16-bit halves.
+        long lp = lParam.ToInt64();
+        var screen = new Point((short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF));
+
+        // Into window-local DIPs: (0,0) = top-left, (ActualWidth, ActualHeight) = bottom-right.
+        var p = PointFromScreen(screen);
+        int hit = ResizeHitTest(p.X, p.Y, ActualWidth, ActualHeight, ResizeBorder);
+        if (hit == 0) return IntPtr.Zero;   // interior → let WPF route the input normally
+
+        handled = true;
+        return (IntPtr)hit;
+    }
+
+    /// <summary>Which window edge/corner (a Win32 HT* code) the point (<paramref name="x"/>,
+    /// <paramref name="y"/>) sits on within <paramref name="border"/> DIPs of the window's
+    /// bounds, or 0 for the interior. Pure geometry so it can be unit-tested.</summary>
+    internal static int ResizeHitTest(double x, double y, double w, double h, double border)
+    {
+        bool left = x <= border, right = x >= w - border;
+        bool top = y <= border, bottom = y >= h - border;
+
+        if (top && left) return HTTOPLEFT;
+        if (top && right) return HTTOPRIGHT;
+        if (bottom && left) return HTBOTTOMLEFT;
+        if (bottom && right) return HTBOTTOMRIGHT;
+        if (left) return HTLEFT;
+        if (right) return HTRIGHT;
+        if (top) return HTTOP;
+        if (bottom) return HTBOTTOM;
+        return 0;   // interior
     }
 
     protected override void OnClosing(CancelEventArgs e)
