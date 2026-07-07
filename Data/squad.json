@@ -24,6 +24,11 @@
     ]}
   ],
   "classes": [
+    { "title": "Role", "items": [
+      { "code": "DD",    "ru": "дд",   "name": "any DD",               "token": "дд" },
+      { "code": "Heal",  "ru": "хил",  "name": "any healer",           "token": "хил" },
+      { "code": "Knock", "ru": "стук", "name": "whisper me to invite", "token": "стук" }
+    ]},
     { "title": "DD", "items": [
       { "code": "Sin",    "ru": "син",          "name": "assassin",   "token": "син" },
       { "code": "EA",     "ru": "лук",          "name": "archer",     "token": "лук" },
