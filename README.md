@@ -53,9 +53,10 @@ translations underneath.
 
 **4. Squad builder** — tick the **dungeon(s)**, **class(es)** and **role(s)** you're looking
 for and it builds the Russian group-forming (LFM) message for you — e.g. tick *Terrace
-legendary* + *cleric* + *BM* + *DD* and copy `в лега прист вар дд` straight into chat. The
-lists live in their own editable `squad.json` (next to the app, or in `%AppData%\PWRUHelper\`),
-so you can add dungeons, classes and columns without touching the code.
+legendary* + *DD* + *Healer* + *Knock* and copy `в лега дд хил стук` straight into chat (that
+last one, *стук*, asks people to whisper you for an invite). The lists live in their own editable
+`squad.json` (next to the app, or in `%AppData%\PWRUHelper\`), so you can add dungeons, classes,
+roles and columns without touching the code.
 
 ---
 
@@ -104,7 +105,8 @@ The app makes this easy: open the **Screen OCR** tab and click
 - **Compact overlay:** click **"⤡ Compact"** (or **Ctrl+Alt+M**) to shrink to a small
   always-on-top window — just the live feed plus a one-line reply box (type → Enter →
   Russian, copied). If your reply is too long for one chat message, it's **split into
-  numbered blocks** you copy and send one after another. Click **⤢** to go back to the full window.
+  numbered blocks** you copy and send one after another. Drag the **title bar** to move it and
+  **any edge or corner** to resize it, like a normal window. Click **⤢** to go back to the full window.
 - **Global shortcuts** (work while you're in the game):
   **Ctrl+Alt+P** brings the app to the front · **Ctrl+Alt+T** jumps to the translator ·
   **Ctrl+Alt+L** starts/stops live translation · **Ctrl+Alt+M** toggles the compact overlay ·
