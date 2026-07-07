@@ -332,8 +332,8 @@ public partial class MainWindow
     /// (fewer false positives from OCR noise, but slightly slower to confirm real text).</summary>
     private double StabilityThreshold()
     {
-        double v = StabilitySlider?.Value ?? 49;        // default matches the XAML slider
-        return 0.50 + (v / 100.0) * 0.45;               // 0.50 (loose) … 0.95 (strict), ≈0.72 at 49%
+        double v = StabilitySlider?.Value ?? 60;        // default matches the XAML slider
+        return 0.50 + (v / 100.0) * 0.45;               // 0.50 (loose) … 0.95 (strict), ≈0.77 at 60%
     }
 
     /// <summary>Live re-read interval from the speed slider (higher speed = shorter wait).</summary>
