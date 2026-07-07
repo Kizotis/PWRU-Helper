@@ -1,6 +1,7 @@
 using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
+using PWRUHelper.Services;
 
 namespace PWRUHelper;
 
@@ -26,11 +27,16 @@ public partial class App : Application
         // friendly message and keep running where we safely can.
         DispatcherUnhandledException += OnUnhandledException;
 
+        // Session marker in the log — makes it easy to see where one run ends and the next
+        // begins when reading a copied error report.
+        Logging.Info($"--- PWRU Helper v{UpdateService.CurrentVersion.ToString(3)} starting ---");
+
         base.OnStartup(e);
     }
 
     private void OnUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
+        Logging.Error("Unhandled UI exception", e.Exception);
         MessageBox.Show($"Something went wrong:\n\n{e.Exception.Message}\n\n" +
                         "The app will try to keep running. If it misbehaves, restart it.",
                         "PWRU Helper", MessageBoxButton.OK, MessageBoxImage.Warning);

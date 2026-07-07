@@ -1061,6 +1061,7 @@ public partial class MainWindow : Window
                 if (ct.IsCancellationRequested) break;
                 if (++consecutiveErrors >= 5)
                 {
+                    Services.Logging.Error("Live translation auto-stopped after 5 consecutive errors", ex);
                     StopLive();   // this sets "Live stopped." first…
                     SetLiveStatus($"Live stopped after repeated errors ({Friendly(ex)}).");   // …then the real reason
                     break;
@@ -1275,6 +1276,18 @@ public partial class MainWindow : Window
     private async void CopyDiscord_Click(object sender, RoutedEventArgs e)
     {
         if (await CopyToClipboardAsync("kizotis")) ShowToast("Discord copied: kizotis");
+    }
+
+    private async void CopyErrorReport_Click(object sender, RoutedEventArgs e)
+    {
+        var report = Services.Logging.ReadRecent();
+        if (string.IsNullOrWhiteSpace(report))
+        {
+            ShowToast("No errors logged — nothing to copy 🙂");
+            return;
+        }
+        if (await CopyToClipboardAsync(report))
+            ShowToast("Error report copied — paste it to me on Discord");
     }
 
     // Single source of truth for the language dropdowns (was duplicated 3× in XAML).
