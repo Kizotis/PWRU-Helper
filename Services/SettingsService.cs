@@ -27,6 +27,21 @@ public class AppSettings
     // Tracked separately so the translator's auto-flip-to-Russian can't corrupt it.
     public string MyLanguage { get; set; } = "en";
 
+    // Optional DeepL API key. Empty = use the free Google endpoint (the default). When set, the
+    // app translates via DeepL and falls back to Google if DeepL fails. Stored in the local
+    // settings file like every other preference.
+    public string DeepLApiKey { get; set; } = "";
+
+    // Optional pre-OCR background filter (helps read chat over a busy 3D scene).
+    // "off" (default) · "contrast" (brightness boost, any colour) · "color" (keep one chat colour).
+    public string OcrFilterMode { get; set; } = "off";
+    public string OcrKeepColorHex { get; set; } = "#FFFFFF";   // target colour for "color" mode
+    public int OcrColorTolerance { get; set; } = 70;           // RGB distance kept around the target
+
+    // Screen-capture backend: "gdi" (default) or "wgc" (experimental Windows.Graphics.Capture,
+    // for full-screen games where GDI returns black). WGC falls back to GDI on any failure.
+    public string CaptureBackend { get; set; } = "gdi";
+
     // Window / behaviour
     public bool AlwaysOnTop { get; set; } = true;
     public bool AutoCopyTranslation { get; set; } = true;
@@ -93,6 +108,11 @@ public static class SettingsService
         s.TranslatorFrom ??= "en";
         s.TranslatorTo ??= "ru";
         s.MyLanguage ??= "en";
+        s.DeepLApiKey ??= "";
+        s.OcrFilterMode = s.OcrFilterMode is "contrast" or "color" ? s.OcrFilterMode : "off";
+        s.OcrKeepColorHex ??= "#FFFFFF";
+        s.OcrColorTolerance = Math.Clamp(s.OcrColorTolerance, 0, 441);
+        s.CaptureBackend = s.CaptureBackend == "wgc" ? "wgc" : "gdi";
         if (s.LastLiveRegion is { Length: not 4 }) s.LastLiveRegion = null;
         return s;
     }

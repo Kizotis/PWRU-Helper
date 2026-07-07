@@ -423,6 +423,51 @@
                                        Text="How strictly a new line must stay put for one read before it's translated. Higher = fewer false lines from flicker, but a touch slower to confirm real text."/>
                         </StackPanel>
 
+                        <!-- Background filter (optional pre-OCR clean-up) -->
+                        <StackPanel Margin="0,0,0,14">
+                            <TextBlock Text="Background filter" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextBrush}"/>
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMutedBrush}"
+                                       Margin="0,2,0,4"
+                                       Text="Clean up the moving 3D scene behind the chat before reading. 'Boost contrast' keeps bright text of any colour; 'Keep one colour' isolates a single chat channel by its colour (paste a hex like #FFDC50 and widen the tolerance until only that channel shows)."/>
+                            <ComboBox x:Name="OcrFilterCombo" Width="260" HorizontalAlignment="Left"
+                                      SelectionChanged="OcrFilterCombo_Changed">
+                                <ComboBoxItem Content="Off" Tag="off"/>
+                                <ComboBoxItem Content="Boost contrast (any colour)" Tag="contrast"/>
+                                <ComboBoxItem Content="Keep one colour" Tag="color"/>
+                            </ComboBox>
+                            <StackPanel x:Name="OcrColorOptions" Orientation="Horizontal" Margin="0,8,0,0"
+                                        Visibility="Collapsed">
+                                <TextBlock Text="Colour" VerticalAlignment="Center"
+                                           Foreground="{StaticResource TextMutedBrush}"/>
+                                <TextBox x:Name="OcrColorHexBox" Width="90" Margin="6,0,0,0"
+                                         VerticalContentAlignment="Center" Text="#FFFFFF"
+                                         TextChanged="OcrColorHex_Changed"
+                                         LostFocus="OcrColorHex_LostFocus"/>
+                                <TextBlock Text="tolerance" VerticalAlignment="Center" Margin="14,0,0,0"
+                                           Foreground="{StaticResource TextMutedBrush}"/>
+                                <Slider x:Name="OcrToleranceSlider" Minimum="0" Maximum="441" Value="70" Width="130"
+                                        VerticalAlignment="Center" Margin="6,0,0,0"
+                                        ValueChanged="OcrTolerance_Changed"/>
+                                <TextBlock x:Name="OcrToleranceValue" Text="70" VerticalAlignment="Center"
+                                           Margin="6,0,0,0" Foreground="{StaticResource GoldBrush}" FontWeight="Bold"/>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!-- Capture method -->
+                        <StackPanel Margin="0,0,0,14">
+                            <TextBlock Text="Capture method" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextBrush}"/>
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMutedBrush}"
+                                       Margin="0,2,0,4"
+                                       Text="How the screen is grabbed. Default (GDI) works for windowed / borderless games. Try 'Windows Graphics (experimental)' only if capture comes out black in full-screen — it automatically falls back to GDI if it can't run."/>
+                            <ComboBox x:Name="CaptureBackendCombo" Width="300" HorizontalAlignment="Left"
+                                      SelectionChanged="CaptureBackend_Changed">
+                                <ComboBoxItem Content="Default (GDI)" Tag="gdi"/>
+                                <ComboBoxItem Content="Windows Graphics — experimental" Tag="wgc"/>
+                            </ComboBox>
+                        </StackPanel>
+
                         <!-- Screen OCR settings: Russian OCR language pack -->
                         <Border x:Name="OcrSettingsPanel" Margin="0,0,0,10"
                                 Background="{StaticResource PanelBrush}" CornerRadius="8"
@@ -478,6 +523,14 @@
                         <TextBlock Text="A free helper for the Perfect World RU (pwonline.ru) community."
                                    Foreground="{StaticResource TextMutedBrush}" Margin="0,2,0,0" TextWrapping="Wrap"/>
 
+                        <!-- updates -->
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button Content="⭳ Check for updates" Style="{StaticResource GhostButton}" Padding="10,4"
+                                    Click="CheckForUpdates_Click"/>
+                            <TextBlock x:Name="UpdateStatus" VerticalAlignment="Center" Margin="10,0,0,0"
+                                       TextWrapping="Wrap" Foreground="{StaticResource TextMutedBrush}"/>
+                        </StackPanel>
+
                         <!-- free-project message -->
                         <Border Background="{StaticResource PanelBrush}" CornerRadius="8"
                                 BorderBrush="{StaticResource GoldBrush}" BorderThickness="1"
@@ -515,6 +568,23 @@
                         <!-- Made visible in code (OnSourceInitialized) listing any combo another app already owns -->
                         <TextBlock x:Name="HotkeyWarning" Margin="0,8,0,0" TextWrapping="Wrap"
                                    Visibility="Collapsed" Foreground="{StaticResource GoldBrush}"/>
+
+                        <!-- optional DeepL key -->
+                        <TextBlock Text="Better translations (optional)" FontSize="15" FontWeight="Bold"
+                                   Foreground="{StaticResource GoldBrush}" Margin="0,18,0,6"/>
+                        <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextMutedBrush}" Margin="0,0,0,6">
+                            <Run Text="By default translation uses Google (free, no setup). If you have a free "/><Hyperlink
+                                    NavigateUri="https://www.deepl.com/pro-api" RequestNavigate="OpenLink"
+                                    Foreground="{StaticResource TealBrush}">DeepL API key</Hyperlink><Run
+                                    Text=" you can paste it here for higher-quality translations — the app falls back to Google if DeepL is unavailable. The key is stored only on your PC."/>
+                        </TextBlock>
+                        <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                            <PasswordBox x:Name="DeepLKeyBox" Width="300" VerticalContentAlignment="Center"/>
+                            <Button Content="Save" Style="{StaticResource GhostButton}" Padding="12,4"
+                                    Margin="8,0,0,0" Click="DeepLSaveKey_Click"/>
+                        </StackPanel>
+                        <TextBlock x:Name="DeepLStatus" Margin="0,6,0,0" FontSize="12"
+                                   Foreground="{StaticResource TextMutedBrush}"/>
 
                         <!-- troubleshooting -->
                         <TextBlock Text="Something went wrong?" FontSize="15" FontWeight="Bold"

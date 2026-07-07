@@ -69,3 +69,29 @@ jobs:
             dist/PWRUHelper.exe
             dist/PWRUHelper-*-setup.msi
           generate_release_notes: true
+
+      # Opens/updates the winget-pkgs PR for this release. Opt-in: only runs on a real tag and
+      # only when a WINGET_TOKEN secret (a GitHub PAT that can fork/PR microsoft/winget-pkgs) is
+      # set — otherwise it prints how to enable it and exits cleanly.
+      # NOTE: `update` needs the package to already exist on winget; do the very first submission
+      # once by hand with `wingetcreate new` (see packaging/DISTRIBUTION.md).
+      # continue-on-error: the release itself is already published by the previous step — a
+      # winget hiccup (first-ever submission, aka.ms outage, PR conflict) must not turn the
+      # whole release run red.
+      - name: Submit to winget (if configured)
+        if: startsWith(github.ref, 'refs/tags/v')
+        continue-on-error: true
+        shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          if (-not $env:WINGET_TOKEN) {
+            Write-Host "WINGET_TOKEN secret not set — skipping winget submission."
+            Write-Host "To enable: create a classic PAT with 'public_repo' scope and add it as the"
+            Write-Host "repository secret WINGET_TOKEN. Then each tagged release auto-opens a winget PR."
+            exit 0
+          }
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $msiUrl  = "https://github.com/Kizotis/PWRU-Helper/releases/download/${{ github.ref_name }}/PWRUHelper-$version-setup.msi"
+          Invoke-WebRequest https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+          ./wingetcreate.exe update Kizotis.PWRUHelper --version $version --urls "$msiUrl" --submit --token $env:WINGET_TOKEN

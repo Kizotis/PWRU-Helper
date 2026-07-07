@@ -1,8 +1,8 @@
 {
-  "_comment": "Perfect World RU chat slang. 'keys' are the Russian (or look-alike) tokens seen in chat; 'meaning' is the English/community reading shown under the translation. Add your own lines any time. 'context': true means it is only decoded when another slang term is on the same line (avoids false hits on the very common word). 'category' (class | dungeon | role) makes the entry appear as a tick-box in the Squad tab — its first key is what gets pasted into chat.",
+  "_comment": "Perfect World RU chat slang. 'keys' are the Russian (or look-alike) tokens seen in chat; 'meaning' is the English/community reading shown under the translation. Add your own lines any time. 'context': true means it is only decoded when another slang term is on the same line (avoids false hits on the very common word). 'category' (class | dungeon | role) makes the entry appear as a tick-box in the Squad tab — its first key is what gets pasted into chat. 'full' (optional): a RUSSIAN long form used to rewrite the term BEFORE translation so the English reads properly (e.g. 'хил' -> 'лекарь' -> 'healer'); leave it out to keep the term as-is. Only add a 'full' when you're sure of the Russian word — a wrong one makes the translation worse.",
   "entries": [
     { "keys": ["в"], "meaning": "LFM (looking for members)", "context": true },
-    { "keys": ["лфг", "lfg"], "meaning": "LFG (looking for group)" },
+    { "keys": ["лфг", "lfg"], "meaning": "LFG (looking for group)", "full": "ищу группу" },
     { "keys": ["или"], "meaning": "or", "context": true },
 
     { "keys": ["ара", "апа", "apa"], "meaning": "Cave of Eternity (EU/AEU — low/high)", "category": "dungeon" },
@@ -17,14 +17,14 @@
     { "keys": ["5-2"], "meaning": "Terrace of Dreams — hard (5-2)", "category": "dungeon" },
     { "keys": ["5-3", "лега"], "meaning": "Terrace of Dreams — legendary (5-3)", "category": "dungeon" },
     { "keys": ["простой"], "meaning": "normal (5-1)", "context": true },
-    { "keys": ["сложка"], "meaning": "hard (5-2)" },
+    { "keys": ["сложка"], "meaning": "hard (5-2)", "full": "сложный режим" },
     { "keys": ["хс"], "meaning": "Temple of Elements (UCH)", "category": "dungeon" },
     { "keys": ["ла", "999"], "meaning": "Ice Hell (IU/999)", "category": "dungeon" },
     { "keys": ["др"], "meaning": "Dawn Palace (JDH)", "category": "dungeon" },
     { "keys": ["ор"], "meaning": "Knights Island (ICW)", "category": "dungeon" },
 
     { "keys": ["дд"], "meaning": "DD (damage dealer)", "category": "role" },
-    { "keys": ["хил"], "meaning": "heal", "category": "role" },
+    { "keys": ["хил"], "meaning": "heal", "category": "role", "full": "лекарь" },
     { "keys": ["танк"], "meaning": "tank", "category": "role" },
 
     { "keys": ["прист"], "meaning": "cleric (EP)", "category": "class" },
