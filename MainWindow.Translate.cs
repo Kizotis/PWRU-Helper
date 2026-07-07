@@ -79,7 +79,12 @@ public partial class MainWindow
         TranslateStatus.Text = "Translating…";
         try
         {
-            var result = await _translator.TranslateAsync(text, from, to);
+            // When the effective source is Russian, expand known slang to its long form BEFORE
+            // translating — exactly like the live path does (see TranslateBodiesAsync). Only the
+            // string SENT to the translator changes; TranslateInput/TranslateOutput keep showing
+            // the user's raw text. Don't expand when the source isn't Russian.
+            var toTranslate = from == "ru" ? _slang.Expand(text) : text;
+            var result = await _translator.TranslateAsync(toTranslate, from, to);
             TranslateOutput.Text = result;
             TranslateStatus.Text = $"{from} → {to}";
 

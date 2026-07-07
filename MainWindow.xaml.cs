@@ -22,6 +22,12 @@ public partial class MainWindow : Window
     private CollectionViewSource? _phrasesView;
     private bool _recentsDirty;   // a phrase was copied; refresh "Recent" next time the tab is shown
 
+    // True only while ApplySettings is pushing saved values into the controls. Change handlers
+    // (SaveOcrFilterSettings, CaptureBackend_Changed) fire as a side effect of setting a slider /
+    // combo, and would then write the half-restored UI state back to disk — clobbering the very
+    // settings we're restoring. They bail out early while this is set.
+    private bool _restoringSettings;
+
     // Built from settings in the constructor: DeepL (with Google fallback) when an API key is
     // set, otherwise Google — wrapped in a cache either way. Rebuilt when the key changes.
     private ITranslator _translator;
@@ -104,41 +110,52 @@ public partial class MainWindow : Window
     // ============================================================
     private void ApplySettings()
     {
-        var s = _settings;
-        SelectTag(FromCombo, s.TranslatorFrom);
-        SelectTag(ToCombo, s.TranslatorTo);
-        SelectTag(OcrTargetCombo, s.OcrTargetLang);
-        SensitivitySlider.Value = Math.Clamp(s.SensitivityPercent, 0, 100);
-        LiveSpeedSlider.Value = Math.Clamp(s.LiveSpeedPercent, 0, 100);
-        MinFragmentSlider.Value = Math.Clamp(s.MinFragmentLetters, 1, 6);
-        StabilitySlider.Value = Math.Clamp(s.StabilityPercent, 0, 100);
-        TopmostCheck.IsChecked = s.AlwaysOnTop;
-        Topmost = s.AlwaysOnTop;
-        AutoCopyCheck.IsChecked = s.AutoCopyTranslation;
-        if (s.LastTab >= 0 && s.LastTab < MainTabs.Items.Count)
-            MainTabs.SelectedIndex = s.LastTab;
-
-        // Restore window placement only if it still lands on a visible monitor.
-        if (s.WindowLeft is { } l && s.WindowTop is { } t &&
-            s.WindowWidth is > 200 and { } w && s.WindowHeight is > 200 and { } h &&
-            IsOnScreen(l, t, w, h))
+        // Suppress the OCR-filter / capture-backend change handlers for the whole restore: setting
+        // a slider or combo below fires them, and they'd write the half-restored UI state back to
+        // disk (e.g. clobber a saved "color" mode with "off" because the combo isn't set yet).
+        _restoringSettings = true;
+        try
         {
-            WindowStartupLocation = WindowStartupLocation.Manual;
-            Left = l; Top = t; Width = w; Height = h;
+            var s = _settings;
+            SelectTag(FromCombo, s.TranslatorFrom);
+            SelectTag(ToCombo, s.TranslatorTo);
+            SelectTag(OcrTargetCombo, s.OcrTargetLang);
+            SensitivitySlider.Value = Math.Clamp(s.SensitivityPercent, 0, 100);
+            LiveSpeedSlider.Value = Math.Clamp(s.LiveSpeedPercent, 0, 100);
+            MinFragmentSlider.Value = Math.Clamp(s.MinFragmentLetters, 1, 6);
+            StabilitySlider.Value = Math.Clamp(s.StabilityPercent, 0, 100);
+            TopmostCheck.IsChecked = s.AlwaysOnTop;
+            Topmost = s.AlwaysOnTop;
+            AutoCopyCheck.IsChecked = s.AutoCopyTranslation;
+            if (s.LastTab >= 0 && s.LastTab < MainTabs.Items.Count)
+                MainTabs.SelectedIndex = s.LastTab;
+
+            // Restore window placement only if it still lands on a visible monitor.
+            if (s.WindowLeft is { } l && s.WindowTop is { } t &&
+                s.WindowWidth is > 200 and { } w && s.WindowHeight is > 200 and { } h &&
+                IsOnScreen(l, t, w, h))
+            {
+                WindowStartupLocation = WindowStartupLocation.Manual;
+                Left = l; Top = t; Width = w; Height = h;
+            }
+
+            DeepLKeyBox.Password = s.DeepLApiKey ?? "";
+            UpdateDeepLStatus();
+
+            OcrColorHexBox.Text = s.OcrKeepColorHex ?? "#FFFFFF";
+            OcrToleranceSlider.Value = Math.Clamp(s.OcrColorTolerance, 0, 441);
+            SetOcrFilterCombo(s.OcrFilterMode ?? "off");
+            // The change handler is suppressed above, so apply the mode-dependent UI side-effects
+            // (colour-options panel visibility + tolerance label) it would otherwise have produced.
+            UpdateOcrFilterUi(s.OcrFilterMode ?? "off");
+
+            ScreenCapture.SetMode(s.CaptureBackend);
+            SetCaptureBackendCombo(s.CaptureBackend ?? "gdi");
+
+            UpdateResumeLiveButton();
+            ApplyFontScale();
         }
-
-        DeepLKeyBox.Password = s.DeepLApiKey ?? "";
-        UpdateDeepLStatus();
-
-        OcrColorHexBox.Text = s.OcrKeepColorHex ?? "#FFFFFF";
-        OcrToleranceSlider.Value = Math.Clamp(s.OcrColorTolerance, 0, 441);
-        SetOcrFilterCombo(s.OcrFilterMode ?? "off");   // fires the change handler → sets visibility/label
-
-        ScreenCapture.SetMode(s.CaptureBackend);
-        SetCaptureBackendCombo(s.CaptureBackend ?? "gdi");
-
-        UpdateResumeLiveButton();
-        ApplyFontScale();
+        finally { _restoringSettings = false; }
     }
 
     private static bool IsOnScreen(double left, double top, double w, double h)

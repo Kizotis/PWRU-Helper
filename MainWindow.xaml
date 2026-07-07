@@ -442,6 +442,7 @@
                                            Foreground="{StaticResource TextMutedBrush}"/>
                                 <TextBox x:Name="OcrColorHexBox" Width="90" Margin="6,0,0,0"
                                          VerticalContentAlignment="Center" Text="#FFFFFF"
+                                         TextChanged="OcrColorHex_Changed"
                                          LostFocus="OcrColorHex_LostFocus"/>
                                 <TextBlock Text="tolerance" VerticalAlignment="Center" Margin="14,0,0,0"
                                            Foreground="{StaticResource TextMutedBrush}"/>

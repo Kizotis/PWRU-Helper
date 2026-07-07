@@ -84,10 +84,27 @@ public class FallbackTranslatorTests
     [Fact]
     public async Task Cancellation_is_not_turned_into_a_fallback()
     {
+        // A GENUINE cancellation: the token passed to the wrapper IS cancelled and the primary
+        // throws an OCE bound to it. This must propagate — never silently fall back to Google.
+        var cts = new CancellationTokenSource();
+        cts.Cancel();
         var fallback = new Fake(() => "G");
-        var ft = new FallbackTranslator(new Fake(() => throw new OperationCanceledException()), fallback);
+        var ft = new FallbackTranslator(new Fake(() => throw new OperationCanceledException(cts.Token)), fallback);
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => ft.TranslateAsync("x", "ru", "en"));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => ft.TranslateAsync("x", "ru", "en", cts.Token));
         Assert.Equal(0, fallback.Calls);
+    }
+
+    [Fact]
+    public async Task Timeout_OCE_with_uncancelled_token_falls_back()
+    {
+        // On .NET 8 an HttpClient timeout arrives as a TaskCanceledException (subclass of OCE)
+        // with the caller's token NOT cancelled. That's a failure, not a cancellation — it must
+        // fall through to the fallback (Google) instead of propagating like a real stop.
+        var fallback = new Fake(() => "G");
+        var ft = new FallbackTranslator(new Fake(() => throw new TaskCanceledException()), fallback);
+
+        Assert.Equal("G", await ft.TranslateAsync("x", "ru", "en"));
+        Assert.Equal(1, fallback.Calls);
     }
 }

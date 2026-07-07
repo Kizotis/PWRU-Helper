@@ -247,7 +247,23 @@ public sealed class WgcCapture : ICaptureBackend
     {
         // The interop factory lives on GraphicsCaptureItem's activation factory, not on an instance.
         Guid interopIid = IID_IGraphicsCaptureItemInterop;
-        RoGetActivationFactory("Windows.Graphics.Capture.GraphicsCaptureItem", ref interopIid, out object factoryObj);
+
+        // .NET 5+ dropped built-in HSTRING marshalling (UnmanagedType.HString), so we build the
+        // activatableClassId HSTRING by hand and release it in finally — see the
+        // RoGetActivationFactory / WindowsCreateString declarations below.
+        const string className = "Windows.Graphics.Capture.GraphicsCaptureItem";
+        int hr = WindowsCreateString(className, className.Length, out IntPtr hClass);
+        if (hr != 0) Marshal.ThrowExceptionForHR(hr);
+
+        object factoryObj;
+        try
+        {
+            RoGetActivationFactory(hClass, ref interopIid, out factoryObj);
+        }
+        finally
+        {
+            WindowsDeleteString(hClass);
+        }
         var interop = (IGraphicsCaptureItemInterop)factoryObj;
 
         Guid itemIid = IID_GraphicsCaptureItem;
@@ -378,9 +394,15 @@ public sealed class WgcCapture : ICaptureBackend
     [DllImport("d3d11.dll", EntryPoint = "CreateDirect3D11DeviceFromDXGIDevice", ExactSpelling = true, PreserveSig = false)]
     private static extern void CreateDirect3D11DeviceFromDXGIDevice(IntPtr dxgiDevice, out IntPtr graphicsDevice);
 
+    // Built-in HSTRING marshalling (UnmanagedType.HString) was removed from the runtime in
+    // .NET 5+, so activatableClassId is passed as a raw HSTRING we create/destroy by hand
+    // (see CreateItemForMonitor) via WindowsCreateString / WindowsDeleteString.
     [DllImport("combase.dll", PreserveSig = false)]
-    private static extern void RoGetActivationFactory(
-        [MarshalAs(UnmanagedType.HString)] string activatableClassId,
-        [In] ref Guid iid,
-        [MarshalAs(UnmanagedType.Interface)] out object factory);
+    private static extern void RoGetActivationFactory(IntPtr activatableClassId, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out object factory);
+
+    [DllImport("combase.dll", ExactSpelling = true)]
+    private static extern int WindowsCreateString([MarshalAs(UnmanagedType.LPWStr)] string source, int length, out IntPtr hstring);
+
+    [DllImport("combase.dll", ExactSpelling = true)]
+    private static extern int WindowsDeleteString(IntPtr hstring);
 }

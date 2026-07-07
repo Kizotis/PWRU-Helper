@@ -46,10 +46,11 @@ public class DeepLTranslator : ITranslator
         var outp = await RequestAsync(lines, source, target, ct);
         if (outp.Count == lines.Count) return outp;
 
-        // Defensive: DeepL returns one translation per input, but never leave a null slot.
-        var result = new List<string>(lines.Count);
-        for (int i = 0; i < lines.Count; i++) result.Add(i < outp.Count ? outp[i] : lines[i]);
-        return result;
+        // DeepL returns exactly one translation per input, in order. A count mismatch means the
+        // response is malformed — throw so the Google fallback (see FallbackTranslator) takes over.
+        // (Previously we padded the missing slots with the untranslated source lines, but that
+        // bypassed the fallback AND cached raw Russian source as if it were a translation.)
+        throw new TranslationException("DeepL returned an unexpected response.");
     }
 
     private async Task<List<string>> RequestAsync(IReadOnlyList<string> texts, string source,
@@ -76,7 +77,15 @@ public class DeepLTranslator : ITranslator
         {
             resp = await Http.SendAsync(req, ct);
         }
-        catch (OperationCanceledException) { throw; }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (OperationCanceledException)
+        {
+            // On .NET 8 an HttpClient timeout surfaces as a TaskCanceledException (a subclass of
+            // OperationCanceledException) with the caller's ct NOT cancelled. Turn it into a
+            // TranslationException so the Google fallback kicks in instead of the raw OCE bubbling
+            // up past the FallbackTranslator (which correctly refuses to swallow real cancellations).
+            throw new TranslationException("DeepL timed out — check your connection or try again.");
+        }
         catch (HttpRequestException)
         {
             throw new TranslationException("Couldn't reach DeepL. Check your Internet connection.");

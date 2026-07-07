@@ -208,7 +208,13 @@ public partial class MainWindow
                 }
                 consecutiveErrors = 0;
             }
-            catch (OperationCanceledException) { break; }
+            // Only a genuine Stop (ct cancelled) breaks out cleanly. A translator TIMEOUT also
+            // arrives as an OperationCanceledException (TaskCanceledException) but with ct NOT
+            // cancelled — if we broke on that too, the loop would exit without StopLive()/
+            // SetLiveUi(false), leaving the indicator stuck on "LIVE" with no loop running.
+            // Let timeout-OCEs fall through to the generic handler below, which counts consecutive
+            // errors, retries, and auto-stops with proper UI cleanup.
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (Exception ex)
             {
                 if (ct.IsCancellationRequested) break;

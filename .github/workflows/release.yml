@@ -72,11 +72,15 @@ jobs:
 
       # Opens/updates the winget-pkgs PR for this release. Opt-in: only runs on a real tag and
       # only when a WINGET_TOKEN secret (a GitHub PAT that can fork/PR microsoft/winget-pkgs) is
-      # set — otherwise it prints how to enable it and exits cleanly, so it never fails a release.
+      # set — otherwise it prints how to enable it and exits cleanly.
       # NOTE: `update` needs the package to already exist on winget; do the very first submission
       # once by hand with `wingetcreate new` (see packaging/DISTRIBUTION.md).
+      # continue-on-error: the release itself is already published by the previous step — a
+      # winget hiccup (first-ever submission, aka.ms outage, PR conflict) must not turn the
+      # whole release run red.
       - name: Submit to winget (if configured)
         if: startsWith(github.ref, 'refs/tags/v')
+        continue-on-error: true
         shell: pwsh
         env:
           WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}

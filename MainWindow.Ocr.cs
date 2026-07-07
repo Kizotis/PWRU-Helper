@@ -291,38 +291,47 @@ public partial class MainWindow
         return null;
     }
 
-    // Three thin event handlers (different WPF delegate signatures) feed one save routine.
+    // Four thin event handlers (different WPF delegate signatures) feed one save routine. Hex is
+    // saved on every keystroke (TextChanged), not just LostFocus, so starting live via Ctrl+Alt+L
+    // while the caret is still in the box uses the colour the user just typed, not the stale one.
     private void OcrFilterCombo_Changed(object sender, SelectionChangedEventArgs e) => SaveOcrFilterSettings();
     private void OcrColorHex_LostFocus(object sender, RoutedEventArgs e) => SaveOcrFilterSettings();
+    private void OcrColorHex_Changed(object sender, TextChangedEventArgs e) => SaveOcrFilterSettings();
     private void OcrTolerance_Changed(object sender, RoutedPropertyChangedEventArgs<double> e) => SaveOcrFilterSettings();
 
     private void SaveOcrFilterSettings()
     {
+        // While ApplySettings is restoring the UI, setting the controls fires these handlers; writing
+        // the half-restored state back would clobber the very settings we're loading. Bail out.
+        if (_restoringSettings) return;
         // Handlers can fire while the XAML is still being built; ignore until all controls exist.
         if (OcrFilterCombo is null || OcrColorHexBox is null || OcrToleranceSlider is null) return;
 
-        var mode = (OcrFilterCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "off";
+        var mode = SelectedTag(OcrFilterCombo) ?? "off";
         _settings.OcrFilterMode = mode;
         _settings.OcrKeepColorHex = (OcrColorHexBox.Text ?? "#FFFFFF").Trim();
         _settings.OcrColorTolerance = (int)Math.Round(OcrToleranceSlider.Value);
 
+        UpdateOcrFilterUi(mode);
+
+        SettingsService.Save(_settings);
+    }
+
+    /// <summary>Sync the filter-mode-dependent UI (colour-options panel + tolerance label) to the
+    /// current settings. Shared by SaveOcrFilterSettings and the restore path in ApplySettings —
+    /// where the change handlers are suppressed — so the two can't drift apart.</summary>
+    private void UpdateOcrFilterUi(string mode)
+    {
         if (OcrToleranceValue != null) OcrToleranceValue.Text = _settings.OcrColorTolerance.ToString();
         if (OcrColorOptions != null)
             OcrColorOptions.Visibility = mode == "color" ? Visibility.Visible : Visibility.Collapsed;
-
-        SettingsService.Save(_settings);
     }
 
     /// <summary>Select the filter-mode combo item whose Tag matches the saved mode.</summary>
     private void SetOcrFilterCombo(string mode)
     {
-        foreach (var obj in OcrFilterCombo.Items)
-            if (obj is ComboBoxItem item && (item.Tag as string) == mode)
-            {
-                OcrFilterCombo.SelectedItem = item;
-                return;
-            }
-        OcrFilterCombo.SelectedIndex = 0;   // "off"
+        SelectTag(OcrFilterCombo, mode);
+        if (OcrFilterCombo.SelectedItem == null) OcrFilterCombo.SelectedIndex = 0;   // "off"
     }
 
     // ============================================================
@@ -331,8 +340,10 @@ public partial class MainWindow
 
     private void CaptureBackend_Changed(object sender, SelectionChangedEventArgs e)
     {
+        // ApplySettings sets this combo during restore; don't write the transient state back.
+        if (_restoringSettings) return;
         if (CaptureBackendCombo is null) return;   // still building the XAML
-        var mode = (CaptureBackendCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "gdi";
+        var mode = SelectedTag(CaptureBackendCombo) ?? "gdi";
         _settings.CaptureBackend = mode;
         ScreenCapture.SetMode(mode);
         SettingsService.Save(_settings);
@@ -340,12 +351,7 @@ public partial class MainWindow
 
     private void SetCaptureBackendCombo(string mode)
     {
-        foreach (var obj in CaptureBackendCombo.Items)
-            if (obj is ComboBoxItem item && (item.Tag as string) == mode)
-            {
-                CaptureBackendCombo.SelectedItem = item;
-                return;
-            }
-        CaptureBackendCombo.SelectedIndex = 0;   // "gdi"
+        SelectTag(CaptureBackendCombo, mode);
+        if (CaptureBackendCombo.SelectedItem == null) CaptureBackendCombo.SelectedIndex = 0;   // "gdi"
     }
 }
