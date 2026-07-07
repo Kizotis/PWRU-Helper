@@ -21,6 +21,39 @@ public class FirstLaunchDefaultsTests
     }
 }
 
+public class SettingsMigrationTests
+{
+    [Fact]
+    public void Existing_off_filter_is_upgraded_to_contrast_once()
+    {
+        var s = new AppSettings { SettingsVersion = 0, OcrFilterMode = "off" };
+
+        Assert.True(SettingsService.Migrate(s));      // changed → caller persists
+        Assert.Equal("contrast", s.OcrFilterMode);
+        Assert.Equal(1, s.SettingsVersion);
+    }
+
+    [Fact]
+    public void A_deliberately_chosen_filter_is_not_touched_by_the_migration()
+    {
+        var s = new AppSettings { SettingsVersion = 0, OcrFilterMode = "color" };
+
+        Assert.True(SettingsService.Migrate(s));      // still stamps the version
+        Assert.Equal("color", s.OcrFilterMode);
+        Assert.Equal(1, s.SettingsVersion);
+    }
+
+    [Fact]
+    public void Already_migrated_settings_are_left_alone()
+    {
+        // A user who turned the filter off AFTER the migration must keep it off.
+        var s = new AppSettings { SettingsVersion = 1, OcrFilterMode = "off" };
+
+        Assert.False(SettingsService.Migrate(s));
+        Assert.Equal("off", s.OcrFilterMode);
+    }
+}
+
 public class CompactResizeHitTestTests
 {
     // Win32 hit-test codes returned to WM_NCHITTEST.

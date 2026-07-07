@@ -68,6 +68,12 @@ public class AppSettings
     public List<string> Recents { get; set; } = new();
 
     public double FontScale { get; set; } = 1.0;
+
+    // Bumped when we want a one-time upgrade of an already-saved settings file (e.g. change a
+    // default for existing users). Defaults to 0 so a file written before this field existed
+    // — which has no such key — deserialises as 0 and gets migrated. A fresh install is stamped
+    // with the current version in Load(), so migrations never touch it. See SettingsService.Migrate.
+    public int SettingsVersion { get; set; }
 }
 
 /// <summary>Loads/saves <see cref="AppSettings"/> to %AppData%\PWRUHelper\settings.json.
@@ -80,6 +86,9 @@ public static class SettingsService
 
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 
+    /// <summary>Latest settings-schema version. Bump when adding a <see cref="Migrate"/> step.</summary>
+    private const int CurrentSettingsVersion = 1;
+
     public static AppSettings Load()
     {
         try
@@ -88,11 +97,35 @@ public static class SettingsService
             {
                 var json = File.ReadAllText(Path_);
                 var s = JsonSerializer.Deserialize<AppSettings>(json);
-                if (s != null) return Sanitize(s);
+                if (s != null)
+                {
+                    s = Sanitize(s);
+                    // One-time upgrades for an existing file. Persist right away so they never
+                    // re-run (and so a later deliberate change by the user isn't reverted).
+                    if (Migrate(s)) Save(s);
+                    return s;
+                }
             }
         }
         catch { /* corrupt/unreadable — fall back to defaults */ }
-        return new AppSettings();
+        // Fresh install: already has the current defaults; stamp it so migrations skip it.
+        return new AppSettings { SettingsVersion = CurrentSettingsVersion };
+    }
+
+    /// <summary>Apply one-time upgrades to an already-saved settings file. Returns true if it
+    /// changed anything (so the caller persists it). Each step is guarded by the stored version.</summary>
+    internal static bool Migrate(AppSettings s)
+    {
+        if (s.SettingsVersion >= CurrentSettingsVersion) return false;
+
+        // v1 (v0.12.2): the background filter default became "boost contrast". Bring existing
+        // users who were still on the old "off" default onto it too; leave a deliberate "color"
+        // (or an already-chosen "contrast") alone.
+        if (s.SettingsVersion < 1 && s.OcrFilterMode == "off")
+            s.OcrFilterMode = "contrast";
+
+        s.SettingsVersion = CurrentSettingsVersion;
+        return true;
     }
 
     // A hand-edited or partly-written file can contain nulls in place of the default

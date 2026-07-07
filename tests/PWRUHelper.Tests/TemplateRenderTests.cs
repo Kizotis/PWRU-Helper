@@ -40,51 +40,52 @@ public class TemplateRenderTests
                 Glossary = "🔑 в = LFM",
             };
 
-            // Pull the REAL compiled ItemTemplate off the real window (its bindings, resources
-            // and Click handler), then render it through a ContentControl. A ContentControl
-            // applies its ContentTemplate synchronously during Measure — unlike an ItemsControl,
-            // whose container generation is deferred to the dispatcher and would leave the tree
-            // empty in a headless test (a silent pass that would defeat the whole point).
+            // Both the main Translator feed and the compact overlay feed render the same
+            // OcrResultItem with two-tone (grey nick + body) Runs — the exact shape that crashed
+            // in v0.11.2 when a Run.Text bound TwoWay to a get-only property. Guard BOTH templates.
             var window = new MainWindow();
-            var host = new ContentControl
-            {
-                ContentTemplate = window.OcrResults.ItemTemplate,
-                Content = item,
-            };
+            var compact = new CompactOverlay(window);
 
-            var errors = new BindingErrorListener();
-            PresentationTraceSources.Refresh();
-            PresentationTraceSources.DataBindingSource.Listeners.Add(errors);
-            PresentationTraceSources.DataBindingSource.Switch.Level = SourceLevels.Warning;
-            try
-            {
-                host.ApplyTemplate();
-                host.Measure(new Size(1000, 1000));
-                host.Arrange(new Rect(0, 0, 1000, 1000));
-                host.UpdateLayout();
-                // Flush any binding work queued to the dispatcher before we inspect.
-                Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.Background);
-            }
-            finally
-            {
-                PresentationTraceSources.DataBindingSource.Listeners.Remove(errors);
-            }
-
-            // 1) No binding errors of any kind.
-            Assert.True(errors.Messages.Count == 0,
-                "WPF reported binding errors while rendering OcrResultItem:\n" + errors.Dump());
-
-            // 2) It really rendered a row (container realised) and the bound text made it to the
-            //    screen — an empty render would sail past assertion (1) but is exactly the failure
-            //    mode we are guarding against.
-            var texts = CollectTextBlockText(host);
-            Assert.Contains(texts, t => t.Contains("hello world"));
-            Assert.Contains(texts, t => t.Contains("привет мир"));
-            Assert.Contains(texts, t => t.Contains("Игрок:"));   // grey speaker prefix rendered
+            AssertRendersCleanly(window.OcrResults.ItemTemplate, item);
+            AssertRendersCleanly(compact.FeedItems.ItemTemplate, item);
         });
     }
 
     // ----- helpers -----
+
+    // Render one DataTemplate against a real item via a ContentControl (which applies its template
+    // synchronously during Measure — unlike an ItemsControl, whose container generation is deferred
+    // to the dispatcher and would leave the tree empty headless, a silent pass) and fail on any
+    // WPF binding error OR if the bound text never reached the visual tree.
+    private static void AssertRendersCleanly(DataTemplate template, OcrResultItem item)
+    {
+        var host = new ContentControl { ContentTemplate = template, Content = item };
+
+        var errors = new BindingErrorListener();
+        PresentationTraceSources.Refresh();
+        PresentationTraceSources.DataBindingSource.Listeners.Add(errors);
+        PresentationTraceSources.DataBindingSource.Switch.Level = SourceLevels.Warning;
+        try
+        {
+            host.ApplyTemplate();
+            host.Measure(new Size(1000, 1000));
+            host.Arrange(new Rect(0, 0, 1000, 1000));
+            host.UpdateLayout();
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.Background);
+        }
+        finally
+        {
+            PresentationTraceSources.DataBindingSource.Listeners.Remove(errors);
+        }
+
+        Assert.True(errors.Messages.Count == 0,
+            "WPF reported binding errors while rendering the item:\n" + errors.Dump());
+
+        var texts = CollectTextBlockText(host);
+        Assert.Contains(texts, t => t.Contains("hello world"));
+        Assert.Contains(texts, t => t.Contains("привет мир"));
+        Assert.Contains(texts, t => t.Contains("Игрок:"));   // grey speaker prefix rendered
+    }
 
     private static void EnsureApplicationWithTheme()
     {
