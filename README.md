@@ -36,12 +36,16 @@ how to pronounce it. There's a search bar to find anything fast.
 
 **2. Screen OCR** — click **"Select area & read once"**, draw a box over any Russian text
 on your screen, and the app reads it and translates it (English, French, Spanish or
-German), **sentence by sentence** (lines that wrap are stitched back together, so long
-messages read cleanly). Or hit **"Start live translation"** and it keeps re-reading that
-area and re-translating automatically whenever the text changes — until you press Stop.
-Either way, the results appear on the **Translator** tab. Russian **gaming slang** (LFM
-squad-forming, instance/role/class abbreviations, event names) is **decoded underneath**
-each translation — e.g. `В ПП хил` shows *🔑 В = LFM · ПП = Full Moon Pavilion · хил = heal*.
+German), **message by message** (it understands the game's `[Channel] Nick:` chat
+structure, so wrapped lines are grouped back into whole messages and nicknames are never
+mangled by the translator). Or hit **"Start live translation"** and it keeps re-reading
+that area and re-translating automatically whenever new text appears — until you press
+Stop. Either way, the results appear on the **Translator** tab. Russian **gaming slang**
+(LFM squad-forming, instance/role/class abbreviations, event names) is **decoded
+underneath** each translation — e.g. `В ПП хил` shows *🔑 В = LFM · ПП = Full Moon
+Pavilion · хил = heal* — and known slang is also **expanded before translating** so the
+English reads properly ("need a healer", not "need a hil"). Repeated messages are served
+from a local cache, so LFM spam translates instantly without re-asking Google.
 
 **3. Translator** — one page for **reading + writing**: type in your language and get
 Russian instantly (or the other way around) at the top, and see the live screen
@@ -50,8 +54,8 @@ translations underneath.
 **4. Squad builder** — tick the **dungeon(s)**, **class(es)** and **role(s)** you're looking
 for and it builds the Russian group-forming (LFM) message for you — e.g. tick *Terrace
 legendary* + *cleric* + *BM* + *DD* and copy `в лега прист вар дд` straight into chat. The
-lists come from the same slang book as the decoder, so adding a `category` to a line in
-`slang.json` adds a new tick-box.
+lists live in their own editable `squad.json` (next to the app, or in `%AppData%\PWRUHelper\`),
+so you can add dungeons, classes and columns without touching the code.
 
 ---
 
@@ -103,7 +107,8 @@ The app makes this easy: open the **Screen OCR** tab and click
   numbered blocks** you copy and send one after another. Click **⤢** to go back to the full window.
 - **Global shortcuts** (work while you're in the game):
   **Ctrl+Alt+P** brings the app to the front · **Ctrl+Alt+T** jumps to the translator ·
-  **Ctrl+Alt+L** starts/stops live translation · **Ctrl+Alt+M** toggles the compact overlay.
+  **Ctrl+Alt+L** starts/stops live translation · **Ctrl+Alt+M** toggles the compact overlay ·
+  **Ctrl+Alt+R** re-reads your last area once (no live loop).
 - Your settings, window position and **last live area are remembered** — use
   **"↻ Resume last area"** to restart live without re-drawing the box.
 - Translating **auto-copies** the result (Ctrl+V in game). Pasting Russian flips the
@@ -114,12 +119,26 @@ The app makes this easy: open the **Screen OCR** tab and click
   behind the chat; raise to catch every small change), **Live speed** (how often it re-reads),
   **Smallest text fragment** (skip stray single-letter specks) and **Stability** (how sure it
   must be a line is real before translating). Sensible defaults are set on first launch.
+- **Busy background?** Try the **Background filter** (Screen OCR tab): *Boost contrast* makes
+  bright chat text of any colour stand out from the 3D world behind it, and *Keep one colour*
+  isolates a single chat channel by its colour (hex + tolerance).
+- **Black captures in full-screen?** Switch **Capture method** to *Windows Graphics
+  (experimental)* — it can read true full-screen games; if it can't run on your machine the
+  app quietly falls back to the normal method.
+- **Better translations (optional):** paste a free [DeepL API key](https://www.deepl.com/pro-api)
+  in the About tab — translations then go through DeepL (higher quality) and automatically fall
+  back to Google if DeepL is unavailable. No key needed for normal use.
+- **Updating is one click:** when a new version is out, the app offers to download and run the
+  installer for you (About tab → *Check for updates*).
+- **Something broke?** About tab → **📋 Copy error report** copies the recent error log so you
+  can paste it to me on Discord.
 - Your game should run in **windowed** or **borderless** mode for the screen-reading box
   to appear on top. In full-screen, alt-tab out first (or use a second monitor).
-- Want to add your own phrases or slang? Edit `phrases.json` (phrasebook) or `slang.json`
-  (the chat-slang decoder) — both are kept next to the app (portable) or in
-  `%AppData%\PWRUHelper\` (when installed via the MSI). Add lines and they'll show up
-  next time you open it.
+- Want to add your own phrases, slang or squad options? Edit `phrases.json` (phrasebook),
+  `slang.json` (the chat-slang decoder — an optional `full` field also sets the Russian
+  long-form used to improve translations) or `squad.json` (the squad builder's lists) —
+  all kept next to the app (portable) or in `%AppData%\PWRUHelper\` (when installed via
+  the MSI). Add lines and they'll show up next time you open it.
 
 ---
 
