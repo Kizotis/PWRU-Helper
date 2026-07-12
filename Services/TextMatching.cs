@@ -278,6 +278,35 @@ public static class TextMatching
         return sb.ToString();
     }
 
+    /// <summary>How many characters the game accepts in one chat message. Anything longer has to be
+    /// sent in several — the compact overlay splits a reply on it, the Translator tab shows where
+    /// the cut falls.</summary>
+    public const int GameChatLimit = 78;
+
+    /// <summary>The same blocks as <see cref="SplitForGameChat"/>, but as (start, length) spans into
+    /// the ORIGINAL text. A UI can then highlight where each chat message ends without rebuilding the
+    /// string — rebuilding would re-insert a space between the halves of a hard-split long word, and
+    /// the text the user copies would no longer be the text that was translated.
+    /// Returns an empty list when the text fits in one message (nothing to show) or if the spans
+    /// can't be located, so the caller falls back to rendering it plain.</summary>
+    public static List<(int Start, int Length)> GameChatBlockSpans(string text, int maxChars)
+    {
+        var spans = new List<(int, int)>();
+        text ??= "";
+        var blocks = SplitForGameChat(text, maxChars);
+        if (blocks.Count <= 1) return spans;
+
+        int cursor = 0;
+        foreach (var block in blocks)
+        {
+            int at = text.IndexOf(block, cursor, StringComparison.Ordinal);
+            if (at < 0) return new();   // can't line them up — caller shows plain text
+            spans.Add((at, block.Length));
+            cursor = at + block.Length;
+        }
+        return spans;
+    }
+
     /// <summary>Split a message into chunks no longer than <paramref name="maxChars"/>,
     /// breaking only between words (never mid-word) so each chunk can be pasted into a
     /// game chat that caps a single message's length. A word longer than the limit on its

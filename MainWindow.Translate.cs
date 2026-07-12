@@ -92,11 +92,19 @@ public partial class MainWindow
             // the user's raw text. Don't expand when the source isn't Russian.
             var toTranslate = from == "ru" ? _slang.Expand(text) : text;
             var result = await _writeTranslator.TranslateAsync(toTranslate, from, to);
-            TranslateOutput.Text = result;
-            TranslateStatus.Text = $"{from} → {to}";
+            int blocks = ShowTranslation(result);
+            TranslateStatus.Text = blocks > 1
+                ? $"{from} → {to}  ·  {result.Length} characters — too long for one chat message: " +
+                  $"send it as {blocks}, one highlighted block at a time"
+                : $"{from} → {to}";
+            TranslateStatus.SetResourceReference(TextBlock.ForegroundProperty,
+                blocks > 1 ? "GoldBrush" : "TextMutedBrush");
 
             if (AutoCopyCheck.IsChecked == true && result.Length > 0 && await CopyToClipboardAsync(result))
-                ShowToast("Translated & copied — paste in game with Ctrl+V");
+                ShowToast(blocks > 1
+                    ? $"Translated & copied whole — but the game takes {TextMatching.GameChatLimit} characters " +
+                      "per message, so send the highlighted blocks one by one"
+                    : "Translated & copied — paste in game with Ctrl+V");
         }
         catch (Exception ex)
         {
@@ -108,6 +116,55 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>
+    /// Show the translation, marking where the game would cut it. The game only accepts
+    /// <see cref="TextMatching.GameChatLimit"/> characters per chat message, and a long translation
+    /// silently doesn't fit — so every second block is tinted and the space where the cut falls is
+    /// painted red: the user can see exactly how far to select before pasting.
+    ///
+    /// Nothing is INSERTED into the text (no marker character): whatever they select and copy is
+    /// exactly what was translated, never a stray glyph pasted into the game chat. That's also why
+    /// the blocks come from <see cref="TextMatching.GameChatBlockSpans"/> (offsets into the original)
+    /// rather than from re-joining the split pieces, which would corrupt a hard-split long word.
+    /// Returns how many chat messages the translation needs.
+    /// </summary>
+    internal int ShowTranslation(string text)
+    {
+        _lastTranslation = text ?? "";
+        var paragraph = new System.Windows.Documents.Paragraph { Margin = new Thickness(0) };
+        var spans = TextMatching.GameChatBlockSpans(_lastTranslation, TextMatching.GameChatLimit);
+
+        if (spans.Count <= 1)
+        {
+            paragraph.Inlines.Add(new System.Windows.Documents.Run(_lastTranslation));
+        }
+        else
+        {
+            var tint = (System.Windows.Media.Brush)FindResource("ChatBlockBrush");
+            var cut = (System.Windows.Media.Brush)FindResource("ChatCutBrush");
+            int cursor = 0;
+            for (int i = 0; i < spans.Count; i++)
+            {
+                var (start, length) = spans[i];
+                // Whatever sits between two blocks (the space the split broke on) is the cut itself.
+                if (start > cursor)
+                    paragraph.Inlines.Add(new System.Windows.Documents.Run(_lastTranslation[cursor..start])
+                    { Background = cut });
+
+                var run = new System.Windows.Documents.Run(_lastTranslation.Substring(start, length));
+                if (i % 2 == 1) run.Background = tint;   // alternate, so each block's extent is obvious
+                paragraph.Inlines.Add(run);
+                cursor = start + length;
+            }
+            if (cursor < _lastTranslation.Length)
+                paragraph.Inlines.Add(new System.Windows.Documents.Run(_lastTranslation[cursor..]));
+        }
+
+        TranslateOutput.Document.Blocks.Clear();
+        TranslateOutput.Document.Blocks.Add(paragraph);
+        return Math.Max(1, spans.Count);
+    }
+
     private void Swap_Click(object sender, RoutedEventArgs e)
     {
         var from = SelectedTag(FromCombo);
@@ -116,13 +173,16 @@ public partial class MainWindow
         SelectTag(FromCombo, to ?? "en");
         SelectTag(ToCombo, from == "auto" ? "en" : from ?? "ru");
 
-        // Swap the text too, so a round-trip is easy.
-        (TranslateInput.Text, TranslateOutput.Text) = (TranslateOutput.Text, TranslateInput.Text);
+        // Swap the text too, so a round-trip is easy. The output is a FlowDocument now, so the
+        // translation it is showing is kept in _lastTranslation rather than read back off the box.
+        var previous = _lastTranslation;
+        ShowTranslation(TranslateInput.Text ?? "");
+        TranslateInput.Text = previous;
     }
 
     private async void CopyResult_Click(object sender, RoutedEventArgs e)
     {
-        if (!string.IsNullOrWhiteSpace(TranslateOutput.Text) && await CopyToClipboardAsync(TranslateOutput.Text))
+        if (!string.IsNullOrWhiteSpace(_lastTranslation) && await CopyToClipboardAsync(_lastTranslation))
             ShowToast("Result copied");
     }
 

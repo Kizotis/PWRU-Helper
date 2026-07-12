@@ -41,6 +41,11 @@ public partial class MainWindow : Window
     //                      loop translates every new chat line and would drain a DeepL quota fast.
     private ITranslator _writeTranslator;
     private readonly ITranslator _readTranslator = new CachingTranslator(new TranslationService());
+
+    // What the Translator tab is currently showing. Its output is a RichTextBox (so the 78-character
+    // chat blocks can be tinted), and a FlowDocument's text can't be read back cleanly — so the
+    // plain string lives here, and that is what Copy / Swap use.
+    private string _lastTranslation = "";
     private readonly UpdateService _updates = new();
     private readonly AppSettings _settings = SettingsService.Load();
     private OcrService _ocr = new("ru");

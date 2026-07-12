@@ -279,9 +279,11 @@
                                    Foreground="{StaticResource TextMutedBrush}"/>
                     </StackPanel>
 
-                    <TextBox x:Name="TranslateOutput" Grid.Row="4" IsReadOnly="True" TextWrapping="Wrap"
-                             AcceptsReturn="True" VerticalScrollBarVisibility="Auto" MinHeight="60"
-                             FontSize="16" Foreground="{StaticResource GoldBrush}"/>
+                    <!-- A RichTextBox, not a TextBox, so the 78-character game-chat blocks can be
+                         tinted (see ShowTranslation). Still read-only and selectable. -->
+                    <RichTextBox x:Name="TranslateOutput" Grid.Row="4" IsReadOnly="True"
+                                 VerticalScrollBarVisibility="Auto" MinHeight="60"
+                                 FontSize="16" Foreground="{StaticResource GoldBrush}"/>
 
                     <!-- reading from screen -->
                     <Grid Grid.Row="5" Margin="0,14,0,6">

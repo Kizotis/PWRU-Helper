@@ -119,8 +119,14 @@ The app makes this easy: open the **Screen OCR** tab and click
   **Ctrl+Alt+R** re-reads your last area once (no live loop).
 - Your settings, window position and **last live area are remembered** — use
   **"↻ Resume last area"** to restart live without re-drawing the box.
-- Translating **auto-copies** the result (Ctrl+V in game). Pasting Russian flips the
-  direction automatically. On a screen-read message, use **↩** to reply in Russian.
+- Translating **auto-copies** the result (Ctrl+V in game), and **Enter** translates
+  (Shift+Enter for a new line). Pasting Russian flips the direction automatically. On a
+  screen-read message, use **↩** to reply in Russian.
+- **Too long for the game chat?** The game only takes 78 characters per message. A longer
+  translation is shown with **every second block tinted and a red mark on the cut**, so you can
+  see exactly how far to select before pasting — the text itself is untouched, so whatever you
+  select is exactly what was translated. (In the compact overlay, long replies are split into
+  numbered blocks you copy one by one instead.)
 - For the sharpest reading, **select just the last 3–4 lines** of the chat rather than the
   whole window — a tighter box is read far more precisely.
 - **Fine-tuning** (Screen OCR tab): **OCR sensitivity** (lower ignores the moving game world
