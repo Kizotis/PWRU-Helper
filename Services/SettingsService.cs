@@ -12,7 +12,7 @@ public class AppSettings
     // keeps the feed responsive. These only apply on first launch — a saved settings.json
     // keeps whatever the user picked.
     public int SensitivityPercent { get; set; } = 5;
-    public int LiveSpeedPercent { get; set; } = 80;   // → CurrentLiveIntervalMs() ≈ 1.0s
+    public int LiveSpeedPercent { get; set; } = 92;   // → MainWindow.LiveIntervalMs() = 0.7s
 
     // Fine OCR tuning (live mode). MinFragmentLetters = the smallest text fragment (in
     // letters) worth translating; StabilityPercent = how strictly a newly-appeared line
@@ -98,7 +98,11 @@ public static class SettingsService
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 
     /// <summary>Latest settings-schema version. Bump when adding a <see cref="Migrate"/> step.</summary>
-    private const int CurrentSettingsVersion = 2;
+    private const int CurrentSettingsVersion = 3;
+
+    /// <summary>The live-speed default before v0.12.3 (≈1.0s between reads). A saved file still
+    /// holding exactly this was never touched by its owner, so the new default may replace it.</summary>
+    private const int PreviousLiveSpeedDefault = 80;
 
     public static AppSettings Load()
     {
@@ -142,6 +146,13 @@ public static class SettingsService
         // default once more; from here on, a deliberate "off" survives a restart.
         if (s.SettingsVersion < 2 && s.OcrFilterMode == "off")
             s.OcrFilterMode = "contrast";
+
+        // v3 (v0.12.3): live reads go from ~1.0s to ~0.7s, so a message that scrolls past quickly
+        // still gets the two frames it needs to be confirmed. Only for someone who never moved the
+        // slider — a file holding EXACTLY the old default is one nobody chose. A deliberate speed
+        // (anything else, including a slower one) is left alone.
+        if (s.SettingsVersion < 3 && s.LiveSpeedPercent == PreviousLiveSpeedDefault)
+            s.LiveSpeedPercent = new AppSettings().LiveSpeedPercent;
 
         s.SettingsVersion = CurrentSettingsVersion;
         return true;

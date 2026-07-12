@@ -13,18 +13,30 @@ public class FirstLaunchDefaultsTests
         var s = new AppSettings();
 
         Assert.Equal(5, s.SensitivityPercent);      // OCR sensitivity 5%
-        Assert.Equal(80, s.LiveSpeedPercent);       // live speed ≈ 1.0s between reads
+        Assert.Equal(92, s.LiveSpeedPercent);       // live speed → 0.7s between reads (see below)
         Assert.Equal(2, s.MinFragmentLetters);      // smallest text fragment
         Assert.Equal(60, s.StabilityPercent);       // stability 60%
         Assert.Equal("contrast", s.OcrFilterMode);  // background filter = boost contrast
         Assert.Equal("gdi", s.CaptureBackend);      // capture method = GDI
+    }
+
+    [Fact]
+    public void The_default_live_speed_really_is_0_7_seconds_between_reads()
+    {
+        // The setting is a percentage, the thing that matters is the interval it produces. Pin them
+        // together: a change to either the default or the slider's mapping now has to be deliberate.
+        Assert.Equal(700, MainWindow.LiveIntervalMs(new AppSettings().LiveSpeedPercent));
+
+        // The ends of the slider, so the mapping itself can't drift.
+        Assert.Equal(3000, MainWindow.LiveIntervalMs(0));
+        Assert.Equal(500, MainWindow.LiveIntervalMs(100));
     }
 }
 
 public class SettingsMigrationTests
 {
     // The current schema version. Bumping it in SettingsService means adding a step below.
-    private const int Current = 2;
+    private const int Current = 3;
 
     [Fact]
     public void Existing_off_filter_is_upgraded_to_contrast_once()
@@ -67,6 +79,28 @@ public class SettingsMigrationTests
 
         Assert.False(SettingsService.Migrate(s));
         Assert.Equal("off", s.OcrFilterMode);
+    }
+
+    [Fact]
+    public void Someone_who_never_moved_the_live_speed_slider_gets_the_faster_default()
+    {
+        // A file holding EXACTLY the old default (80 → ~1.0s) is one nobody chose.
+        var s = new AppSettings { SettingsVersion = 2, LiveSpeedPercent = 80 };
+
+        Assert.True(SettingsService.Migrate(s));
+        Assert.Equal(700, MainWindow.LiveIntervalMs(s.LiveSpeedPercent));
+    }
+
+    [Fact]
+    public void A_live_speed_the_user_actually_chose_is_never_overridden()
+    {
+        // Anything but the old default is a deliberate choice — including a SLOWER one, which is
+        // exactly what someone on a weak PC would have picked.
+        var s = new AppSettings { SettingsVersion = 2, LiveSpeedPercent = 55 };
+
+        SettingsService.Migrate(s);
+
+        Assert.Equal(55, s.LiveSpeedPercent);
     }
 }
 

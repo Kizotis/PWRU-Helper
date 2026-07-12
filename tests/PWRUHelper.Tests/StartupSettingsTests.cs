@@ -29,7 +29,7 @@ public class StartupSettingsTests
       "OcrColorTolerance": 70,
       "CaptureBackend": "gdi",
       "SquadUppercase": true,
-      "SettingsVersion": 2
+      "SettingsVersion": 3
     }
     """;
 
@@ -61,7 +61,7 @@ public class StartupSettingsTests
 
         var migrated = SettingsService.Load();
         Assert.Equal("contrast", migrated.OcrFilterMode);
-        Assert.Equal(2, migrated.SettingsVersion);
+        Assert.Equal(3, migrated.SettingsVersion);   // stamped with the current schema
 
         // Deliberately going back to Off now sticks: the migration is stamped and never re-runs.
         migrated.OcrFilterMode = "off";

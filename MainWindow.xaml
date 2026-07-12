@@ -396,7 +396,8 @@
                                            Foreground="{StaticResource GoldBrush}" FontWeight="Bold"
                                            VerticalAlignment="Center"/>
                             </StackPanel>
-                            <Slider x:Name="LiveSpeedSlider" Minimum="0" Maximum="100" Value="80"
+                            <!-- 92% → ~0.7s between reads. Keep in step with AppSettings.LiveSpeedPercent. -->
+                            <Slider x:Name="LiveSpeedSlider" Minimum="0" Maximum="100" Value="92"
                                     TickFrequency="10" Width="280" HorizontalAlignment="Left"
                                     Margin="0,4,0,2" ValueChanged="LiveSpeedSlider_ValueChanged"/>
                             <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMutedBrush}"

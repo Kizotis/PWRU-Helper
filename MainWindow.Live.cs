@@ -349,10 +349,12 @@ public partial class MainWindow
         return 0.50 + (v / 100.0) * 0.45;               // 0.50 (loose) … 0.95 (strict), ≈0.77 at 60%
     }
 
-    /// <summary>Live re-read interval from the speed slider (higher speed = shorter wait).</summary>
+    /// <summary>Live re-read interval from the speed slider (higher speed = shorter wait):
+    /// 3.0s at 0% … 0.5s at 100%. Pure, so a test can pin the shipped default to the interval it
+    /// is meant to produce — the two used to be able to drift apart silently.</summary>
+    internal static int LiveIntervalMs(double speedPercent)
+        => (int)(3000 - (speedPercent / 100.0) * 2500);
+
     private int CurrentLiveIntervalMs()
-    {
-        double speed = LiveSpeedSlider?.Value ?? 80;    // 0..100, default matches the XAML slider
-        return (int)(3000 - (speed / 100.0) * 2500);    // 3.0s (slow) … 0.5s (fast)
-    }
+        => LiveIntervalMs(LiveSpeedSlider?.Value ?? new AppSettings().LiveSpeedPercent);
 }
