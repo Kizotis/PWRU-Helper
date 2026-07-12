@@ -71,6 +71,19 @@ public partial class MainWindow
     private void StartLive(System.Drawing.Rectangle rect)
     {
         if (_readingOnce) return;   // a read-once is driving the shared OCR engine — don't race it
+
+        // No Russian engine = nothing readable. Don't run a loop that can only ever produce empty
+        // frames (and, before the fallback was removed, a feed full of confident Latin gibberish).
+        // Send the user to the one-click installer instead — that IS the fix, and it's one click.
+        if (!IsOcrReady())
+        {
+            if (_overlay is { IsVisible: true }) ExitCompactMode(); else BringToFront();
+            MainTabs.SelectedIndex = TabScreenOcr;
+            SetLiveStatus("⚠ The Russian OCR pack isn't installed, so nothing can be read. " +
+                          "Install it here (1 click), then start live again.");
+            ShowToast("Russian OCR pack needed — install it on this tab (1 click).");
+            return;
+        }
         if (!RegionOnVirtualScreen(rect))
         {
             _settings.LastLiveRegion = null;
@@ -95,8 +108,6 @@ public partial class MainWindow
         SetLiveUi(true);
         MainTabs.SelectedIndex = TabTranslator;
         SetLiveStatus("🔴 Live — watching the area. Translations appear when new text shows up.");
-        if (!IsOcrReady())
-            ShowToast("Tip: install the Russian OCR pack (Screen OCR tab) for good Cyrillic reading.");
 
         _liveCts = new CancellationTokenSource();
         _ = LiveLoop(rect, _liveCts.Token);

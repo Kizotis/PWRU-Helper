@@ -35,6 +35,21 @@ public class OcrService
     /// <summary>The BCP-47 tag the active engine recognizes, or null if none.</summary>
     public string? ActiveLanguage => _engine?.RecognizerLanguage.LanguageTag;
 
+    /// <summary>
+    /// Create the engine for <paramref name="languageTag"/> — and NEVER a substitute for it.
+    ///
+    /// This used to fall back to <c>TryCreateFromUserProfileLanguages()</c>, i.e. to whatever
+    /// Windows is set to. On a French or English machine without the Russian pack, that hands back
+    /// a LATIN engine — and a Latin engine does not fail on Cyrillic. It confidently misreads it as
+    /// Latin look-alikes: «нашел кто поможет?» comes back as "Hawen KTO norsaoxer?", which then
+    /// sails into the translator as gibberish and comes out as gibberish. (Measured, not guessed:
+    /// the fr-FR engine reproduces that string exactly from a real chat screenshot; the ru engine
+    /// reads the same image perfectly.)
+    ///
+    /// Silent garbage is far worse than no reading at all: the app can see it has no engine, say so,
+    /// and offer the one-click pack install. So the profile engine is only accepted when it happens
+    /// to speak the language we asked for anyway (a Russian Windows).
+    /// </summary>
     private static OcrEngine? CreateEngine(string languageTag)
     {
         try
@@ -46,11 +61,18 @@ public class OcrService
                 if (e != null) return e;
             }
         }
-        catch { /* fall through to user-profile engine */ }
+        catch { /* fall through */ }
 
-        // Fall back to whatever the user's Windows language profile supports.
-        try { return OcrEngine.TryCreateFromUserProfileLanguages(); }
-        catch { return null; }
+        try
+        {
+            var profile = OcrEngine.TryCreateFromUserProfileLanguages();
+            var tag = profile?.RecognizerLanguage?.LanguageTag;
+            if (tag != null && tag.StartsWith(languageTag, StringComparison.OrdinalIgnoreCase))
+                return profile;      // the machine's own language IS the one we need
+        }
+        catch { /* no engine at all */ }
+
+        return null;                 // caller surfaces "the pack isn't installed", and reads nothing
     }
 
     /// <summary>

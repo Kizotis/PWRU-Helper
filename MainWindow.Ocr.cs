@@ -166,6 +166,19 @@ public partial class MainWindow
         // race — and its _ocrItems.Clear() below would wipe a just-started live feed. The flag
         // gates ToggleLive/StartLive/ReadLastAreaOnce too; button disabling stays as a UI cue.
         if (_readingOnce) return;
+
+        // Same reason as StartLive: with no Russian engine there is nothing to read, and the app has
+        // to say so — rather than show an empty result (or, before the fallback was removed, a
+        // confidently garbled one).
+        if (!IsOcrReady())
+        {
+            MainTabs.SelectedIndex = TabScreenOcr;
+            ScreenReadStatus.Text = "⚠ The Russian OCR pack isn't installed, so nothing can be read. " +
+                                    "Install it here (1 click), then try again.";
+            ShowToast("Russian OCR pack needed — install it on this tab (1 click).");
+            return;
+        }
+
         _readingOnce = true;
         MainTabs.SelectedIndex = TabTranslator;   // results show on the Translator page
         SelectAreaButton.IsEnabled = false;
