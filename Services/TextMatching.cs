@@ -436,6 +436,30 @@ public static class TextMatching
         return chunks;
     }
 
+    /// <summary>
+    /// The digits of a chat line that CARRY MEANING, in order — the ones a reader would act on.
+    ///
+    /// In an LFM chat the number IS the message: "+5дд" becoming "+2дд" means three slots just
+    /// filled. But a plain digit-scan can't be trusted, because the OCR invents digits inside words:
+    /// "Olympus" comes back as "01ympus", "f1oomy" as "f100my", "real" as "геа1". Those digits say
+    /// nothing about the message and flicker from frame to frame — counting them would make the same
+    /// message look like a new one and translate it twice.
+    ///
+    /// So a digit only counts when it sits in a token carrying at most two letters: "+5дд" → "5",
+    /// "4-1" → "41", "100+" → "100", "2" → "2". A digit buried in a word is ignored.
+    /// </summary>
+    public static string MeaningfulDigits(string? s)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var token in (s ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (token.Count(char.IsLetter) > 2) continue;   // a word — its digits are OCR inventions
+            foreach (var ch in token)
+                if (char.IsDigit(ch)) sb.Append(ch);
+        }
+        return sb.ToString();
+    }
+
     /// <summary>True if a line is worth translating (has at least <paramref name="minLetters"/>
     /// letters), rather than background specks. The threshold is user-tunable in live mode.</summary>
     public static bool LooksLikeText(string s, int minLetters = 2)

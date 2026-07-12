@@ -55,30 +55,50 @@ public class LiveDefaultsTests
     }
 
     [Theory]
-    // The sensitivity slider, from one end to the other. It changes NOTHING here — which is the
-    // point of the test below.
+    // At every slider setting, from one end to the other: the digit rule does not depend on it.
     [InlineData(0.80)]   // slider at 0%
     [InlineData(0.808)]  // the shipped default, 5%
-    [InlineData(0.95)]   // slider at 100% — as strict as it can be
-    public void KNOWN_LIMITATION_a_repost_with_a_changed_number_is_dropped_at_every_slider_setting(double sensitivity)
+    [InlineData(0.95)]   // slider at 100%
+    public void A_repost_with_a_changed_number_reaches_the_user(double sensitivity)
     {
         // In an LFM chat the NUMBER is the whole message: "+5дд" becoming "+2дд" means three slots
-        // just filled. But one digit in a 28-character line is a 0.96 similarity — above even the
-        // top of the slider's band (0.95) — so the second post counts as "the same message" and the
-        // user never sees it. Turning sensitivity up does not help; nothing in the UI does.
-        //
-        // The band stops at 0.95 on purpose: the OCR itself flickers by a character or two between
-        // frames ("прист" / "приег" / "приз-танк" are all real readings of the same word), and a
-        // stricter threshold would re-translate the same message over and over. Letters flicker;
-        // digits carry the meaning. Telling the two apart is the fix — not a slider.
+        // just filled. One digit in a 28-character line is a 0.96 similarity — above even the top of
+        // the slider's band (0.95) — so the fuzzy test alone called this "the same message" and the
+        // user never saw it, wherever they put the slider. The digits are now compared separately.
         var emitted = Replay(new[]
         {
             "джероми: ОР прист танк мист +5дд шифт",
-            "джероми: ОР прист танк мист +2дд шифт",   // three slots filled — the user must see this
+            "джероми: ОР прист танк мист +2дд шифт",   // three slots filled — must not be swallowed
         }, sensitivity, DefaultStability);
 
-        Assert.Single(emitted);   // ← today. Assert two when the digit rule lands.
+        Assert.Equal(2, emitted.Count);
+        Assert.Contains("+2дд", emitted[1]);
     }
+
+    [Fact]
+    public void The_same_message_re_read_with_the_OCR_s_invented_digits_is_still_the_same_message()
+    {
+        // The trap the digit rule could have walked into. The OCR invents digits INSIDE words:
+        // "Olympus" is read "01ympus", "f1oomy" as "f100my", "real" as "геа1" — all real readings.
+        // Those digits flicker with the background and mean nothing. If they counted, the same
+        // message would look new on the next frame and be translated over and over.
+        var emitted = Replay(new[]
+        {
+            "Лунаед: ГИ Olympus приглашает игроков",
+            "Лунаед: ГИ 01ympus приглашает игроков",   // same message, the OCR just wobbled
+        }, DefaultSensitivity, DefaultStability);
+
+        Assert.Single(emitted);
+    }
+
+    [Theory]
+    [InlineData("джероми: ОР прист танк мист +5дд шифт", "5")]
+    [InlineData("JEKA: В ХХ 4-1 ВАР ЕЖА СТУК", "41")]
+    [InlineData("Лунаед: ГИ 01ympus приглашает игроков 100+ 2 рб КХ", "1002")]  // "01ympus" ignored
+    [InlineData("f100my whispers: Нашел?", "")]                                 // a nickname, not a count
+    [InlineData("Wei Xiaobao: kiwi becomes the owner of а геа1 rarity", "")]    // "геа1" = "real"
+    public void Only_the_digits_that_carry_meaning_are_counted(string line, string expected)
+        => Assert.Equal(expected, TextMatching.MeaningfulDigits(line));
 
     [Fact]
     public void KNOWN_LIMITATION_a_shortened_repost_is_swallowed_by_the_containment_rule()
