@@ -91,6 +91,46 @@ public class LiveDefaultsTests
         Assert.Single(emitted);
     }
 
+    [Fact]
+    public void A_message_re_sent_after_it_scrolled_off_is_shown_again()
+    {
+        // The point of the dedup is to stop re-translating what is STILL ON SCREEN — not to ban a
+        // message for the rest of the session. Once it has really been gone for a while
+        // (LiveDedup.ReappearAfterFrames = 6 frames ≈ 6 seconds at the default speed), the same text
+        // showing up again is a genuine re-send, and the user must see it.
+        var dedup = new LiveDedup();
+        var msg = new[] { "джероми: ОР прист танк мист +5дд шифт" };
+        var emitted = new List<string>();
+
+        // It arrives and is confirmed over two frames.
+        for (int f = 0; f < 2; f++) emitted.AddRange(dedup.Next(msg, DefaultSensitivity, DefaultStability));
+        Assert.Single(emitted);
+
+        // It scrolls off for a good while…
+        for (int f = 0; f < 8; f++) dedup.Next(Array.Empty<string>(), DefaultSensitivity, DefaultStability);
+
+        // …and the player posts it again.
+        for (int f = 0; f < 2; f++) emitted.AddRange(dedup.Next(msg, DefaultSensitivity, DefaultStability));
+
+        Assert.Equal(2, emitted.Count);   // shown a second time — it really was sent a second time
+    }
+
+    [Fact]
+    public void A_message_that_merely_flickers_off_for_an_instant_is_not_shown_twice()
+    {
+        // The other half of the same rule: the OCR loses a line for a frame or two all the time (the
+        // game pans behind the chat, an emoji animates). That is not a re-send.
+        var dedup = new LiveDedup();
+        var msg = new[] { "джероми: ОР прист танк мист +5дд шифт" };
+        var emitted = new List<string>();
+
+        for (int f = 0; f < 2; f++) emitted.AddRange(dedup.Next(msg, DefaultSensitivity, DefaultStability));
+        for (int f = 0; f < 3; f++) dedup.Next(Array.Empty<string>(), DefaultSensitivity, DefaultStability);
+        for (int f = 0; f < 2; f++) emitted.AddRange(dedup.Next(msg, DefaultSensitivity, DefaultStability));
+
+        Assert.Single(emitted);
+    }
+
     [Theory]
     [InlineData("джероми: ОР прист танк мист +5дд шифт", "5")]
     [InlineData("JEKA: В ХХ 4-1 ВАР ЕЖА СТУК", "41")]
