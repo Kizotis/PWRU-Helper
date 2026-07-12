@@ -62,7 +62,7 @@ public class SettingsMigrationTests
     public void The_v1_users_whose_filter_was_clobbered_back_to_off_get_contrast_again()
     {
         // v1 set "contrast" — and then every launch wrote "off" straight back over it (a XAML-load
-        // ValueChanged persisted the not-yet-restored combo; fixed in v0.12.3). So a v1 file saying
+        // ValueChanged persisted the not-yet-restored combo; fixed in v0.13.0). So a v1 file saying
         // "off" proves nothing about what the user wanted. Re-apply the intended default, once.
         var s = new AppSettings { SettingsVersion = 1, OcrFilterMode = "off" };
 

@@ -9,7 +9,7 @@ namespace PWRUHelper.Tests;
 /// <summary>
 /// Guards the class of bug where STARTING the app silently rewrites the user's own settings.
 ///
-/// The real one (v0.12.3): every launch persisted OcrFilterMode = "off", so a chosen "Boost
+/// The real one (v0.13.0): every launch persisted OcrFilterMode = "off", so a chosen "Boost
 /// contrast" was gone by the next run. Nothing in the OCR code was wrong — XAML *loading* raised
 /// `ValueChanged` on `<Slider Value="70" …/>` during InitializeComponent(), long before
 /// ApplySettings(); the handler read the not-yet-restored filter combo (no selection → "off")

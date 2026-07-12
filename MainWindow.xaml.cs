@@ -31,7 +31,7 @@ public partial class MainWindow : Window
     // fires these handlers: `<Slider Value="70" ValueChanged="OcrTolerance_Changed"/>` raises
     // ValueChanged during InitializeComponent(), long before ApplySettings runs. That handler then
     // read the still-unselected filter combo (SelectedTag → null → "off") and persisted "off" —
-    // which is why a saved "Boost contrast" came back Off on every launch (fixed in v0.12.3).
+    // which is why a saved "Boost contrast" came back Off on every launch (fixed in v0.13.0).
     private bool _restoringSettings = true;
 
     // Two translators on purpose (see BuildTranslator):
