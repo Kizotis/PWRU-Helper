@@ -133,6 +133,63 @@ public static class TextMatching
         return found;
     }
 
+    /// <summary>
+    /// Fixed phrases the game uses for its OWN announcements — a rarity drop, a squad join, the
+    /// header the game prints above a whisper. Written in the folded alphabet of
+    /// <see cref="OcrFold"/>, because the OCR mangles them: "announces loudly" comes back as
+    /// "аппоипсеs Ioudly", and "You are speaking to" as "Уои аге speaking to".
+    ///
+    /// They matter because a system line carries no "Nick:" header and its colon (when it has one)
+    /// sits far too deep to read as one — so it was taken for the WRAPPED TAIL of the player message
+    /// above it and glued onto it, corrupting both the text and its translation. Its own red «Сист.»
+    /// badge can't save it: on the dark game background the contrast filter erases it, so the OCR
+    /// never reads it at all.
+    ///
+    /// Every entry must be a phrase that OPENS an announcement, never one that ends it: an
+    /// announcement wraps over several OCR lines, and a phrase from its tail ("…has become the
+    /// supreme deity!") would cut the announcement in half instead of separating it from the
+    /// message above. The tail carries no marker, so it glues back on by itself.
+    ///
+    /// This list only holds phrases seen on real screenshots. An unknown announcement still glues —
+    /// add it here when one shows up.
+    /// </summary>
+    private static readonly string[] SystemMarkers =
+    {
+        "annou",            // "<Elder of the City of Swords> announces loudly: …"
+        "joinedthesquad",   // "<Player> joined the squad"
+        "speakingto",       // "You are speaking to <Player>: …"  (the whisper header)
+        "becomestheowner",  // "<Player> becomes the owner of a real rarity…"
+        "heavensgateway",   // "The heavens gateway have opened!…"
+    };
+
+    /// <summary>True if the line is one of the game's own announcements rather than a player's
+    /// message. See <see cref="SystemMarkers"/> for why this can't lean on the «Сист.» badge.</summary>
+    public static bool IsSystemLine(string line)
+    {
+        var folded = OcrFold(line);
+        return SystemMarkers.Any(m => folded.Contains(m, StringComparison.Ordinal));
+    }
+
+    // The OCR reads these English announcements through a Russian engine, so it happily spells them
+    // with Cyrillic look-alikes ("Уои аге" for "You are", "аппои" for "annou"), and confuses I/l/1
+    // and O/0. Fold all of that onto one alphabet, keeping only letters and digits, so a marker can
+    // be matched against what the OCR ACTUALLY produced.
+    private const string CyrillicLookAlikes = "авсекмнорхтуигпь";
+    private const string LatinLookAlikes    = "abcekmhopxtyurnb";
+
+    private static string OcrFold(string? s)
+    {
+        var sb = new System.Text.StringBuilder((s ?? "").Length);
+        foreach (var raw in (s ?? "").ToLowerInvariant())
+        {
+            int i = CyrillicLookAlikes.IndexOf(raw);
+            char ch = i >= 0 ? LatinLookAlikes[i] : raw;
+            ch = ch switch { '0' => 'o', '1' or 'l' or '!' or '|' => 'i', _ => ch };
+            if (char.IsLetterOrDigit(ch)) sb.Append(ch);
+        }
+        return sb.ToString();
+    }
+
     /// <summary>Split raw OCR lines into whole chat messages using the game's own structure —
     /// each message is <c>[Channel] Nick: text</c>, so a line that starts a new <c>Nick:</c>
     /// (optionally after a channel tag) begins a new message, and any following line without one
@@ -190,6 +247,16 @@ public static class TextMatching
                 // would be deleted from the player's message.
                 Flush();
                 body.Add(rest);
+                lineCount = 1;
+            }
+            else if (IsSystemLine(line))
+            {
+                // One of the game's own announcements. It has no "Nick:" header and its badge was
+                // never read, so it looked like the wrapped tail of the player above — and was glued
+                // onto their message. It starts its own message instead. (Its OWN wrapped tail, which
+                // carries no marker, still glues onto it correctly: that's the branch below.)
+                Flush();
+                body.Add(line);
                 lineCount = 1;
             }
             else
