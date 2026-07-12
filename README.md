@@ -133,6 +133,9 @@ The app makes this easy: open the **Screen OCR** tab and click
   behind the chat; raise to catch every small change), **Live speed** (how often it re-reads),
   **Smallest text fragment** (skip stray single-letter specks) and **Stability** (how sure it
   must be a line is real before translating). Sensible defaults are set on first launch.
+- **Been using it a while?** Your saved settings are kept as they are when you update, so the
+  values tuned in a later version never reach you. **↺ Reset to recommended settings** (Screen OCR
+  tab) puts the four sliders and the background filter back to what this version ships with.
 - **Busy background?** Try the **Background filter** (Screen OCR tab): *Boost contrast* makes
   bright chat text of any colour stand out from the 3D world behind it, and *Keep one colour*
   isolates a single chat channel by its colour (hex + tolerance).

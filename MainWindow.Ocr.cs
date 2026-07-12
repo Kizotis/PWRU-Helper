@@ -267,6 +267,69 @@ public partial class MainWindow
     }
 
     // ============================================================
+    //  RESET TO THE RECOMMENDED READING SETTINGS
+    // ============================================================
+
+    /// <summary>
+    /// A settings file written by an older version keeps its values forever — which means a default
+    /// we tune later (calmer sensitivity, faster reads, the background filter) only ever reaches NEW
+    /// installs. Everyone else stays on numbers nobody chose, without knowing it. This is the way back.
+    ///
+    /// Deliberately limited to what this tab tunes for READING. The capture method is not a
+    /// preference but a compatibility choice — someone on "Windows Graphics" picked it because GDI
+    /// gave them a black screen, and resetting it would break their capture for no reason.
+    /// </summary>
+    private void ResetTuning_Click(object sender, RoutedEventArgs e)
+    {
+        var d = new AppSettings();   // the shipped defaults — one source of truth, never re-typed here
+        var answer = MessageBox.Show(this,
+            "Put the reading settings back to the recommended values?\n\n" +
+            $"•  OCR sensitivity: {d.SensitivityPercent}%\n" +
+            $"•  Live speed: ~{LiveIntervalMs(d.LiveSpeedPercent) / 1000.0:0.0}s between reads\n" +
+            $"•  Smallest text fragment: {d.MinFragmentLetters} letters\n" +
+            $"•  Stability: {d.StabilityPercent}%\n" +
+            "•  Background filter: Boost contrast\n\n" +
+            "Your capture method, and everything on the other tabs, stay as they are.",
+            "PWRU Helper", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (answer != MessageBoxResult.Yes) return;
+
+        ApplyRecommendedTuning();
+        ShowToast("Reading settings are back to the recommended values.");
+    }
+
+    /// <summary>Put the reading settings back to the shipped defaults, in memory, on screen and on
+    /// disk. Split out of the click handler so it can be tested without a dialog.</summary>
+    internal void ApplyRecommendedTuning()
+    {
+        var d = new AppSettings();
+        _settings.SensitivityPercent = d.SensitivityPercent;
+        _settings.LiveSpeedPercent = d.LiveSpeedPercent;
+        _settings.MinFragmentLetters = d.MinFragmentLetters;
+        _settings.StabilityPercent = d.StabilityPercent;
+        _settings.OcrFilterMode = d.OcrFilterMode;
+        _settings.OcrKeepColorHex = d.OcrKeepColorHex;
+        _settings.OcrColorTolerance = d.OcrColorTolerance;
+
+        // Pushing values into the controls fires their change handlers, which would write the
+        // half-applied UI state straight back to disk — the same trap ApplySettings has to dodge.
+        _restoringSettings = true;
+        try
+        {
+            SensitivitySlider.Value = _settings.SensitivityPercent;
+            LiveSpeedSlider.Value = _settings.LiveSpeedPercent;
+            MinFragmentSlider.Value = _settings.MinFragmentLetters;
+            StabilitySlider.Value = _settings.StabilityPercent;
+            OcrColorHexBox.Text = _settings.OcrKeepColorHex;
+            OcrToleranceSlider.Value = _settings.OcrColorTolerance;
+            SetOcrFilterCombo(_settings.OcrFilterMode);
+            UpdateOcrFilterUi(_settings.OcrFilterMode);
+        }
+        finally { _restoringSettings = false; }
+
+        SettingsService.Save(_settings);
+    }
+
+    // ============================================================
     //  BACKGROUND FILTER (optional pre-OCR clean-up)
     // ============================================================
 

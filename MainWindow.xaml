@@ -392,7 +392,7 @@
                             <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                                 <TextBlock Text="Live speed" FontWeight="SemiBold"
                                            Foreground="{StaticResource TextBrush}" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="LiveSpeedValue" Text="~1.0s between reads" Margin="8,0,0,0"
+                                <TextBlock x:Name="LiveSpeedValue" Text="~0.7s between reads" Margin="8,0,0,0"
                                            Foreground="{StaticResource GoldBrush}" FontWeight="Bold"
                                            VerticalAlignment="Center"/>
                             </StackPanel>
@@ -430,6 +430,14 @@
                                     Margin="0,4,0,2" ValueChanged="StabilitySlider_ValueChanged"/>
                             <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMutedBrush}"
                                        Text="How strictly a new line must stay put for one read before it's translated. Higher = fewer false lines from flicker, but a touch slower to confirm real text."/>
+
+                            <!-- Settings saved by an older version are kept forever, so a tuned default
+                                 shipped later never reaches anyone who already ran the app. This puts them back. -->
+                            <Button x:Name="ResetTuningButton" Style="{StaticResource GhostButton}"
+                                    Content="↺  Reset to recommended settings" Padding="12,5"
+                                    HorizontalAlignment="Left" Margin="0,12,0,0" Click="ResetTuning_Click"
+                                    ToolTip="Put the four sliders above and the background filter back to the values shipped with this version. Your capture method and the other tabs are left alone."
+                                    AutomationProperties.Name="Reset the reading settings to the recommended values"/>
                         </StackPanel>
 
                         <!-- Background filter (optional pre-OCR clean-up) -->
