@@ -22,6 +22,10 @@ public partial class MainWindow
     //  SQUAD BUILDER  (tick dungeons/classes/roles → LFM chat phrase)
     // ============================================================
 
+    /// <summary>The English dungeon name (white) is a gloss on the gold code, so it sits a size
+    /// below the rest of the row. The window's default is 12.</summary>
+    private const double SquadNameFontSize = 10.5;
+
     /// <summary>Fill the dungeon/class column grids from <c>squad.json</c> (see
     /// <see cref="SquadCatalog"/>) and wire every checkbox to rebuild the phrase. Once, at start.</summary>
     private void BuildSquadTab()
@@ -33,7 +37,8 @@ public partial class MainWindow
     }
 
     /// <summary>Render one section as side-by-side titled columns of tick-boxes. Each box shows
-    /// "CODE «ru» name" (code gold, ru grey, name white) and carries its paste token in Tag.</summary>
+    /// "CODE «ru» name" (code gold, ru grey, name white and a size smaller — it's the supporting
+    /// gloss for a cryptic dungeon code, not the label itself) and carries its paste token in Tag.</summary>
     private void PopulateSquadColumns(Grid grid, List<SquadColumn> columns)
     {
         grid.Children.Clear();
@@ -60,7 +65,8 @@ public partial class MainWindow
                 if (!string.IsNullOrWhiteSpace(opt.Ru))
                     content.Inlines.Add(new System.Windows.Documents.Run($"  “{opt.Ru}”") { Foreground = muted });
                 if (!string.IsNullOrWhiteSpace(opt.Name))
-                    content.Inlines.Add(new System.Windows.Documents.Run($"  {opt.Name}") { Foreground = text });
+                    content.Inlines.Add(new System.Windows.Documents.Run($"  {opt.Name}")
+                    { Foreground = text, FontSize = SquadNameFontSize });
 
                 var cb = new CheckBox
                 {
@@ -81,12 +87,22 @@ public partial class MainWindow
 
     private void SquadCheck_Changed(object sender, RoutedEventArgs e) => RebuildSquadPhrase();
 
+    /// <summary>The UPPERCASE tick: remember it and re-cast the phrase already in the box.</summary>
+    private void SquadUppercase_Changed(object sender, RoutedEventArgs e)
+    {
+        RebuildSquadPhrase();
+        if (_restoringSettings) return;   // ApplySettings is setting the tick — not a user choice
+        _settings.SquadUppercase = SquadUppercaseCheck.IsChecked == true;
+        SettingsService.Save(_settings);
+    }
+
     /// <summary>Rebuild the "в &lt;dungeons&gt; &lt;classes&gt;" LFM line from the ticks.</summary>
     private void RebuildSquadPhrase()
     {
         if (SquadPhraseBox == null) return;
         SquadPhraseBox.Text = SquadCatalog.BuildPhrase("в",
-            TickedTokens(SquadDungeonGrid), TickedTokens(SquadClassGrid));
+            TickedTokens(SquadDungeonGrid), TickedTokens(SquadClassGrid),
+            SquadUppercaseCheck?.IsChecked == true);
     }
 
     private static IEnumerable<string> TickedTokens(Grid grid)
@@ -116,7 +132,8 @@ public partial class MainWindow
         try
         {
             var embedded = ReadEmbeddedJson("squad.json");
-            var path = FindOrCreateEditable("squad.json", embedded);
+            var path = FindOrCreateEditable("squad.json", embedded, out var backup);
+            if (backup != null) NoteDataFileRefreshed("squad.json", backup);
             string? json = embedded;
             if (path != null)
                 try { json = File.ReadAllText(path); } catch { /* keep embedded */ }

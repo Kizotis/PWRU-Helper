@@ -71,6 +71,7 @@ public partial class MainWindow
     private void StartLive(System.Drawing.Rectangle rect)
     {
         if (_readingOnce) return;   // a read-once is driving the shared OCR engine — don't race it
+
         if (!RegionOnVirtualScreen(rect))
         {
             _settings.LastLiveRegion = null;
@@ -84,9 +85,18 @@ public partial class MainWindow
         // the area was being selected would be orphaned here (impossible to Stop).
         if (_liveCts != null) StopLive();
 
-        // Remember the area so it can be resumed next session without re-selecting.
+        // Remember the area so it can be resumed next session without re-selecting. This happens
+        // BEFORE the OCR-pack check on purpose: the user has usually just dragged the rectangle, and
+        // bailing out first threw that work away — after installing the pack they had to draw it all
+        // over again, with no "Resume last area" button to help them.
         _settings.LastLiveRegion = new[] { rect.X, rect.Y, rect.Width, rect.Height };
         SettingsService.Save(_settings);
+        UpdateResumeLiveButton();
+
+        // No Russian engine = nothing readable. Don't run a loop that can only ever produce empty
+        // frames (and, before the fallback was removed, a feed full of confident Latin gibberish).
+        // Send the user to the one-click installer instead — that IS the fix, and it's one click.
+        if (!IsOcrReady()) { ShowOcrPackNeeded("then start live again — your area is remembered."); return; }
 
         _liveRegion = rect;
         _dedup = new();
@@ -95,8 +105,6 @@ public partial class MainWindow
         SetLiveUi(true);
         MainTabs.SelectedIndex = TabTranslator;
         SetLiveStatus("🔴 Live — watching the area. Translations appear when new text shows up.");
-        if (!IsOcrReady())
-            ShowToast("Tip: install the Russian OCR pack (Screen OCR tab) for good Cyrillic reading.");
 
         _liveCts = new CancellationTokenSource();
         _ = LiveLoop(rect, _liveCts.Token);
@@ -277,10 +285,12 @@ public partial class MainWindow
         ResultsScroller?.ScrollToEnd();
     }
 
-    /// <summary>Translate message bodies, picking the source language per message: real Russian
-    /// (Cyrillic) is translated FROM "ru", but English/other-language messages are sent with
-    /// "auto" so Google detects them instead of mangling plain English into invented Cyrillic.
-    /// The two groups are still batched (one request each) and reassembled in the original order.</summary>
+    /// <summary>Translate message bodies READ FROM THE SCREEN, picking the source language per
+    /// message: real Russian (Cyrillic) is translated FROM "ru", but English/other-language messages
+    /// are sent with "auto" so Google detects them instead of mangling plain English into invented
+    /// Cyrillic. The two groups are still batched (one request each) and reassembled in the original
+    /// order. Always goes through <c>_readTranslator</c> (free Google) — never DeepL, whose quota a
+    /// live loop would burn through in an evening.</summary>
     private async Task<List<string>> TranslateBodiesAsync(List<string> bodies, string target, CancellationToken ct)
     {
         // Expand known slang to its Russian long form BEFORE translating, so the machine
@@ -300,12 +310,12 @@ public partial class MainWindow
         var result = new string?[bodies.Count];
         if (ru.Count > 0)
         {
-            var t = await _translator.TranslateLinesAsync(ru, "ru", target, ct);
+            var t = await _readTranslator.TranslateLinesAsync(ru, "ru", target, ct);
             for (int i = 0; i < ruIdx.Count && i < t.Count; i++) result[ruIdx[i]] = t[i];
         }
         if (auto.Count > 0)
         {
-            var t = await _translator.TranslateLinesAsync(auto, "auto", target, ct);
+            var t = await _readTranslator.TranslateLinesAsync(auto, "auto", target, ct);
             for (int i = 0; i < autoIdx.Count && i < t.Count; i++) result[autoIdx[i]] = t[i];
         }
         // Any gap (shouldn't happen) falls back to the (expanded) text rather than a null.
@@ -336,10 +346,12 @@ public partial class MainWindow
         return 0.50 + (v / 100.0) * 0.45;               // 0.50 (loose) … 0.95 (strict), ≈0.77 at 60%
     }
 
-    /// <summary>Live re-read interval from the speed slider (higher speed = shorter wait).</summary>
+    /// <summary>Live re-read interval from the speed slider (higher speed = shorter wait):
+    /// 3.0s at 0% … 0.5s at 100%. Pure, so a test can pin the shipped default to the interval it
+    /// is meant to produce — the two used to be able to drift apart silently.</summary>
+    internal static int LiveIntervalMs(double speedPercent)
+        => (int)(3000 - (speedPercent / 100.0) * 2500);
+
     private int CurrentLiveIntervalMs()
-    {
-        double speed = LiveSpeedSlider?.Value ?? 80;    // 0..100, default matches the XAML slider
-        return (int)(3000 - (speed / 100.0) * 2500);    // 3.0s (slow) … 0.5s (fast)
-    }
+        => LiveIntervalMs(LiveSpeedSlider?.Value ?? new AppSettings().LiveSpeedPercent);
 }

@@ -32,7 +32,9 @@ public partial class MainWindow
         if (from is null or "ru" or "auto") from = "en";
         try
         {
-            var ru = await _translator.TranslateAsync(text, from, "ru");
+            // The user is WRITING — this is the one place (with the Translator tab) where a DeepL
+            // key is worth spending: _writeTranslator, not the OCR feed's Google-only reader.
+            var ru = await _writeTranslator.TranslateAsync(text, from, "ru");
             bool copied = ru.Length > 0 && await CopyToClipboardAsync(ru);
             return new ReplyOutcome(true, ru, copied, null);
         }
@@ -44,13 +46,18 @@ public partial class MainWindow
     // ============================================================
     private async void Translate_Click(object sender, RoutedEventArgs e) => await RunTranslation();
 
+    /// <summary>Enter translates, like the compact overlay's reply box (and like every chat box the
+    /// user is already in). The input is multi-line, so Shift+Enter keeps the plain new-line — and
+    /// Ctrl+Enter, the old shortcut, still works, for the muscle memory it built.</summary>
+    internal static bool IsTranslateKey(Key key, ModifierKeys modifiers)
+        => key == Key.Enter && (modifiers & ModifierKeys.Shift) == 0;
+
     private async void TranslateInput_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
-        {
-            e.Handled = true;
-            await RunTranslation();
-        }
+        if (!IsTranslateKey(e.Key, Keyboard.Modifiers)) return;
+
+        e.Handled = true;              // don't ALSO insert the line break
+        await RunTranslation();        // no-ops on empty input or while one is already running
     }
 
     private async Task RunTranslation()
@@ -84,21 +91,94 @@ public partial class MainWindow
             // string SENT to the translator changes; TranslateInput/TranslateOutput keep showing
             // the user's raw text. Don't expand when the source isn't Russian.
             var toTranslate = from == "ru" ? _slang.Expand(text) : text;
-            var result = await _translator.TranslateAsync(toTranslate, from, to);
-            TranslateOutput.Text = result;
-            TranslateStatus.Text = $"{from} → {to}";
+            var result = await _writeTranslator.TranslateAsync(toTranslate, from, to);
+            int blocks = ShowTranslation(result);
+            ShowTranslateStatus(from, to, blocks, result.Length);
 
             if (AutoCopyCheck.IsChecked == true && result.Length > 0 && await CopyToClipboardAsync(result))
-                ShowToast("Translated & copied — paste in game with Ctrl+V");
+                ShowToast(blocks > 1
+                    ? $"Translated & copied whole — but the game takes {TextMatching.GameChatLimit} characters " +
+                      "per message, so send the highlighted blocks one by one"
+                    : "Translated & copied — paste in game with Ctrl+V");
         }
         catch (Exception ex)
         {
             TranslateStatus.Text = $"Failed: {Friendly(ex)}";
+            // Reset the colour too: gold means "too long", and an error left in gold after a long
+            // translation reads as if the failure were about the length.
+            TranslateStatus.SetResourceReference(TextBlock.ForegroundProperty, "TextMutedBrush");
         }
         finally
         {
             TranslateButton.IsEnabled = true;
         }
+    }
+
+    /// <summary>
+    /// Show the translation, marking where the game would cut it. The game only accepts
+    /// <see cref="TextMatching.GameChatLimit"/> characters per chat message, and a long translation
+    /// silently doesn't fit — so every second block is tinted and the space where the cut falls is
+    /// painted red: the user can see exactly how far to select before pasting.
+    ///
+    /// Nothing is INSERTED into the text (no marker character): whatever they select and copy is
+    /// exactly what was translated, never a stray glyph pasted into the game chat. That's also why
+    /// the blocks come from <see cref="TextMatching.GameChatBlockSpans"/> (offsets into the original)
+    /// rather than from re-joining the split pieces, which would corrupt a hard-split long word.
+    /// Returns how many chat messages the translation needs.
+    /// </summary>
+    internal int ShowTranslation(string text)
+    {
+        _lastTranslation = text ?? "";
+        var paragraph = new System.Windows.Documents.Paragraph { Margin = new Thickness(0) };
+        var spans = TextMatching.GameChatBlockSpans(_lastTranslation, TextMatching.GameChatLimit);
+
+        if (spans.Count <= 1)
+        {
+            paragraph.Inlines.Add(new System.Windows.Documents.Run(_lastTranslation));
+        }
+        else
+        {
+            var tint = (System.Windows.Media.Brush)FindResource("ChatBlockBrush");
+            var cut = (System.Windows.Media.Brush)FindResource("ChatCutBrush");
+            int cursor = 0;
+            for (int i = 0; i < spans.Count; i++)
+            {
+                var (start, length) = spans[i];
+                if (start > cursor)
+                {
+                    // Whatever separates two blocks is the cut itself — paint it red. Before the
+                    // FIRST block there is no cut, only leading whitespace: painting that red would
+                    // mark a boundary that isn't one.
+                    var gap = new System.Windows.Documents.Run(_lastTranslation[cursor..start]);
+                    if (i > 0) gap.Background = cut;
+                    paragraph.Inlines.Add(gap);
+                }
+
+                var run = new System.Windows.Documents.Run(_lastTranslation.Substring(start, length));
+                if (i % 2 == 1) run.Background = tint;   // alternate, so each block's extent is obvious
+                paragraph.Inlines.Add(run);
+                cursor = start + length;
+            }
+            if (cursor < _lastTranslation.Length)
+                paragraph.Inlines.Add(new System.Windows.Documents.Run(_lastTranslation[cursor..]));
+        }
+
+        TranslateOutput.Document.Blocks.Clear();
+        TranslateOutput.Document.Blocks.Add(paragraph);
+        return Math.Max(1, spans.Count);
+    }
+
+    /// <summary>The line under the buttons: the direction, and — when the translation needs several
+    /// chat messages — how many and why. Gold is reserved for that warning, so it must be cleared
+    /// again when it no longer applies.</summary>
+    private void ShowTranslateStatus(string from, string to, int blocks, int characters)
+    {
+        TranslateStatus.Text = blocks > 1
+            ? $"{from} → {to}  ·  {characters} characters — too long for one chat message: " +
+              $"send it as {blocks}, one highlighted block at a time"
+            : $"{from} → {to}";
+        TranslateStatus.SetResourceReference(TextBlock.ForegroundProperty,
+            blocks > 1 ? "GoldBrush" : "TextMutedBrush");
     }
 
     private void Swap_Click(object sender, RoutedEventArgs e)
@@ -109,13 +189,22 @@ public partial class MainWindow
         SelectTag(FromCombo, to ?? "en");
         SelectTag(ToCombo, from == "auto" ? "en" : from ?? "ru");
 
-        // Swap the text too, so a round-trip is easy.
-        (TranslateInput.Text, TranslateOutput.Text) = (TranslateOutput.Text, TranslateInput.Text);
+        // Swap the text too, so a round-trip is easy. The output is a FlowDocument now, so the
+        // translation it is showing is kept in _lastTranslation rather than read back off the box.
+        var previous = _lastTranslation;
+        var swappedIn = TranslateInput.Text ?? "";
+        int blocks = ShowTranslation(swappedIn);
+        TranslateInput.Text = previous;
+
+        // The status described the OLD output. Left alone it would keep claiming "send it as 3
+        // blocks" over a text that is now three words long — or say nothing over one that isn't.
+        ShowTranslateStatus(SelectedTag(FromCombo) ?? "en", SelectedTag(ToCombo) ?? "ru",
+                            blocks, swappedIn.Length);
     }
 
     private async void CopyResult_Click(object sender, RoutedEventArgs e)
     {
-        if (!string.IsNullOrWhiteSpace(TranslateOutput.Text) && await CopyToClipboardAsync(TranslateOutput.Text))
+        if (!string.IsNullOrWhiteSpace(_lastTranslation) && await CopyToClipboardAsync(_lastTranslation))
             ShowToast("Result copied");
     }
 
@@ -130,8 +219,10 @@ public partial class MainWindow
     //  TRANSLATION BACKEND (Google default, optional DeepL)
     // ============================================================
 
-    /// <summary>Build the active translator from settings: DeepL (with Google fallback) when an
-    /// API key is set, otherwise plain Google — always wrapped in the cache. Rebuilt on key change.</summary>
+    /// <summary>Build the WRITING translator from settings: DeepL (with Google fallback) when an API
+    /// key is set, otherwise plain Google — always wrapped in the cache. Rebuilt on key change.
+    /// The screen-reading side never comes through here: it uses <c>_readTranslator</c> (Google only),
+    /// because a live loop translating every new chat line would eat a DeepL quota in one session.</summary>
     private ITranslator BuildTranslator()
     {
         var key = (_settings.DeepLApiKey ?? "").Trim();
@@ -145,10 +236,10 @@ public partial class MainWindow
     {
         _settings.DeepLApiKey = (DeepLKeyBox.Password ?? "").Trim();
         SettingsService.Save(_settings);
-        _translator = BuildTranslator();   // apply immediately (starts with a fresh cache)
+        _writeTranslator = BuildTranslator();   // apply immediately (starts with a fresh cache)
         UpdateDeepLStatus();
         ShowToast(_settings.DeepLApiKey.Length > 0
-            ? "DeepL key saved — translations now use DeepL"
+            ? "DeepL key saved — used when you write (screen reading stays on Google)"
             : "DeepL key cleared — using Google");
     }
 
@@ -156,7 +247,7 @@ public partial class MainWindow
     {
         bool on = (_settings.DeepLApiKey ?? "").Trim().Length > 0;
         DeepLStatus.Text = on
-            ? "● Using DeepL — falls back to Google if DeepL errors"
+            ? "● DeepL for what you write (Translator + quick reply) — falls back to Google if it errors. Screen reading uses Google."
             : "○ Using Google (free, no key needed)";
     }
 }

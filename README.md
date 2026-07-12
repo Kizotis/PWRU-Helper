@@ -53,10 +53,10 @@ translations underneath.
 
 **4. Squad builder** — tick the **dungeon(s)**, **class(es)** and **role(s)** you're looking
 for and it builds the Russian group-forming (LFM) message for you — e.g. tick *Terrace
-legendary* + *DD* + *Healer* + *Knock* and copy `в лега дд хил стук` straight into chat (that
-last one, *стук*, asks people to whisper you for an invite). The lists live in their own editable
-`squad.json` (next to the app, or in `%AppData%\PWRUHelper\`), so you can add dungeons, classes,
-roles and columns without touching the code.
+legendary* + *DD* + *Heal* + *Invite on me* and copy `в лега дд хил стук` straight into chat
+(that last one, *стук*, asks people to whisper you for an invite). Tick **UPPERCASE** to shout it.
+The lists live in their own editable `squad.json` (next to the app, or in `%AppData%\PWRUHelper\`),
+so you can add dungeons, classes, roles and columns without touching the code.
 
 ---
 
@@ -119,14 +119,23 @@ The app makes this easy: open the **Screen OCR** tab and click
   **Ctrl+Alt+R** re-reads your last area once (no live loop).
 - Your settings, window position and **last live area are remembered** — use
   **"↻ Resume last area"** to restart live without re-drawing the box.
-- Translating **auto-copies** the result (Ctrl+V in game). Pasting Russian flips the
-  direction automatically. On a screen-read message, use **↩** to reply in Russian.
+- Translating **auto-copies** the result (Ctrl+V in game), and **Enter** translates
+  (Shift+Enter for a new line). Pasting Russian flips the direction automatically. On a
+  screen-read message, use **↩** to reply in Russian.
+- **Too long for the game chat?** The game only takes 78 characters per message. A longer
+  translation is shown with **every second block tinted and a red mark on the cut**, so you can
+  see exactly how far to select before pasting — the text itself is untouched, so whatever you
+  select is exactly what was translated. (In the compact overlay, long replies are split into
+  numbered blocks you copy one by one instead.)
 - For the sharpest reading, **select just the last 3–4 lines** of the chat rather than the
   whole window — a tighter box is read far more precisely.
 - **Fine-tuning** (Screen OCR tab): **OCR sensitivity** (lower ignores the moving game world
   behind the chat; raise to catch every small change), **Live speed** (how often it re-reads),
   **Smallest text fragment** (skip stray single-letter specks) and **Stability** (how sure it
   must be a line is real before translating). Sensible defaults are set on first launch.
+- **Been using it a while?** Your saved settings are kept as they are when you update, so the
+  values tuned in a later version never reach you. **↺ Reset to recommended settings** (Screen OCR
+  tab) puts the four sliders and the background filter back to what this version ships with.
 - **Busy background?** Try the **Background filter** (Screen OCR tab): *Boost contrast* makes
   bright chat text of any colour stand out from the 3D world behind it, and *Keep one colour*
   isolates a single chat channel by its colour (hex + tolerance).
@@ -134,8 +143,10 @@ The app makes this easy: open the **Screen OCR** tab and click
   (experimental)* — it can read true full-screen games; if it can't run on your machine the
   app quietly falls back to the normal method.
 - **Better translations (optional):** paste a free [DeepL API key](https://www.deepl.com/pro-api)
-  in the About tab — translations then go through DeepL (higher quality) and automatically fall
-  back to Google if DeepL is unavailable. No key needed for normal use.
+  in the About tab — DeepL (higher quality) is then used for **what you write**: the Translator
+  tab and the compact overlay's quick reply, falling back to Google if DeepL is unavailable.
+  Reading the screen keeps using the free Google engine, so a busy live feed can't burn through
+  your DeepL quota. No key needed for normal use.
 - **Updating is one click:** when a new version is out, the app offers to download and run the
   installer for you (About tab → *Check for updates*).
 - **Something broke?** About tab → **📋 Copy error report** copies the recent error log so you

@@ -219,9 +219,13 @@ public partial class MainWindow
 
     /// <summary>Editable-copy locator shared by the phrasebook and the slang glossary:
     /// prefer an existing copy next to the exe or in %AppData%, else create one from the
-    /// embedded text so the user has something to edit. Returns null if none is possible.</summary>
-    private static string? FindOrCreateEditable(string fileName, string? embedded)
+    /// embedded text so the user has something to edit. Returns null if none is possible.
+    /// An existing copy that is older than the shipped one is refreshed — see
+    /// <see cref="UpgradeEditableIfStale"/>; <paramref name="refreshed"/> then names the backup, so
+    /// the caller can TELL the user rather than only writing it to a log nobody reads.</summary>
+    private static string? FindOrCreateEditable(string fileName, string? embedded, out string? refreshed)
     {
+        refreshed = null;
         var candidates = new[]
         {
             Path.Combine(AppContext.BaseDirectory, "Data", fileName),
@@ -229,7 +233,11 @@ public partial class MainWindow
                          "PWRUHelper", fileName),
         };
         foreach (var path in candidates)
-            if (File.Exists(path)) return path;
+            if (File.Exists(path))
+            {
+                refreshed = UpgradeEditableIfStale(path, embedded);
+                return path;
+            }
         if (embedded != null)
             foreach (var path in candidates)
                 try
@@ -240,5 +248,72 @@ public partial class MainWindow
                 }
                 catch { /* not writable here — try the next location */ }
         return null;
+    }
+
+    /// <summary>
+    /// The editable copy is created ONCE, on first run, and then belongs to the user — so anything
+    /// we later fix in the shipped file (a wrong class name, a new dungeon) never reached anyone who
+    /// had already started the app. Fix: the shipped JSON carries a <c>"version"</c>; when it is newer
+    /// than the user's copy, the copy is replaced.
+    ///
+    /// The user's copy may hold THEIR OWN edits, so it is always backed up first — and never over a
+    /// previous backup: the next version bump used to overwrite the .bak that still held the only
+    /// copy of those edits. Each refresh gets its own free <c>.bak</c> name, so the oldest (the one
+    /// most likely to be theirs) survives forever.
+    ///
+    /// A copy whose version can't be read — hand-edited into invalid JSON, or with the version line
+    /// quoted or deleted — counts as older and is replaced too. That is deliberate: the app cannot
+    /// use a file it cannot parse (the tab would just be empty). But it is backed up like any other,
+    /// which is why nothing is destroyed. Returns the backup's file name when a refresh happened.
+    /// </summary>
+    internal static string? UpgradeEditableIfStale(string path, string? embedded)
+    {
+        try
+        {
+            int shipped = DataVersionOf(embedded);
+            if (shipped <= 0) return null;                          // shipped file isn't versioned — leave the copy alone
+            if (DataVersionOf(File.ReadAllText(path)) >= shipped) return null;
+
+            var backup = FreeBackupPath(path);
+            File.Copy(path, backup);                               // never overwrite: an older .bak may be the user's only copy
+            File.WriteAllText(path, embedded!);
+            Services.Logging.Warn($"Refreshed {Path.GetFileName(path)} to shipped version {shipped} " +
+                                  $"(previous copy kept as {Path.GetFileName(backup)})");
+            return Path.GetFileName(backup);
+        }
+        catch (Exception ex)
+        {
+            // Best-effort: a locked/read-only copy just keeps its old content, exactly as before.
+            Services.Logging.Warn($"Could not refresh {Path.GetFileName(path)}: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>A backup name that isn't taken yet: "squad.json.bak", then ".bak2", ".bak3"… so a
+    /// later refresh can never bury the backup holding the user's original edits.</summary>
+    private static string FreeBackupPath(string path)
+    {
+        var candidate = path + ".bak";
+        for (int n = 2; File.Exists(candidate) && n < 1000; n++) candidate = $"{path}.bak{n}";
+        return candidate;
+    }
+
+    /// <summary>The <c>"version"</c> of a data file, or 0 when it has none, isn't a JSON object, or
+    /// can't be parsed at all. 0 means "older than anything we ship" — see
+    /// <see cref="UpgradeEditableIfStale"/>, which backs the file up before replacing it.</summary>
+    internal static int DataVersionOf(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return 0;
+        try
+        {
+            using var doc = JsonDocument.Parse(json,
+                new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+            return doc.RootElement.ValueKind == JsonValueKind.Object &&
+                   doc.RootElement.TryGetProperty("version", out var v) &&
+                   v.ValueKind == JsonValueKind.Number &&
+                   v.TryGetInt32(out int n)
+                ? n : 0;
+        }
+        catch { return 0; }
     }
 }

@@ -23,7 +23,8 @@ public sealed class LiveDedup
     private sealed class Entry
     {
         public string Sig = "";
-        public int LastSeen;   // frame index this signature was last on screen (or emitted)
+        public string Digits = "";   // see TextMatching.MeaningfulDigits
+        public int LastSeen;         // frame index this signature was last on screen (or emitted)
     }
 
     /// <summary>A remembered message must have been OFF screen for at least this many frames
@@ -50,28 +51,28 @@ public sealed class LiveDedup
         _tick++;
 
         // Signature every candidate, dropping any that reduce to nothing (pure punctuation/emoji).
-        var cur = new List<(string line, string sig)>();
+        var cur = new List<(string line, string sig, string digits)>();
         foreach (var l in lines)
         {
             var sig = TextMatching.Signature(l);
-            if (sig.Length > 0) cur.Add((l, sig));
+            if (sig.Length > 0) cur.Add((l, sig, TextMatching.MeaningfulDigits(l)));
         }
 
         // FRESH = on screen now but not a message we're already showing. A signature that
         // matches a remembered entry seen within ReappearAfterFrames is "still here" — refresh
         // it and skip. Anything unknown, or only matching an entry that's been gone a while, is
         // a candidate (new message, or a real re-send after it scrolled off).
-        var fresh = new List<(string line, string sig)>();
+        var fresh = new List<(string line, string sig, string digits)>();
         foreach (var x in cur)
         {
-            var e = BestMatch(x.sig, matchThreshold);
+            var e = BestMatch(x.sig, x.digits, matchThreshold);
             // A wrapped message can lose its "Nick:" line off the top of the capture, leaving only
             // the tail as a short headerless read. That fragment's signature is far shorter than
             // the remembered full one, so the length gap alone fails SimilarEnough and it looks
             // "new" — re-emitting a duplicate partial translation. Catch it: if no fuzzy match, a
             // remembered signature that CONTAINS this candidate (min length 10, so tiny strings
             // don't match spuriously) is the same message still on screen.
-            if (e == null && x.sig.Length >= 10) e = ContainingMatch(x.sig);
+            if (e == null && x.sig.Length >= 10) e = ContainingMatch(x.sig, x.digits);
             if (e != null && _tick - e.LastSeen <= ReappearAfterFrames)
                 e.LastSeen = _tick;          // still on screen → keep alive, don't re-translate
             else
@@ -90,32 +91,51 @@ public sealed class LiveDedup
         foreach (var x in confirmed)
         {
             outLines.Add(x.line);
-            var e = BestMatch(x.sig, matchThreshold);
+            var e = BestMatch(x.sig, x.digits, matchThreshold);
             if (e != null) e.LastSeen = _tick;
-            else _seen.Add(new Entry { Sig = x.sig, LastSeen = _tick });
+            else _seen.Add(new Entry { Sig = x.sig, Digits = x.digits, LastSeen = _tick });
         }
 
         Prune();
         return outLines;
     }
 
-    /// <summary>Most-recently-seen remembered entry whose signature is close enough to <paramref name="sig"/>.</summary>
-    private Entry? BestMatch(string sig, double threshold)
+    /// <summary>
+    /// Most-recently-seen remembered entry that is the same MESSAGE as <paramref name="sig"/>:
+    /// close enough in wording, AND carrying the same meaningful digits.
+    ///
+    /// The digits are not a detail — in an LFM chat they are the message. "+5дд" re-posted as
+    /// "+2дд" is three slots filled, but one digit in a 28-character line is a 0.96 similarity:
+    /// above even the top of the sensitivity slider's band (0.95), so the fuzzy test alone called
+    /// it the same message and the user never saw it. Raising the band is not an option — the OCR
+    /// itself flickers by a character or two between frames ("прист" / "приег" are real readings of
+    /// the same word), and a stricter threshold would re-translate the same message forever.
+    /// Letters flicker; digits carry the meaning. So compare them separately.
+    /// </summary>
+    private Entry? BestMatch(string sig, string digits, double threshold)
     {
         Entry? best = null;
         foreach (var e in _seen)
-            if (TextMatching.SimilarEnough(e.Sig, sig, threshold) && (best == null || e.LastSeen > best.LastSeen))
+            if (e.Digits == digits &&
+                TextMatching.SimilarEnough(e.Sig, sig, threshold) &&
+                (best == null || e.LastSeen > best.LastSeen))
                 best = e;
         return best;
     }
 
     /// <summary>Most-recently-seen remembered entry whose signature CONTAINS <paramref name="sig"/>
-    /// — catches an orphaned wrapped-line fragment whose "Nick:" header scrolled off the top.</summary>
-    private Entry? ContainingMatch(string sig)
+    /// — catches an orphaned wrapped-line fragment whose "Nick:" header scrolled off the top.
+    ///
+    /// A fragment carries a SUBSET of the whole message's digits (it may have lost the part holding
+    /// them), never different ones — so equality would be wrong here, but containment of the digits
+    /// still holds, and it keeps a genuine re-post with a changed number from being swallowed by
+    /// this path after <see cref="BestMatch"/> has already rejected it.</summary>
+    private Entry? ContainingMatch(string sig, string digits)
     {
         Entry? best = null;
         foreach (var e in _seen)
-            if (e.Sig.Contains(sig) && (best == null || e.LastSeen > best.LastSeen))
+            if (e.Sig.Contains(sig) && e.Digits.Contains(digits) &&
+                (best == null || e.LastSeen > best.LastSeen))
                 best = e;
         return best;
     }

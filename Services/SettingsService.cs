@@ -8,11 +8,12 @@ public class AppSettings
 {
     // Translator + OCR choices.
     // Defaults are tuned for chat OCR out of the box: a very low sensitivity (5%) ignores
-    // camera/background movement behind the chat, and ~1.0s between reads (LiveSpeed 80%)
-    // keeps the feed responsive. These only apply on first launch — a saved settings.json
-    // keeps whatever the user picked.
+    // camera/background movement behind the chat, and ~0.7s between reads (LiveSpeed 92%)
+    // keeps up with a message that scrolls past quickly. These only apply on first launch — a
+    // saved settings.json keeps whatever the user picked (the ↺ button on the Screen OCR tab
+    // brings these values back).
     public int SensitivityPercent { get; set; } = 5;
-    public int LiveSpeedPercent { get; set; } = 80;   // → CurrentLiveIntervalMs() ≈ 1.0s
+    public int LiveSpeedPercent { get; set; } = 92;   // → MainWindow.LiveIntervalMs() = 0.7s
 
     // Fine OCR tuning (live mode). MinFragmentLetters = the smallest text fragment (in
     // letters) worth translating; StabilityPercent = how strictly a newly-appeared line
@@ -41,6 +42,9 @@ public class AppSettings
     // Screen-capture backend: "gdi" (default) or "wgc" (experimental Windows.Graphics.Capture,
     // for full-screen games where GDI returns black). WGC falls back to GDI on any failure.
     public string CaptureBackend { get; set; } = "gdi";
+
+    // Squad builder: write the assembled LFM message in capital letters (off by default).
+    public bool SquadUppercase { get; set; }
 
     // Window / behaviour
     public bool AlwaysOnTop { get; set; } = true;
@@ -80,14 +84,26 @@ public class AppSettings
 /// Fully best-effort: any failure just yields defaults / is ignored, never throws.</summary>
 public static class SettingsService
 {
-    private static readonly string Path_ = System.IO.Path.Combine(
+    private static readonly string DefaultPath = System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "PWRUHelper", "settings.json");
+
+    /// <summary>Where settings are read from / written to. Tests point this at a temp file: they
+    /// construct a real MainWindow, which loads AND saves settings, and must never touch (or
+    /// corrupt) the developer's own %AppData% file — which is exactly how the "filter resets to
+    /// Off" bug was reproduced.</summary>
+    internal static string? PathOverride;
+
+    private static string Path_ => PathOverride ?? DefaultPath;
 
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 
     /// <summary>Latest settings-schema version. Bump when adding a <see cref="Migrate"/> step.</summary>
-    private const int CurrentSettingsVersion = 1;
+    private const int CurrentSettingsVersion = 3;
+
+    /// <summary>The live-speed default before v0.13.0 (≈1.0s between reads). A saved file still
+    /// holding exactly this was never touched by its owner, so the new default may replace it.</summary>
+    private const int PreviousLiveSpeedDefault = 80;
 
     public static AppSettings Load()
     {
@@ -123,6 +139,21 @@ public static class SettingsService
         // (or an already-chosen "contrast") alone.
         if (s.SettingsVersion < 1 && s.OcrFilterMode == "off")
             s.OcrFilterMode = "contrast";
+
+        // v2 (v0.13.0): the v1 migration above never actually stuck — starting the app wrote
+        // "off" straight back over it (a XAML-load ValueChanged persisted the not-yet-restored
+        // filter combo; see MainWindow._restoringSettings). So EVERY user is sitting on "off",
+        // whether they chose it or not. Now that the clobber is fixed, apply the intended
+        // default once more; from here on, a deliberate "off" survives a restart.
+        if (s.SettingsVersion < 2 && s.OcrFilterMode == "off")
+            s.OcrFilterMode = "contrast";
+
+        // v3 (v0.13.0): live reads go from ~1.0s to ~0.7s, so a message that scrolls past quickly
+        // still gets the two frames it needs to be confirmed. Only for someone who never moved the
+        // slider — a file holding EXACTLY the old default is one nobody chose. A deliberate speed
+        // (anything else, including a slower one) is left alone.
+        if (s.SettingsVersion < 3 && s.LiveSpeedPercent == PreviousLiveSpeedDefault)
+            s.LiveSpeedPercent = new AppSettings().LiveSpeedPercent;
 
         s.SettingsVersion = CurrentSettingsVersion;
         return true;

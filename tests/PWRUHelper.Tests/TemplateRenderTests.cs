@@ -18,18 +18,20 @@ namespace PWRUHelper.Tests;
 /// row — invisible to an empty-list smoke launch. The lesson baked in here: verify list
 /// rendering with a genuinely injected item, not an empty collection.
 ///
-/// WPF needs an STA thread with an Application that has the Theme resources loaded, so the
-/// whole test runs on one dedicated STA thread with a single Application instance.
+/// WPF needs an STA thread with an Application that has the Theme resources loaded — see
+/// <see cref="StaTestHost"/>, shared by every WPF test. Settings go to a temp file: constructing
+/// a MainWindow saves them, and a test must never rewrite the developer's real %AppData% copy.
 /// </summary>
+[Collection("WPF")]
 public class TemplateRenderTests
 {
     [Fact]
     public void OcrResult_template_renders_a_real_item_with_no_binding_errors()
     {
-        RunOnSta(() =>
-        {
-            EnsureApplicationWithTheme();
+        using var _ = new TempSettings("{}");
 
+        StaTestHost.Run(() =>
+        {
             // A fully-populated item: speaker + both bodies + a glossary line, so every binding
             // in the template (all four Runs + the Glossary TextBlock) is actually exercised.
             var item = new OcrResultItem
@@ -87,15 +89,6 @@ public class TemplateRenderTests
         Assert.Contains(texts, t => t.Contains("Игрок:"));   // grey speaker prefix rendered
     }
 
-    private static void EnsureApplicationWithTheme()
-    {
-        if (Application.Current != null) return;
-        // Loading App.xaml merges Theme.xaml into Application.Resources, which the template's
-        // StaticResource lookups (PanelBrush, GoldBrush, GhostButton…) resolve against.
-        var app = new App();
-        app.InitializeComponent();
-    }
-
     private static List<string> CollectTextBlockText(DependencyObject root)
     {
         var result = new List<string>();
@@ -127,21 +120,6 @@ public class TemplateRenderTests
         foreach (var inline in tb.Inlines)
             if (inline is Run run) sb.Append(run.Text);
         return sb.ToString();
-    }
-
-    private static void RunOnSta(Action action)
-    {
-        Exception? captured = null;
-        var thread = new Thread(() =>
-        {
-            try { action(); }
-            catch (Exception ex) { captured = ex; }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        thread.Join();
-        if (captured != null)
-            throw new Xunit.Sdk.XunitException("Template render test failed on the STA thread:\n" + captured);
     }
 
     /// <summary>Captures anything WPF writes to the data-binding trace source.</summary>

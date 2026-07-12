@@ -21,9 +21,10 @@ public partial class CompactOverlay : Window
     private readonly INotifyCollectionChanged _feed;
     private bool _blink;
 
-    /// <summary>Max characters the game accepts in a single chat message. A reply longer
-    /// than this is split into word-aligned blocks the user copies and sends one by one.</summary>
-    private const int GameMessageLimit = 78;
+    /// <summary>Max characters the game accepts in a single chat message. A reply longer than this
+    /// is split into word-aligned blocks the user copies and sends one by one. Shared with the
+    /// Translator tab, which highlights the same cut points instead of splitting.</summary>
+    private const int GameMessageLimit = Services.TextMatching.GameChatLimit;
 
     /// <summary>One copyable block of a split reply. <paramref name="Label"/> is like "1/2".</summary>
     private record ReplyChunk(string Label, string Text);

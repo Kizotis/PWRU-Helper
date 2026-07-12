@@ -24,6 +24,19 @@ public partial class MainWindow
     private bool IsOcrReady()
         => _ocr.IsAvailable && (_ocr.ActiveLanguage?.StartsWith("ru", StringComparison.OrdinalIgnoreCase) ?? false);
 
+    /// <summary>Bring the user to the Screen OCR tab and explain, THERE, that the Russian pack is
+    /// what's missing. The explanation used to be written into ScreenReadStatus — which lives on the
+    /// Translator tab, i.e. the one we just navigated them away from, so the only thing they ever saw
+    /// was a toast that vanished. LiveStatus is on the tab they actually land on.</summary>
+    private void ShowOcrPackNeeded(string whatToDoNext)
+    {
+        if (_overlay is { IsVisible: true }) ExitCompactMode(); else BringToFront();
+        MainTabs.SelectedIndex = TabScreenOcr;
+        LiveStatus.Text = "⚠ The Russian OCR pack isn't installed, so nothing can be read at all. " +
+                          "Install it with the \"Install Russian OCR\" button on this tab — " + whatToDoNext;
+        ShowToast("Russian OCR pack needed — install it on this tab (1 click).");
+    }
+
     private bool CheckOcrAvailability()
     {
         var lang = _ocr.ActiveLanguage;
@@ -38,7 +51,9 @@ public partial class MainWindow
         }
         else
         {
-            OcrLangStatus.Text = "Russian OCR language pack: not installed — Cyrillic won't read well until it is.";
+            // Not "won't read well" — without it nothing is read AT ALL. The app no longer falls back
+            // to the Windows engine, because a Latin engine reads Cyrillic as confident gibberish.
+            OcrLangStatus.Text = "Russian OCR language pack: NOT INSTALLED — screen reading is off until it is.";
             OcrLangStatus.SetResourceReference(TextBlock.ForegroundProperty, "GoldBrush");
             InstallOcrButton.Content = "Install Russian OCR (1 click)";
         }
@@ -119,7 +134,8 @@ public partial class MainWindow
         try
         {
             var embedded = ReadEmbeddedJson("slang.json");
-            var path = FindOrCreateEditable("slang.json", embedded);
+            var path = FindOrCreateEditable("slang.json", embedded, out var backup);
+            if (backup != null) NoteDataFileRefreshed("slang.json", backup);
             string? json = embedded;
             if (path != null)
                 try { json = File.ReadAllText(path); } catch { /* keep embedded */ }
@@ -166,6 +182,12 @@ public partial class MainWindow
         // race — and its _ocrItems.Clear() below would wipe a just-started live feed. The flag
         // gates ToggleLive/StartLive/ReadLastAreaOnce too; button disabling stays as a UI cue.
         if (_readingOnce) return;
+
+        // Same reason as StartLive: with no Russian engine there is nothing to read, and the app has
+        // to say so — rather than show an empty result (or, before the fallback was removed, a
+        // confidently garbled one).
+        if (!IsOcrReady()) { ShowOcrPackNeeded("then read the area again."); return; }
+
         _readingOnce = true;
         MainTabs.SelectedIndex = TabTranslator;   // results show on the Translator page
         SelectAreaButton.IsEnabled = false;
@@ -254,6 +276,69 @@ public partial class MainWindow
     }
 
     // ============================================================
+    //  RESET TO THE RECOMMENDED READING SETTINGS
+    // ============================================================
+
+    /// <summary>
+    /// A settings file written by an older version keeps its values forever — which means a default
+    /// we tune later (calmer sensitivity, faster reads, the background filter) only ever reaches NEW
+    /// installs. Everyone else stays on numbers nobody chose, without knowing it. This is the way back.
+    ///
+    /// Deliberately limited to what this tab tunes for READING. The capture method is not a
+    /// preference but a compatibility choice — someone on "Windows Graphics" picked it because GDI
+    /// gave them a black screen, and resetting it would break their capture for no reason.
+    /// </summary>
+    private void ResetTuning_Click(object sender, RoutedEventArgs e)
+    {
+        var d = new AppSettings();   // the shipped defaults — one source of truth, never re-typed here
+        var answer = MessageBox.Show(this,
+            "Put the reading settings back to the recommended values?\n\n" +
+            $"•  OCR sensitivity: {d.SensitivityPercent}%\n" +
+            $"•  Live speed: ~{LiveIntervalMs(d.LiveSpeedPercent) / 1000.0:0.0}s between reads\n" +
+            $"•  Smallest text fragment: {d.MinFragmentLetters} letters\n" +
+            $"•  Stability: {d.StabilityPercent}%\n" +
+            "•  Background filter: Boost contrast\n\n" +
+            "Your capture method, and everything on the other tabs, stay as they are.",
+            "PWRU Helper", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (answer != MessageBoxResult.Yes) return;
+
+        ApplyRecommendedTuning();
+        ShowToast("Reading settings are back to the recommended values.");
+    }
+
+    /// <summary>Put the reading settings back to the shipped defaults, in memory, on screen and on
+    /// disk. Split out of the click handler so it can be tested without a dialog.</summary>
+    internal void ApplyRecommendedTuning()
+    {
+        var d = new AppSettings();
+        _settings.SensitivityPercent = d.SensitivityPercent;
+        _settings.LiveSpeedPercent = d.LiveSpeedPercent;
+        _settings.MinFragmentLetters = d.MinFragmentLetters;
+        _settings.StabilityPercent = d.StabilityPercent;
+        _settings.OcrFilterMode = d.OcrFilterMode;
+        _settings.OcrKeepColorHex = d.OcrKeepColorHex;
+        _settings.OcrColorTolerance = d.OcrColorTolerance;
+
+        // Pushing values into the controls fires their change handlers, which would write the
+        // half-applied UI state straight back to disk — the same trap ApplySettings has to dodge.
+        _restoringSettings = true;
+        try
+        {
+            SensitivitySlider.Value = _settings.SensitivityPercent;
+            LiveSpeedSlider.Value = _settings.LiveSpeedPercent;
+            MinFragmentSlider.Value = _settings.MinFragmentLetters;
+            StabilitySlider.Value = _settings.StabilityPercent;
+            OcrColorHexBox.Text = _settings.OcrKeepColorHex;
+            OcrToleranceSlider.Value = _settings.OcrColorTolerance;
+            SetOcrFilterCombo(_settings.OcrFilterMode);
+            UpdateOcrFilterUi(_settings.OcrFilterMode);
+        }
+        finally { _restoringSettings = false; }
+
+        SettingsService.Save(_settings);
+    }
+
+    // ============================================================
     //  BACKGROUND FILTER (optional pre-OCR clean-up)
     // ============================================================
 
@@ -301,13 +386,15 @@ public partial class MainWindow
 
     private void SaveOcrFilterSettings()
     {
-        // While ApplySettings is restoring the UI, setting the controls fires these handlers; writing
-        // the half-restored state back would clobber the very settings we're loading. Bail out.
+        // While the UI is being built or restored, setting the controls fires these handlers; writing
+        // that transient state back would clobber the very settings we're loading. Bail out.
         if (_restoringSettings) return;
         // Handlers can fire while the XAML is still being built; ignore until all controls exist.
         if (OcrFilterCombo is null || OcrColorHexBox is null || OcrToleranceSlider is null) return;
 
-        var mode = SelectedTag(OcrFilterCombo) ?? "off";
+        // No selection yet = nothing the user chose. Never fall back to "off" here: doing that is
+        // exactly how a saved "contrast" got overwritten during startup (see _restoringSettings).
+        if (SelectedTag(OcrFilterCombo) is not string mode) return;
         _settings.OcrFilterMode = mode;
         _settings.OcrKeepColorHex = (OcrColorHexBox.Text ?? "#FFFFFF").Trim();
         _settings.OcrColorTolerance = (int)Math.Round(OcrToleranceSlider.Value);
@@ -343,7 +430,7 @@ public partial class MainWindow
         // ApplySettings sets this combo during restore; don't write the transient state back.
         if (_restoringSettings) return;
         if (CaptureBackendCombo is null) return;   // still building the XAML
-        var mode = SelectedTag(CaptureBackendCombo) ?? "gdi";
+        if (SelectedTag(CaptureBackendCombo) is not string mode) return;   // no selection = not a user choice
         _settings.CaptureBackend = mode;
         ScreenCapture.SetMode(mode);
         SettingsService.Save(_settings);
