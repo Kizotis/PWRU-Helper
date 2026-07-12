@@ -75,16 +75,30 @@ public static class TextMatching
     /// start of a line marks a new chat message even when the nickname after it is garbled.</summary>
     private static readonly HashSet<string> ChatTags = new()
     {
-        "мир", "осн", "основной", "клан", "сист", "сиcт", "система", "фракц", "фракция", "фр",
-        "группа", "гр", "отряд", "отр", "союз", "альянс", "лс", "личка", "личное",
+        // Every one of these was read off a real screenshot of the game chat.
+        "мир",                                  // world
+        "клан", "фракц", "фракция", "фр",       // faction
+        "сист", "сиcт", "система",              // system
+        "лично", "личн", "личное", "личка", "лс",   // private / whisper
+        "оснв", "осн", "основной",              // main
+        "групп", "группа", "гр",                // group
+        "грул",                                 // …which the OCR reliably reads as "грул." — keep it
+        "отряд", "отр", "союз", "альянс",
         "торг", "торговля", "торговый", "помощь",
-        // The white "normal"/local channel — its badge reads «Обычный» / «Обыч.».
-        "обыч", "обычн", "обычный",
+        "обыч", "обычн", "обычный",             // the white "normal" / local channel
     };
 
-    /// <summary>Punctuation the OCR sticks to a badge: the chip's border and its own dot
-    /// («Сист.»). Trimmed before a token is matched against <see cref="ChatTags"/>.</summary>
-    private static readonly char[] TagEdgeTrim = { '[', ']', '(', ')', '<', '>', '.', ',', ':', ';', '|', '-', '—', '*', '_', '\'' };
+    /// <summary>Punctuation the OCR sticks to a badge: the chip's border and the badge's own dot
+    /// («Сист.», «Оснв.»). Trimmed before a token is matched against <see cref="ChatTags"/>.
+    /// A COMMA is deliberately absent: a badge never ends in one, but a word in the middle of a
+    /// sentence does — and "фракция," starting a wrapped line must stay part of the message
+    /// (a player listing the channels had their message eaten alive by exactly that).</summary>
+    private static readonly char[] TagEdgeTrim = { '[', ']', '(', ')', '<', '>', '.', ':', ';', '|', '-', '—', '*', '_', '\'' };
+
+    /// <summary>Decoration to strip from both ends of a nickname — the player's own ("~V0oDo0~",
+    /// "|Ghost|") and the crumbs the OCR leaves behind from the badge's border.</summary>
+    private static readonly char[] NickEdgeTrim =
+        { ' ', '[', ']', '(', ')', '<', '>', '+', '.', ',', '-', '—', '–', '*', '~', '|', '_', '=' };
 
     /// <summary>
     /// Peel the channel badge («Мир», «Клан», «Сист.») off the front of an OCR line.
@@ -163,11 +177,17 @@ public static class TextMatching
                 if (bd.Length > 0) body.Add(bd);
                 lineCount = 1;
             }
-            else if (tagged)
+            else if (tagged && rest.Contains(':'))
             {
                 // Badged, but the nickname didn't survive the OCR (or there is none — a system
-                // announcement). The badge still proves a new message starts here, so don't let it
-                // glue onto the previous player's text; keep the line, minus the badge.
+                // announcement like "Сист. Elder of the City of Swords announces loudly: …", whose
+                // colon sits far too deep to read as a header). The badge still proves a new message
+                // starts here, so don't let it glue onto the previous player's text.
+                //
+                // The colon is what makes this safe: every chat line has one ("Nick:", "announces
+                // loudly:"). Without it, a wrapped line that merely BEGINS with a channel word —
+                // "фракция, гильдия, объявление…" — would be mistaken for a badge, and the word
+                // would be deleted from the player's message.
                 Flush();
                 body.Add(rest);
                 lineCount = 1;
@@ -247,8 +267,9 @@ public static class TextMatching
         // MaxHeaderChars is a colon inside the body ("… a colon: here"), not a nick separator.
         if (!hadTag && colon > MaxHeaderChars) return false;
 
-        var nick = string.Join(" ", tokens)
-            .Trim(' ', '[', ']', '(', ')', '<', '>', '+', '.', ',', '-', '*');
+        // Players decorate their names ("~V0oDo0~") and the OCR adds its own crumbs, so trim the
+        // decoration off both ends — including the em/en dashes it likes to turn a tilde into.
+        var nick = string.Join(" ", tokens).Trim(NickEdgeTrim);
 
         // A real nickname has a letter (so "12" in "12:30" is rejected), isn't absurdly long, and
         // is at most a few words. A recognised tag with a garbled nick still marks a boundary.

@@ -85,6 +85,10 @@ public class ChannelTagTests
     [InlineData("Мир")]        // world (yellow)
     [InlineData("Клан")]       // faction (blue)
     [InlineData("Сист.")]      // system (red) — the trailing dot is part of what the OCR reads
+    [InlineData("Лично")]      // private / whisper
+    [InlineData("Оснв.")]      // main
+    [InlineData("Групп.")]     // group
+    [InlineData("грул.")]      // …which the OCR reliably reads like this. Ground truth beats theory.
     [InlineData("Отряд")]      // squad (green)
     [InlineData("Обыч.")]      // normal / local (white)
     [InlineData("Обычный")]
@@ -104,5 +108,100 @@ public class ChannelTagTests
     {
         Assert.False(TextMatching.TryPeelChannelTag(line, out var rest));
         Assert.Equal(line, rest);
+    }
+
+    // ---- a channel WORD inside a sentence is not a badge ----
+
+    [Fact]
+    public void A_wrapped_line_that_merely_begins_with_a_channel_word_keeps_every_word()
+    {
+        // Real message: a player listing the chat channels. Its wrapped tail starts with "фракция,"
+        // — a channel name. Treating that as a badge peeled the word off and split the message in
+        // two: the player's own words were silently deleted. A badge never carries a comma, and a
+        // real chat line always has a colon; both are required now.
+        var messages = TextMatching.SplitChatMessages(new[]
+        {
+            "Оснв.",                                                     // the badge, on its own line
+            "kizotis: мир, некоторые отряды, частные, сообщения,",
+            "фракция, гильдия, объявление, админис",                     // wrapped tail — must survive whole
+        });
+
+        var message = Assert.Single(messages);
+        Assert.Equal("kizotis: мир, некоторые отряды, частные, сообщения, фракция, гильдия, объявление, админис",
+                     message);
+    }
+
+    // ---- the whole of a real screen ----
+
+    [Fact]
+    public void A_real_screenful_of_chat_comes_out_as_clean_messages()
+    {
+        // Verbatim OCR (Boost contrast) of a screenshot showing one message per channel.
+        var lines = new[]
+        {
+            "Мир", "Лично", "Мир", "Оснв.",
+            "винчик: в ТС СЛОЖКУ ПРИСТ.",
+            "kizotis: мир, некоторые отряды, частные, сообщения,",
+            "фракция, гильдия, объявление, админис",
+            "грул. kizotis: Всем привет",
+            "клан kizotis: Ьоор",
+            "мир Ianhua: Договор смены класса продаёт кто?",
+            "грул. м@лыШ: привет)",
+            "грул. ИНЕЙ: приветы",
+            "мир —V00D00-: шоп продает всегда",
+        };
+
+        var messages = TextMatching.SplitChatMessages(lines);
+
+        // Not one of the four badges became a message of its own…
+        Assert.Equal(8, messages.Count);
+        Assert.DoesNotContain(messages, m => m is "Мир" or "Лично" or "Оснв." or "грул." or "клан");
+        // …and no badge is left clinging to the front of a message.
+        Assert.All(messages, m => Assert.False(TextMatching.TryPeelChannelTag(m, out _),
+                                               $"a badge survived in: {m}"));
+
+        var speakers = messages.Select(m => TextMatching.SplitSpeakerStrict(m).Speaker).ToList();
+        Assert.Equal(
+            // "винчик" is empty on purpose — see the known limitation below.
+            new[] { "", "kizotis", "kizotis", "kizotis", "Ianhua", "м@лыШ", "ИНЕЙ", "V00D00" },
+            speakers);
+    }
+
+    [Fact]
+    public void KNOWN_LIMITATION_an_all_lowercase_cyrillic_nickname_is_still_translated_with_the_message()
+    {
+        // "винчик: в ТС СЛОЖКУ ПРИСТ." — a real player. SplitSpeakerStrict only keeps a nickname when
+        // it carries a capital, a Latin letter or a digit, because a chat BODY can itself start
+        // "тс: сбор у входа" and the slang "тс" would otherwise be stolen as a fake speaker (that bug
+        // shipped once, in v0.11.1). A lowercase Cyrillic nickname is indistinguishable from that by
+        // shape alone — and the badge, which would prove it IS a header, is read on a separate line
+        // by the OCR, so it can't be tied back to this one.
+        //
+        // Cost: the nickname is sent to the translator with the message instead of being kept grey.
+        // Telling the two apart needs the slang glossary (a body starting with a KNOWN slang word is
+        // not a speaker), which TextMatching deliberately doesn't depend on today.
+        //
+        // This test asserts what the app really does. Change it when the behaviour is fixed.
+        var (speaker, body) = TextMatching.SplitSpeakerStrict("винчик: в ТС СЛОЖКУ ПРИСТ.");
+
+        Assert.Equal("", speaker);
+        Assert.Equal("винчик: в ТС СЛОЖКУ ПРИСТ.", body);
+    }
+
+    [Fact]
+    public void A_badge_the_OCR_prints_after_a_message_does_not_end_up_inside_it()
+    {
+        // The badges do not always come out grouped ahead of the messages — here one lands right
+        // after the whisper it belongs to, and used to be glued onto its text ("фул Лично").
+        var messages = TextMatching.SplitChatMessages(new[]
+        {
+            "Антарес whispers: фул",
+            "Лично",
+            "Wei Xiaobao: 0kika becomes the owner of а геа1 rarity.",
+        });
+
+        Assert.Equal(2, messages.Count);
+        Assert.Equal("Антарес whispers: фул", messages[0]);
+        Assert.StartsWith("Wei Xiaobao:", messages[1]);
     }
 }
