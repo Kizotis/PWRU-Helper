@@ -75,16 +75,57 @@ public static class TextMatching
     /// start of a line marks a new chat message even when the nickname after it is garbled.</summary>
     private static readonly HashSet<string> ChatTags = new()
     {
-        "мир", "осн", "основной", "клан", "сист", "система", "фракц", "фракция", "фр",
-        "группа", "гр", "отряд", "союз", "лс", "личка", "личное", "торг", "торговля", "помощь",
+        "мир", "осн", "основной", "клан", "сист", "сиcт", "система", "фракц", "фракция", "фр",
+        "группа", "гр", "отряд", "отр", "союз", "альянс", "лс", "личка", "личное",
+        "торг", "торговля", "торговый", "помощь",
+        // The white "normal"/local channel — its badge reads «Обычный» / «Обыч.».
+        "обыч", "обычн", "обычный",
     };
+
+    /// <summary>Punctuation the OCR sticks to a badge: the chip's border and its own dot
+    /// («Сист.»). Trimmed before a token is matched against <see cref="ChatTags"/>.</summary>
+    private static readonly char[] TagEdgeTrim = { '[', ']', '(', ')', '<', '>', '.', ',', ':', ';', '|', '-', '—', '*', '_', '\'' };
+
+    /// <summary>
+    /// Peel the channel badge («Мир», «Клан», «Сист.») off the front of an OCR line.
+    ///
+    /// The game draws it as a coloured chip in front of the nickname, and the OCR reads it in one
+    /// of two ways depending on the background filter:
+    ///   • filter off  → inline, lower-cased: <c>"мир Hokasse: ОР вар прист +3"</c>
+    ///   • filter on   → the chip's own text becomes legible and comes out as a LINE OF ITS OWN,
+    ///                   with all the badges grouped ahead of the messages: <c>"Мир"</c>, <c>"Клан"</c>…
+    /// The second form is the nastier one: those lines used to be glued together into a fake
+    /// message ("Мир Мир Клан Клан") and sent to the translator.
+    ///
+    /// Returns true when a badge was found. <paramref name="rest"/> is what remains — EMPTY for a
+    /// badge-only line, which the caller drops. Tolerates a speck of chip border the OCR mistook
+    /// for a letter in front of the tag (<c>"т мир Hokasse: …"</c>).
+    /// </summary>
+    public static bool TryPeelChannelTag(string line, out string rest)
+    {
+        var tokens = (line ?? "").Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        int i = 0;
+        bool found = false;
+
+        while (i < tokens.Length)
+        {
+            if (IsChatTag(tokens[i])) { found = true; i++; continue; }
+            // A 1–2 character speck sitting between the chip border and the tag itself.
+            if (i + 1 < tokens.Length && tokens[i].Length <= 2 && IsChatTag(tokens[i + 1])) { i++; continue; }
+            break;
+        }
+
+        rest = string.Join(" ", tokens.Skip(i));
+        return found;
+    }
 
     /// <summary>Split raw OCR lines into whole chat messages using the game's own structure —
     /// each message is <c>[Channel] Nick: text</c>, so a line that starts a new <c>Nick:</c>
     /// (optionally after a channel tag) begins a new message, and any following line without one
     /// is a wrapped continuation glued back on. This works even when players type no punctuation
     /// at all (the usual case in-game), where <see cref="ToSentences"/> can't tell messages apart.
-    /// The channel tag is dropped; the nickname is kept as a "Nick: text" prefix.</summary>
+    /// The channel badge is dropped entirely (never shown, never translated — see
+    /// <see cref="TryPeelChannelTag"/>); the nickname is kept as a "Nick: text" prefix.</summary>
     public static List<string> SplitChatMessages(IEnumerable<string> lines)
     {
         var messages = new List<string>();
@@ -108,11 +149,27 @@ public static class TextMatching
         {
             var line = raw.Trim();
             if (line.Length == 0) { Flush(); continue; }   // blank line = hard break
-            if (TryParseHeader(line, out var sp, out var bd))
+
+            bool tagged = TryPeelChannelTag(line, out var rest);
+
+            // A badge on its own line (what the background filter produces) carries no message:
+            // drop it. It still marks a boundary — the badge belongs to the message that follows.
+            if (tagged && rest.Length == 0) { Flush(); continue; }
+
+            if (TryParseHeader(rest, out var sp, out var bd))
             {
                 Flush();
                 speaker = sp;
                 if (bd.Length > 0) body.Add(bd);
+                lineCount = 1;
+            }
+            else if (tagged)
+            {
+                // Badged, but the nickname didn't survive the OCR (or there is none — a system
+                // announcement). The badge still proves a new message starts here, so don't let it
+                // glue onto the previous player's text; keep the line, minus the badge.
+                Flush();
+                body.Add(rest);
                 lineCount = 1;
             }
             else
@@ -182,6 +239,10 @@ public static class TextMatching
         bool hadTag = tokens.Count > 0 && IsChatTag(tokens[0]);
         if (hadTag) tokens.RemoveAt(0);
 
+        // Whatever the OCR made of the badge's border ("[32)", "|") carries no letters and is not
+        // part of the nickname — drop it, but never the last token (that IS the nick).
+        while (tokens.Count > 1 && !tokens[0].Any(char.IsLetter)) tokens.RemoveAt(0);
+
         // Only a recognised tag earns the wider colon window: on an untagged line a colon past
         // MaxHeaderChars is a colon inside the body ("… a colon: here"), not a nick separator.
         if (!hadTag && colon > MaxHeaderChars) return false;
@@ -199,7 +260,7 @@ public static class TextMatching
     }
 
     private static bool IsChatTag(string token)
-        => ChatTags.Contains(FoldHomoglyphs(token.Trim().Trim('[', ']', '(', ')', '<', '>').ToLowerInvariant()));
+        => ChatTags.Contains(FoldHomoglyphs(token.Trim().Trim(TagEdgeTrim).ToLowerInvariant()));
 
     // Fold the Latin look-alikes players/OCR mix into Cyrillic tags ("Mиp" → "мир"), matching
     // the same homoglyph handling the slang decoder uses.
