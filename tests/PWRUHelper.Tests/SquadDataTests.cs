@@ -100,12 +100,28 @@ public class SquadDataTests
         // (the extra "name" column is for dungeons, whose code is a cryptic abbreviation).
         Assert.All(classes, c => Assert.Equal("", c.Name));
         Assert.All(classes, c => Assert.False(string.IsNullOrWhiteSpace(c.Ru)));
-        Assert.Contains(classes, c => c.Code == "invite on me" && c.Token == "стук");
-        Assert.Contains(classes, c => c.Code == "blademaster" && c.Token == "вар");
-        Assert.Contains(classes, c => c.Code == "duskblade" && c.Token == "гост");
+        Assert.Contains(classes, c => c.Code == "Invite on me" && c.Token == "стук");
+        Assert.Contains(classes, c => c.Code == "Blademaster" && c.Token == "вар");
+        Assert.Contains(classes, c => c.Code == "Duskblade" && c.Token == "гост");
 
         // Dungeons keep their white English name — that's the only clue to what "ГШ" means.
         Assert.All(catalog.Dungeons.SelectMany(d => d.Items),
             d => Assert.False(string.IsNullOrWhiteSpace(d.Name)));
+    }
+
+    [Fact]
+    public void Every_class_label_is_capitalised_like_a_word_not_shouted_or_lowercase()
+    {
+        var json = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Data", "squad.json"));
+
+        foreach (var code in SquadCatalog.FromJson(json).Classes.SelectMany(c => c.Items).Select(i => i.Code))
+        {
+            // "DD" is a genuine acronym and stays shouted; every other label reads as a word:
+            // one leading capital, the rest lower-case ("Archer", "Stormbringer", "Invite on me").
+            if (code == "DD") continue;
+
+            Assert.True(char.IsUpper(code[0]), $"'{code}' should start with a capital letter.");
+            Assert.Equal(code[1..].ToLowerInvariant(), code[1..]);
+        }
     }
 }

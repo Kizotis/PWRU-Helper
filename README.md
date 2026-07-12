@@ -53,7 +53,7 @@ translations underneath.
 
 **4. Squad builder** — tick the **dungeon(s)**, **class(es)** and **role(s)** you're looking
 for and it builds the Russian group-forming (LFM) message for you — e.g. tick *Terrace
-legendary* + *DD* + *Healer* + *invite on me* and copy `в лега дд хил стук` straight into chat
+legendary* + *DD* + *Heal* + *Invite on me* and copy `в лега дд хил стук` straight into chat
 (that last one, *стук*, asks people to whisper you for an invite). Tick **UPPERCASE** to shout it.
 The lists live in their own editable `squad.json` (next to the app, or in `%AppData%\PWRUHelper\`),
 so you can add dungeons, classes, roles and columns without touching the code.

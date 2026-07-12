@@ -28,29 +28,29 @@
     { "title": "Role", "items": [
       { "code": "DD",           "ru": "дд",   "name": "", "token": "дд" },
       { "code": "Heal",         "ru": "хил",  "name": "", "token": "хил" },
-      { "code": "invite on me", "ru": "стук", "name": "", "token": "стук" }
+      { "code": "Invite on me", "ru": "стук", "name": "", "token": "стук" }
     ]},
     { "title": "DD", "items": [
       { "code": "Sin",       "ru": "син",          "name": "", "token": "син" },
-      { "code": "archer",    "ru": "лук",          "name": "", "token": "лук" },
+      { "code": "Archer",    "ru": "лук",          "name": "", "token": "лук" },
       { "code": "Psy",       "ru": "шам",          "name": "", "token": "шам" },
       { "code": "Edge",      "ru": "пал",          "name": "", "token": "пал" },
-      { "code": "duskblade", "ru": "гост",         "name": "", "token": "гост" },
+      { "code": "Duskblade", "ru": "гост",         "name": "", "token": "гост" },
       { "code": "Monkey",    "ru": "макака",       "name": "", "token": "макака" },
       { "code": "Tech",      "ru": "ганер / пушка","name": "", "token": "ганер" },
       { "code": "Bard",      "ru": "бард",         "name": "", "token": "бард" },
       { "code": "Reaper",    "ru": "ДК",           "name": "", "token": "дк" }
     ]},
     { "title": "Heal / Buff", "items": [
-      { "code": "cleric",  "ru": "прист", "name": "", "token": "прист" },
-      { "code": "mystic",  "ru": "мист",  "name": "", "token": "мист" },
-      { "code": "tank",    "ru": "танк",  "name": "", "token": "танк" }
+      { "code": "Cleric",  "ru": "прист", "name": "", "token": "прист" },
+      { "code": "Mystic",  "ru": "мист",  "name": "", "token": "мист" },
+      { "code": "Tank",    "ru": "танк",  "name": "", "token": "танк" }
     ]},
     { "title": "Debuff", "items": [
-      { "code": "seeker",       "ru": "сик / страж", "name": "", "token": "сик" },
-      { "code": "stormbringer", "ru": "коса",        "name": "", "token": "коса" },
-      { "code": "veno",         "ru": "дру",         "name": "", "token": "дру" },
-      { "code": "blademaster",  "ru": "вар",         "name": "", "token": "вар" }
+      { "code": "Seeker",       "ru": "сик / страж", "name": "", "token": "сик" },
+      { "code": "Stormbringer", "ru": "коса",        "name": "", "token": "коса" },
+      { "code": "Veno",         "ru": "дру",         "name": "", "token": "дру" },
+      { "code": "Blademaster",  "ru": "вар",         "name": "", "token": "вар" }
     ]}
   ]
 }
