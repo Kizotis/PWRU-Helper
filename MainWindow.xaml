@@ -211,8 +211,13 @@
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
 
-                            <TextBlock Grid.Row="0" Grid.ColumnSpan="3" Text="Your message (paste in chat with Ctrl+V)"
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Your message (paste in chat with Ctrl+V)"
                                        Foreground="{StaticResource TextMutedBrush}" Margin="2,0,0,6"/>
+                            <CheckBox Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2" x:Name="SquadUppercaseCheck"
+                                      Content="UPPERCASE" HorizontalAlignment="Right" Margin="8,0,2,6"
+                                      Checked="SquadUppercase_Changed" Unchecked="SquadUppercase_Changed"
+                                      ToolTip="Write the message in capital letters"
+                                      AutomationProperties.Name="Uppercase the squad message"/>
                             <TextBox Grid.Row="1" Grid.Column="0" x:Name="SquadPhraseBox" IsReadOnly="True"
                                      VerticalAlignment="Center" FontSize="15" Padding="10,8"
                                      Foreground="{StaticResource GoldBrush}"/>
@@ -576,7 +581,8 @@
                             <Run Text="By default translation uses Google (free, no setup). If you have a free "/><Hyperlink
                                     NavigateUri="https://www.deepl.com/pro-api" RequestNavigate="OpenLink"
                                     Foreground="{StaticResource TealBrush}">DeepL API key</Hyperlink><Run
-                                    Text=" you can paste it here for higher-quality translations — the app falls back to Google if DeepL is unavailable. The key is stored only on your PC."/>
+                                    Text=" you can paste it here for higher-quality translations — the app falls back to Google if DeepL is unavailable. The key is stored only on your PC."/><LineBreak/><Run
+                                    Text="DeepL is used only for what YOU write (the Translator tab and the compact overlay's quick reply). Reading the screen with OCR always uses the free Google engine, so a busy live feed can never burn through your DeepL quota."/>
                         </TextBlock>
                         <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
                             <PasswordBox x:Name="DeepLKeyBox" Width="300" VerticalContentAlignment="Center"/>

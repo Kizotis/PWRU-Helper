@@ -219,7 +219,9 @@ public partial class MainWindow
 
     /// <summary>Editable-copy locator shared by the phrasebook and the slang glossary:
     /// prefer an existing copy next to the exe or in %AppData%, else create one from the
-    /// embedded text so the user has something to edit. Returns null if none is possible.</summary>
+    /// embedded text so the user has something to edit. Returns null if none is possible.
+    /// An existing copy that is older than the shipped one is refreshed — see
+    /// <see cref="UpgradeEditableIfStale"/>.</summary>
     private static string? FindOrCreateEditable(string fileName, string? embedded)
     {
         var candidates = new[]
@@ -229,7 +231,11 @@ public partial class MainWindow
                          "PWRUHelper", fileName),
         };
         foreach (var path in candidates)
-            if (File.Exists(path)) return path;
+            if (File.Exists(path))
+            {
+                UpgradeEditableIfStale(path, embedded);
+                return path;
+            }
         if (embedded != null)
             foreach (var path in candidates)
                 try
@@ -240,5 +246,47 @@ public partial class MainWindow
                 }
                 catch { /* not writable here — try the next location */ }
         return null;
+    }
+
+    /// <summary>The editable copy is created ONCE, on first run, and then belongs to the user — so
+    /// anything we later fix in the shipped file (a wrong class name, a new dungeon) never reached
+    /// anyone who had already started the app. Fix: the shipped JSON carries a <c>"version"</c>; when
+    /// it is newer than the user's copy, replace the copy (keeping the previous one as
+    /// <c>&lt;file&gt;.bak</c>, so hand edits are recoverable). A file with no <c>"version"</c> key on
+    /// either side (phrases.json) is never touched — this is opt-in per data file.</summary>
+    internal static void UpgradeEditableIfStale(string path, string? embedded)
+    {
+        try
+        {
+            int shipped = DataVersionOf(embedded);
+            if (shipped <= 0) return;                               // shipped file isn't versioned — leave the copy alone
+            if (DataVersionOf(File.ReadAllText(path)) >= shipped) return;
+
+            File.Copy(path, path + ".bak", overwrite: true);
+            File.WriteAllText(path, embedded!);
+            Services.Logging.Warn($"Refreshed {Path.GetFileName(path)} to shipped version {shipped} " +
+                                  $"(previous copy kept as {Path.GetFileName(path)}.bak)");
+        }
+        catch (Exception ex)
+        {
+            // Best-effort: a locked/read-only copy just keeps its old content, exactly as before.
+            Services.Logging.Warn($"Could not refresh {Path.GetFileName(path)}: {ex.Message}");
+        }
+    }
+
+    /// <summary>The <c>"version"</c> of a data file, or 0 when it has none (or isn't a JSON object).</summary>
+    internal static int DataVersionOf(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return 0;
+        try
+        {
+            using var doc = JsonDocument.Parse(json,
+                new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+            return doc.RootElement.ValueKind == JsonValueKind.Object &&
+                   doc.RootElement.TryGetProperty("version", out var v) &&
+                   v.TryGetInt32(out int n)
+                ? n : 0;
+        }
+        catch { return 0; }   // unparsable → treat as unversioned, never destroy it
     }
 }

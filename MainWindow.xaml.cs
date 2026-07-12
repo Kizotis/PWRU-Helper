@@ -22,15 +22,25 @@ public partial class MainWindow : Window
     private CollectionViewSource? _phrasesView;
     private bool _recentsDirty;   // a phrase was copied; refresh "Recent" next time the tab is shown
 
-    // True only while ApplySettings is pushing saved values into the controls. Change handlers
-    // (SaveOcrFilterSettings, CaptureBackend_Changed) fire as a side effect of setting a slider /
-    // combo, and would then write the half-restored UI state back to disk — clobbering the very
-    // settings we're restoring. They bail out early while this is set.
-    private bool _restoringSettings;
+    // True while the UI is being built or restored, i.e. whenever a control change does NOT mean
+    // "the user chose this". Change handlers (SaveOcrFilterSettings, CaptureBackend_Changed,
+    // SquadUppercase_Changed) fire as a side effect of setting a slider / combo / tick, and would
+    // then write that transient UI state back to disk — clobbering the very settings we're loading.
+    //
+    // It starts TRUE and is only cleared at the end of ApplySettings, because XAML LOADING ITSELF
+    // fires these handlers: `<Slider Value="70" ValueChanged="OcrTolerance_Changed"/>` raises
+    // ValueChanged during InitializeComponent(), long before ApplySettings runs. That handler then
+    // read the still-unselected filter combo (SelectedTag → null → "off") and persisted "off" —
+    // which is why a saved "Boost contrast" came back Off on every launch (fixed in v0.12.3).
+    private bool _restoringSettings = true;
 
-    // Built from settings in the constructor: DeepL (with Google fallback) when an API key is
-    // set, otherwise Google — wrapped in a cache either way. Rebuilt when the key changes.
-    private ITranslator _translator;
+    // Two translators on purpose (see BuildTranslator):
+    //   _writeTranslator — what the USER writes (Translator tab, compact quick reply). Uses DeepL
+    //                      with a Google fallback when an API key is set. Rebuilt when the key changes.
+    //   _readTranslator  — the OCR feed (read-once + live). ALWAYS the free Google engine: a live
+    //                      loop translates every new chat line and would drain a DeepL quota fast.
+    private ITranslator _writeTranslator;
+    private readonly ITranslator _readTranslator = new CachingTranslator(new TranslationService());
     private readonly UpdateService _updates = new();
     private readonly AppSettings _settings = SettingsService.Load();
     private OcrService _ocr = new("ru");
@@ -64,8 +74,8 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
-        _translator = BuildTranslator();   // depends on _settings, which is already loaded above
-        InitializeComponent();
+        _writeTranslator = BuildTranslator();   // depends on _settings, which is already loaded above
+        InitializeComponent();                  // fires change handlers — _restoringSettings guards them
         _toastTimer.Tick += (_, _) => { Toast.Visibility = Visibility.Collapsed; _toastTimer.Stop(); };
 
         OcrResults.ItemsSource = _ocrItems;
@@ -110,9 +120,10 @@ public partial class MainWindow : Window
     // ============================================================
     private void ApplySettings()
     {
-        // Suppress the OCR-filter / capture-backend change handlers for the whole restore: setting
-        // a slider or combo below fires them, and they'd write the half-restored UI state back to
-        // disk (e.g. clobber a saved "color" mode with "off" because the combo isn't set yet).
+        // Suppress the OCR-filter / capture-backend / squad-case change handlers for the whole
+        // restore: setting a slider, combo or tick below fires them, and they'd write the
+        // half-restored UI state back to disk (e.g. clobber a saved "color" mode with "off"
+        // because the combo isn't set yet). Already true since construction — see the field.
         _restoringSettings = true;
         try
         {
@@ -127,6 +138,8 @@ public partial class MainWindow : Window
             TopmostCheck.IsChecked = s.AlwaysOnTop;
             Topmost = s.AlwaysOnTop;
             AutoCopyCheck.IsChecked = s.AutoCopyTranslation;
+            SquadUppercaseCheck.IsChecked = s.SquadUppercase;
+            RebuildSquadPhrase();   // the tick is restored above; re-apply its casing to the phrase
             if (s.LastTab >= 0 && s.LastTab < MainTabs.Items.Count)
                 MainTabs.SelectedIndex = s.LastTab;
 

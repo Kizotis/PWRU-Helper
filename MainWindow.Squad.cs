@@ -81,12 +81,22 @@ public partial class MainWindow
 
     private void SquadCheck_Changed(object sender, RoutedEventArgs e) => RebuildSquadPhrase();
 
+    /// <summary>The UPPERCASE tick: remember it and re-cast the phrase already in the box.</summary>
+    private void SquadUppercase_Changed(object sender, RoutedEventArgs e)
+    {
+        RebuildSquadPhrase();
+        if (_restoringSettings) return;   // ApplySettings is setting the tick — not a user choice
+        _settings.SquadUppercase = SquadUppercaseCheck.IsChecked == true;
+        SettingsService.Save(_settings);
+    }
+
     /// <summary>Rebuild the "в &lt;dungeons&gt; &lt;classes&gt;" LFM line from the ticks.</summary>
     private void RebuildSquadPhrase()
     {
         if (SquadPhraseBox == null) return;
         SquadPhraseBox.Text = SquadCatalog.BuildPhrase("в",
-            TickedTokens(SquadDungeonGrid), TickedTokens(SquadClassGrid));
+            TickedTokens(SquadDungeonGrid), TickedTokens(SquadClassGrid),
+            SquadUppercaseCheck?.IsChecked == true);
     }
 
     private static IEnumerable<string> TickedTokens(Grid grid)

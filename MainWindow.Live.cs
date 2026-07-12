@@ -277,10 +277,12 @@ public partial class MainWindow
         ResultsScroller?.ScrollToEnd();
     }
 
-    /// <summary>Translate message bodies, picking the source language per message: real Russian
-    /// (Cyrillic) is translated FROM "ru", but English/other-language messages are sent with
-    /// "auto" so Google detects them instead of mangling plain English into invented Cyrillic.
-    /// The two groups are still batched (one request each) and reassembled in the original order.</summary>
+    /// <summary>Translate message bodies READ FROM THE SCREEN, picking the source language per
+    /// message: real Russian (Cyrillic) is translated FROM "ru", but English/other-language messages
+    /// are sent with "auto" so Google detects them instead of mangling plain English into invented
+    /// Cyrillic. The two groups are still batched (one request each) and reassembled in the original
+    /// order. Always goes through <c>_readTranslator</c> (free Google) — never DeepL, whose quota a
+    /// live loop would burn through in an evening.</summary>
     private async Task<List<string>> TranslateBodiesAsync(List<string> bodies, string target, CancellationToken ct)
     {
         // Expand known slang to its Russian long form BEFORE translating, so the machine
@@ -300,12 +302,12 @@ public partial class MainWindow
         var result = new string?[bodies.Count];
         if (ru.Count > 0)
         {
-            var t = await _translator.TranslateLinesAsync(ru, "ru", target, ct);
+            var t = await _readTranslator.TranslateLinesAsync(ru, "ru", target, ct);
             for (int i = 0; i < ruIdx.Count && i < t.Count; i++) result[ruIdx[i]] = t[i];
         }
         if (auto.Count > 0)
         {
-            var t = await _translator.TranslateLinesAsync(auto, "auto", target, ct);
+            var t = await _readTranslator.TranslateLinesAsync(auto, "auto", target, ct);
             for (int i = 0; i < autoIdx.Count && i < t.Count; i++) result[autoIdx[i]] = t[i];
         }
         // Any gap (shouldn't happen) falls back to the (expanded) text rather than a null.

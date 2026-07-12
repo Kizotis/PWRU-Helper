@@ -75,8 +75,11 @@ public sealed class SquadCatalog
     }
 
     /// <summary>Assemble the LFM chat phrase: <c>prefix dungeons classes</c>, each group in the
-    /// order it was ticked. Empty groups and a blank prefix are skipped; nothing ticked → "".</summary>
-    public static string BuildPhrase(string prefix, IEnumerable<string> dungeons, IEnumerable<string> classes)
+    /// order it was ticked. Empty groups and a blank prefix are skipped; nothing ticked → "".
+    /// <paramref name="uppercase"/> shouts the whole line (game chat convention) — invariant
+    /// casing, so Cyrillic is uppercased the same way whatever the machine's locale.</summary>
+    public static string BuildPhrase(string prefix, IEnumerable<string> dungeons, IEnumerable<string> classes,
+                                     bool uppercase = false)
     {
         var body = dungeons.Concat(classes)
             .Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => p.Trim()).ToList();
@@ -85,6 +88,7 @@ public sealed class SquadCatalog
         var parts = new List<string>();
         if (!string.IsNullOrWhiteSpace(prefix)) parts.Add(prefix.Trim());
         parts.AddRange(body);
-        return string.Join(" ", parts);
+        var phrase = string.Join(" ", parts);
+        return uppercase ? phrase.ToUpperInvariant() : phrase;
     }
 }

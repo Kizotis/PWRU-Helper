@@ -1,5 +1,6 @@
 {
-  "_comment": "Perfect World RU squad builder. Two sections (dungeons, classes), each shown as columns of tick-boxes. Each item: 'code' (EN abbreviation, shown first), 'ru' (the Russian form shown in quotes), 'name' (English name), 'token' (what actually gets pasted into chat). Edit freely — reorder, add columns or items; the tab rebuilds from this file.",
+  "_comment": "Perfect World RU squad builder. Two sections (dungeons, classes), each shown as columns of tick-boxes. Each item: 'code' (gold label, shown first), 'ru' (the Russian form shown in quotes), 'name' (extra white text — used for dungeons, left empty for classes since their code IS the English name), 'token' (what actually gets pasted into chat). Edit freely — reorder, add columns or items; the tab rebuilds from this file. BUMP 'version' after editing the shipped copy: on launch the app replaces an older editable copy (keeping the old one as squad.json.bak), which is how these changes reach people who already ran the app.",
+  "version": 2,
   "dungeons": [
     { "title": "WEAPON", "items": [
       { "code": "EU",      "ru": "APA",        "name": "Cave of Eternity (low)",  "token": "апа" },
@@ -25,31 +26,31 @@
   ],
   "classes": [
     { "title": "Role", "items": [
-      { "code": "DD",    "ru": "дд",   "name": "any DD",               "token": "дд" },
-      { "code": "Heal",  "ru": "хил",  "name": "any healer",           "token": "хил" },
-      { "code": "Knock", "ru": "стук", "name": "whisper me to invite", "token": "стук" }
+      { "code": "DD",           "ru": "дд",   "name": "", "token": "дд" },
+      { "code": "Heal",         "ru": "хил",  "name": "", "token": "хил" },
+      { "code": "invite on me", "ru": "стук", "name": "", "token": "стук" }
     ]},
     { "title": "DD", "items": [
-      { "code": "Sin",    "ru": "син",          "name": "assassin",   "token": "син" },
-      { "code": "EA",     "ru": "лук",          "name": "archer",     "token": "лук" },
-      { "code": "Psy",    "ru": "шам",          "name": "psychic",    "token": "шам" },
-      { "code": "Edge",   "ru": "пал",          "name": "duskblade",  "token": "пал" },
-      { "code": "DB",     "ru": "гост",         "name": "",           "token": "гост" },
-      { "code": "Monkey", "ru": "макака",       "name": "",           "token": "макака" },
-      { "code": "Tech",   "ru": "ганер / пушка","name": "gunner",     "token": "ганер" },
-      { "code": "Bard",   "ru": "бард",         "name": "",           "token": "бард" },
-      { "code": "Reaper", "ru": "ДК",           "name": "",           "token": "дк" }
+      { "code": "Sin",       "ru": "син",          "name": "", "token": "син" },
+      { "code": "archer",    "ru": "лук",          "name": "", "token": "лук" },
+      { "code": "Psy",       "ru": "шам",          "name": "", "token": "шам" },
+      { "code": "Edge",      "ru": "пал",          "name": "", "token": "пал" },
+      { "code": "duskblade", "ru": "гост",         "name": "", "token": "гост" },
+      { "code": "Monkey",    "ru": "макака",       "name": "", "token": "макака" },
+      { "code": "Tech",      "ru": "ганер / пушка","name": "", "token": "ганер" },
+      { "code": "Bard",      "ru": "бард",         "name": "", "token": "бард" },
+      { "code": "Reaper",    "ru": "ДК",           "name": "", "token": "дк" }
     ]},
     { "title": "Heal / Buff", "items": [
-      { "code": "EP",   "ru": "прист", "name": "cleric", "token": "прист" },
-      { "code": "Myst", "ru": "мист",  "name": "mystic", "token": "мист" },
-      { "code": "WB",   "ru": "танк",  "name": "tank",   "token": "танк" }
+      { "code": "cleric",  "ru": "прист", "name": "", "token": "прист" },
+      { "code": "mystic",  "ru": "мист",  "name": "", "token": "мист" },
+      { "code": "tank",    "ru": "танк",  "name": "", "token": "танк" }
     ]},
     { "title": "Debuff", "items": [
-      { "code": "Seek", "ru": "сик / страж", "name": "seeker",      "token": "сик" },
-      { "code": "SB",   "ru": "коса",        "name": "stormbringer","token": "коса" },
-      { "code": "WF",   "ru": "дру",         "name": "veno",        "token": "дру" },
-      { "code": "WR",   "ru": "вар",         "name": "BM",          "token": "вар" }
+      { "code": "seeker",       "ru": "сик / страж", "name": "", "token": "сик" },
+      { "code": "stormbringer", "ru": "коса",        "name": "", "token": "коса" },
+      { "code": "veno",         "ru": "дру",         "name": "", "token": "дру" },
+      { "code": "blademaster",  "ru": "вар",         "name": "", "token": "вар" }
     ]}
   ]
 }

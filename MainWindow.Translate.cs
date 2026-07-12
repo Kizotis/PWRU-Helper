@@ -32,7 +32,9 @@ public partial class MainWindow
         if (from is null or "ru" or "auto") from = "en";
         try
         {
-            var ru = await _translator.TranslateAsync(text, from, "ru");
+            // The user is WRITING — this is the one place (with the Translator tab) where a DeepL
+            // key is worth spending: _writeTranslator, not the OCR feed's Google-only reader.
+            var ru = await _writeTranslator.TranslateAsync(text, from, "ru");
             bool copied = ru.Length > 0 && await CopyToClipboardAsync(ru);
             return new ReplyOutcome(true, ru, copied, null);
         }
@@ -84,7 +86,7 @@ public partial class MainWindow
             // string SENT to the translator changes; TranslateInput/TranslateOutput keep showing
             // the user's raw text. Don't expand when the source isn't Russian.
             var toTranslate = from == "ru" ? _slang.Expand(text) : text;
-            var result = await _translator.TranslateAsync(toTranslate, from, to);
+            var result = await _writeTranslator.TranslateAsync(toTranslate, from, to);
             TranslateOutput.Text = result;
             TranslateStatus.Text = $"{from} → {to}";
 
@@ -130,8 +132,10 @@ public partial class MainWindow
     //  TRANSLATION BACKEND (Google default, optional DeepL)
     // ============================================================
 
-    /// <summary>Build the active translator from settings: DeepL (with Google fallback) when an
-    /// API key is set, otherwise plain Google — always wrapped in the cache. Rebuilt on key change.</summary>
+    /// <summary>Build the WRITING translator from settings: DeepL (with Google fallback) when an API
+    /// key is set, otherwise plain Google — always wrapped in the cache. Rebuilt on key change.
+    /// The screen-reading side never comes through here: it uses <c>_readTranslator</c> (Google only),
+    /// because a live loop translating every new chat line would eat a DeepL quota in one session.</summary>
     private ITranslator BuildTranslator()
     {
         var key = (_settings.DeepLApiKey ?? "").Trim();
@@ -145,10 +149,10 @@ public partial class MainWindow
     {
         _settings.DeepLApiKey = (DeepLKeyBox.Password ?? "").Trim();
         SettingsService.Save(_settings);
-        _translator = BuildTranslator();   // apply immediately (starts with a fresh cache)
+        _writeTranslator = BuildTranslator();   // apply immediately (starts with a fresh cache)
         UpdateDeepLStatus();
         ShowToast(_settings.DeepLApiKey.Length > 0
-            ? "DeepL key saved — translations now use DeepL"
+            ? "DeepL key saved — used when you write (screen reading stays on Google)"
             : "DeepL key cleared — using Google");
     }
 
@@ -156,7 +160,7 @@ public partial class MainWindow
     {
         bool on = (_settings.DeepLApiKey ?? "").Trim().Length > 0;
         DeepLStatus.Text = on
-            ? "● Using DeepL — falls back to Google if DeepL errors"
+            ? "● DeepL for what you write (Translator + quick reply) — falls back to Google if it errors. Screen reading uses Google."
             : "○ Using Google (free, no key needed)";
     }
 }

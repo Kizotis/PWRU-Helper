@@ -53,10 +53,10 @@ translations underneath.
 
 **4. Squad builder** — tick the **dungeon(s)**, **class(es)** and **role(s)** you're looking
 for and it builds the Russian group-forming (LFM) message for you — e.g. tick *Terrace
-legendary* + *DD* + *Healer* + *Knock* and copy `в лега дд хил стук` straight into chat (that
-last one, *стук*, asks people to whisper you for an invite). The lists live in their own editable
-`squad.json` (next to the app, or in `%AppData%\PWRUHelper\`), so you can add dungeons, classes,
-roles and columns without touching the code.
+legendary* + *DD* + *Healer* + *invite on me* and copy `в лега дд хил стук` straight into chat
+(that last one, *стук*, asks people to whisper you for an invite). Tick **UPPERCASE** to shout it.
+The lists live in their own editable `squad.json` (next to the app, or in `%AppData%\PWRUHelper\`),
+so you can add dungeons, classes, roles and columns without touching the code.
 
 ---
 
@@ -134,8 +134,10 @@ The app makes this easy: open the **Screen OCR** tab and click
   (experimental)* — it can read true full-screen games; if it can't run on your machine the
   app quietly falls back to the normal method.
 - **Better translations (optional):** paste a free [DeepL API key](https://www.deepl.com/pro-api)
-  in the About tab — translations then go through DeepL (higher quality) and automatically fall
-  back to Google if DeepL is unavailable. No key needed for normal use.
+  in the About tab — DeepL (higher quality) is then used for **what you write**: the Translator
+  tab and the compact overlay's quick reply, falling back to Google if DeepL is unavailable.
+  Reading the screen keeps using the free Google engine, so a busy live feed can't burn through
+  your DeepL quota. No key needed for normal use.
 - **Updating is one click:** when a new version is out, the app offers to download and run the
   installer for you (About tab → *Check for updates*).
 - **Something broke?** About tab → **📋 Copy error report** copies the recent error log so you

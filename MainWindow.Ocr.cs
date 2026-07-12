@@ -301,13 +301,15 @@ public partial class MainWindow
 
     private void SaveOcrFilterSettings()
     {
-        // While ApplySettings is restoring the UI, setting the controls fires these handlers; writing
-        // the half-restored state back would clobber the very settings we're loading. Bail out.
+        // While the UI is being built or restored, setting the controls fires these handlers; writing
+        // that transient state back would clobber the very settings we're loading. Bail out.
         if (_restoringSettings) return;
         // Handlers can fire while the XAML is still being built; ignore until all controls exist.
         if (OcrFilterCombo is null || OcrColorHexBox is null || OcrToleranceSlider is null) return;
 
-        var mode = SelectedTag(OcrFilterCombo) ?? "off";
+        // No selection yet = nothing the user chose. Never fall back to "off" here: doing that is
+        // exactly how a saved "contrast" got overwritten during startup (see _restoringSettings).
+        if (SelectedTag(OcrFilterCombo) is not string mode) return;
         _settings.OcrFilterMode = mode;
         _settings.OcrKeepColorHex = (OcrColorHexBox.Text ?? "#FFFFFF").Trim();
         _settings.OcrColorTolerance = (int)Math.Round(OcrToleranceSlider.Value);
@@ -343,7 +345,7 @@ public partial class MainWindow
         // ApplySettings sets this combo during restore; don't write the transient state back.
         if (_restoringSettings) return;
         if (CaptureBackendCombo is null) return;   // still building the XAML
-        var mode = SelectedTag(CaptureBackendCombo) ?? "gdi";
+        if (SelectedTag(CaptureBackendCombo) is not string mode) return;   // no selection = not a user choice
         _settings.CaptureBackend = mode;
         ScreenCapture.SetMode(mode);
         SettingsService.Save(_settings);

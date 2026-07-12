@@ -23,6 +23,9 @@ public class FirstLaunchDefaultsTests
 
 public class SettingsMigrationTests
 {
+    // The current schema version. Bumping it in SettingsService means adding a step below.
+    private const int Current = 2;
+
     [Fact]
     public void Existing_off_filter_is_upgraded_to_contrast_once()
     {
@@ -30,7 +33,7 @@ public class SettingsMigrationTests
 
         Assert.True(SettingsService.Migrate(s));      // changed → caller persists
         Assert.Equal("contrast", s.OcrFilterMode);
-        Assert.Equal(1, s.SettingsVersion);
+        Assert.Equal(Current, s.SettingsVersion);
     }
 
     [Fact]
@@ -40,14 +43,27 @@ public class SettingsMigrationTests
 
         Assert.True(SettingsService.Migrate(s));      // still stamps the version
         Assert.Equal("color", s.OcrFilterMode);
-        Assert.Equal(1, s.SettingsVersion);
+        Assert.Equal(Current, s.SettingsVersion);
+    }
+
+    [Fact]
+    public void The_v1_users_whose_filter_was_clobbered_back_to_off_get_contrast_again()
+    {
+        // v1 set "contrast" — and then every launch wrote "off" straight back over it (a XAML-load
+        // ValueChanged persisted the not-yet-restored combo; fixed in v0.12.3). So a v1 file saying
+        // "off" proves nothing about what the user wanted. Re-apply the intended default, once.
+        var s = new AppSettings { SettingsVersion = 1, OcrFilterMode = "off" };
+
+        Assert.True(SettingsService.Migrate(s));
+        Assert.Equal("contrast", s.OcrFilterMode);
+        Assert.Equal(Current, s.SettingsVersion);
     }
 
     [Fact]
     public void Already_migrated_settings_are_left_alone()
     {
-        // A user who turned the filter off AFTER the migration must keep it off.
-        var s = new AppSettings { SettingsVersion = 1, OcrFilterMode = "off" };
+        // Now that the clobber is fixed, turning the filter off is a real choice — keep it off.
+        var s = new AppSettings { SettingsVersion = Current, OcrFilterMode = "off" };
 
         Assert.False(SettingsService.Migrate(s));
         Assert.Equal("off", s.OcrFilterMode);
