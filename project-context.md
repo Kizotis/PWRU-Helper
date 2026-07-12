@@ -23,7 +23,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - **C# / WPF on .NET 8**, TFM `net8.0-windows10.0.19041.0` — the 19041 Windows target is REQUIRED (it provides the free on-device `Windows.Media.Ocr` engine). `Nullable` + `ImplicitUsings` enabled.
 - **Code-behind, NO MVVM — deliberate.** Do not introduce MVVM, view-models, or binding frameworks.
 - `System.Drawing.Common` 8.0.10 (GDI screen capture).
-- Tests: **xUnit 2.9.2**, Test SDK 17.11.1, runner 2.8.2 — `dotnet test tests/PWRUHelper.Tests` (129 tests, headless-safe, incl. STA render tests).
+- Tests: **xUnit 2.9.2**, Test SDK 17.11.1, runner 2.8.2 — `dotnet test tests/PWRUHelper.Tests` (142 tests, headless-safe, incl. STA render tests).
 - Installer: **WiX v5.0.2 exactly** (`installer/Product.wxs`); WiX v6+ has a paid OSMF EULA that blocks CI builds.
 - **No `.sln` at repo root** — adding one breaks `dotnet run` and both `Build *.bat` scripts.
 - `Data/phrases.json`, `Data/slang.json`, `Data/squad.json`: EmbeddedResource **and** copied next to the exe as a first-run editable copy; the files are tracked source.
