@@ -6,6 +6,11 @@ obj/
 # Claude Code local working data (worktrees, session state) — never commit
 .claude/
 
+# BMAD method framework + generated working artifacts — local AI tooling, same
+# policy as .claude/ (the committed project-context.md is the durable output)
+_bmad/
+_bmad-output/
+
 # Test/build output
 [Tt]est[Rr]esults/
 *.trx
