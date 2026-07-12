@@ -72,18 +72,6 @@ public partial class MainWindow
     {
         if (_readingOnce) return;   // a read-once is driving the shared OCR engine — don't race it
 
-        // No Russian engine = nothing readable. Don't run a loop that can only ever produce empty
-        // frames (and, before the fallback was removed, a feed full of confident Latin gibberish).
-        // Send the user to the one-click installer instead — that IS the fix, and it's one click.
-        if (!IsOcrReady())
-        {
-            if (_overlay is { IsVisible: true }) ExitCompactMode(); else BringToFront();
-            MainTabs.SelectedIndex = TabScreenOcr;
-            SetLiveStatus("⚠ The Russian OCR pack isn't installed, so nothing can be read. " +
-                          "Install it here (1 click), then start live again.");
-            ShowToast("Russian OCR pack needed — install it on this tab (1 click).");
-            return;
-        }
         if (!RegionOnVirtualScreen(rect))
         {
             _settings.LastLiveRegion = null;
@@ -97,9 +85,18 @@ public partial class MainWindow
         // the area was being selected would be orphaned here (impossible to Stop).
         if (_liveCts != null) StopLive();
 
-        // Remember the area so it can be resumed next session without re-selecting.
+        // Remember the area so it can be resumed next session without re-selecting. This happens
+        // BEFORE the OCR-pack check on purpose: the user has usually just dragged the rectangle, and
+        // bailing out first threw that work away — after installing the pack they had to draw it all
+        // over again, with no "Resume last area" button to help them.
         _settings.LastLiveRegion = new[] { rect.X, rect.Y, rect.Width, rect.Height };
         SettingsService.Save(_settings);
+        UpdateResumeLiveButton();
+
+        // No Russian engine = nothing readable. Don't run a loop that can only ever produce empty
+        // frames (and, before the fallback was removed, a feed full of confident Latin gibberish).
+        // Send the user to the one-click installer instead — that IS the fix, and it's one click.
+        if (!IsOcrReady()) { ShowOcrPackNeeded("then start live again — your area is remembered."); return; }
 
         _liveRegion = rect;
         _dedup = new();

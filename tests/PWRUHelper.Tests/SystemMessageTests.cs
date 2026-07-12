@@ -95,6 +95,18 @@ public class SystemMessageTests
         Assert.Equal(new[] { "ИНЕЙ: приветы", "B!oodCat joined the squad" }, messages);
     }
 
+    [Fact]
+    public void A_system_line_that_kept_its_badge_inline_does_not_show_the_badge()
+    {
+        // The system branch used to re-add the RAW line, badge and all — so "сист." was shown to the
+        // user and sent to the translator. A system marker sitting behind a channel word settles it:
+        // that word is the chip, not part of the sentence.
+        var message = Assert.Single(TextMatching.SplitChatMessages(new[] { "сист. B!oodCat joined the squad" }));
+
+        Assert.Equal("B!oodCat joined the squad", message);
+        Assert.DoesNotContain("сист", message, StringComparison.OrdinalIgnoreCase);
+    }
+
     // ---- what counts as a system line ----
 
     [Theory]

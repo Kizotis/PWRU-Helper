@@ -110,6 +110,19 @@ public class ChannelTagTests
         Assert.Equal(line, rest);
     }
 
+    [Fact]
+    public void A_player_named_after_a_channel_keeps_their_nickname()
+    {
+        // Peeling EVERY leading tag is right for a badge-only line ("Мир Мир Клан Клан"), but a line
+        // that still carries text wears exactly one badge. Eating them all cost this player their
+        // header: the remainder "привет" has no colon, so the line fell through to the continuation
+        // branch and was glued onto the message above it.
+        var message = Assert.Single(TextMatching.SplitChatMessages(new[] { "мир Мир: привет" }));
+
+        Assert.Equal("Мир: привет", message);
+        Assert.Equal(("Мир", "привет"), TextMatching.SplitSpeakerStrict(message));
+    }
+
     // ---- a channel WORD inside a sentence is not a badge ----
 
     [Fact]

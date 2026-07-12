@@ -132,7 +132,8 @@ public partial class MainWindow
         try
         {
             var embedded = ReadEmbeddedJson("squad.json");
-            var path = FindOrCreateEditable("squad.json", embedded);
+            var path = FindOrCreateEditable("squad.json", embedded, out var backup);
+            if (backup != null) NoteDataFileRefreshed("squad.json", backup);
             string? json = embedded;
             if (path != null)
                 try { json = File.ReadAllText(path); } catch { /* keep embedded */ }

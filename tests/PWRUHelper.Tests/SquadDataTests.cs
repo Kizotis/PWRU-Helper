@@ -66,6 +66,55 @@ public class SquadDataTests
     }
 
     [Fact]
+    public void A_second_refresh_never_buries_the_backup_holding_the_users_own_edits()
+    {
+        // The .bak used to be overwritten on every refresh. So the NEXT version bump would replace
+        // the backup that still held the only copy of the user's hand edits with a pristine shipped
+        // file — and their work was gone for good, silently. Each refresh takes a free name now.
+        var dir = Directory.CreateTempSubdirectory("pwru-squad-");
+        try
+        {
+            var copy = Path.Combine(dir.FullName, "squad.json");
+            const string mine = """{ "version": 1, "classes": [ { "title": "My own column", "items": [] } ] }""";
+            File.WriteAllText(copy, mine);
+
+            var first = MainWindow.UpgradeEditableIfStale(copy, """{ "version": 2, "classes": [] }""");
+            var second = MainWindow.UpgradeEditableIfStale(copy, """{ "version": 3, "classes": [] }""");
+
+            Assert.Equal("squad.json.bak", first);
+            Assert.Equal("squad.json.bak2", second);            // a free name, not the one already taken
+            Assert.Equal(mine, File.ReadAllText(copy + ".bak"));   // the user's edits, still there
+            Assert.Equal(3, MainWindow.DataVersionOf(File.ReadAllText(copy)));
+        }
+        finally { dir.Delete(recursive: true); }
+    }
+
+    [Theory]
+    [InlineData("""{ "version": "2", "classes": [] }""")]   // quoted — TryGetInt32 would have thrown
+    [InlineData("""{ "version": 2.5, "classes": [] }""")]   // not an integer
+    [InlineData("""{ "classes": [] }""")]                   // the version line deleted by hand
+    [InlineData("""{ "classes": [ oops """)]                // hand-edited into invalid JSON
+    public void A_copy_whose_version_cannot_be_read_is_replaced_but_never_destroyed(string usersCopy)
+    {
+        // Any of these counts as "older than what we ship", so the file IS replaced — the app cannot
+        // use a list it cannot parse. What matters is that the user's content survives in a backup:
+        // the old comment promised "never destroy it" while the code did exactly that.
+        var dir = Directory.CreateTempSubdirectory("pwru-squad-");
+        try
+        {
+            var copy = Path.Combine(dir.FullName, "squad.json");
+            File.WriteAllText(copy, usersCopy);
+
+            var backup = MainWindow.UpgradeEditableIfStale(copy, """{ "version": 2, "classes": [] }""");
+
+            Assert.Equal("squad.json.bak", backup);                        // the user is told where it went
+            Assert.Equal(usersCopy, File.ReadAllText(copy + ".bak"));      // …and nothing was lost
+            Assert.Equal(2, MainWindow.DataVersionOf(File.ReadAllText(copy)));
+        }
+        finally { dir.Delete(recursive: true); }
+    }
+
+    [Fact]
     public void An_up_to_date_or_newer_copy_is_never_touched()
     {
         var dir = Directory.CreateTempSubdirectory("pwru-squad-");

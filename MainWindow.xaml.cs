@@ -111,9 +111,21 @@ public partial class MainWindow : Window
         }
     }
 
+    // Set when a data file the user could have edited (squad.json, slang.json) was replaced by a
+    // newer shipped one at startup. Replacing it silently would be rude — their edits are in the
+    // backup, and they have to be told the backup exists. Shown once the window is up.
+    private string? _dataRefreshNote;
+
+    /// <summary>Remember that an editable data file was refreshed, to tell the user when the window
+    /// appears (LoadSquad/LoadSlang run in the constructor, before there is anything to show it on).</summary>
+    private void NoteDataFileRefreshed(string fileName, string backupName)
+        => _dataRefreshNote = $"{fileName} was updated to this version's list — your previous copy is saved as {backupName}";
+
     private async void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
         // (No first-run welcome dialog — the app opens straight to the tabs.)
+
+        if (_dataRefreshNote != null) ShowToast(_dataRefreshNote);
 
         // Run the update check once the window is up, so the dialog has an owner and
         // appears in front of our always-on-top window instead of behind it.

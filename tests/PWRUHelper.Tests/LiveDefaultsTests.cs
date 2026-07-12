@@ -137,6 +137,14 @@ public class LiveDefaultsTests
     [InlineData("Лунаед: ГИ 01ympus приглашает игроков 100+ 2 рб КХ", "1002")]  // "01ympus" ignored
     [InlineData("f100my whispers: Нашел?", "")]                                 // a nickname, not a count
     [InlineData("Wei Xiaobao: kiwi becomes the owner of а геа1 rarity", "")]    // "геа1" = "real"
+    // The OCR glues tokens together. As one whitespace token this is a 9-letter word, and the count
+    // that IS the message would have been thrown away with it.
+    [InlineData("джероми: ОР танк+5прист шифт", "5")]
+    // Inside a run that already holds a digit, the OCR's own O↔0 / l↔1 confusion is folded out, or
+    // the same message would look new on the next frame and be translated twice.
+    [InlineData("Лунаед: ГИ приглашает игроков 1OO+", "100")]
+    // …but ONLY there. "ОР" is Knights Island — folding its О into a 0 would invent a count.
+    [InlineData("джероми: ОР прист танк", "")]
     public void Only_the_digits_that_carry_meaning_are_counted(string line, string expected)
         => Assert.Equal(expected, TextMatching.MeaningfulDigits(line));
 

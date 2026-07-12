@@ -93,12 +93,7 @@ public partial class MainWindow
             var toTranslate = from == "ru" ? _slang.Expand(text) : text;
             var result = await _writeTranslator.TranslateAsync(toTranslate, from, to);
             int blocks = ShowTranslation(result);
-            TranslateStatus.Text = blocks > 1
-                ? $"{from} → {to}  ·  {result.Length} characters — too long for one chat message: " +
-                  $"send it as {blocks}, one highlighted block at a time"
-                : $"{from} → {to}";
-            TranslateStatus.SetResourceReference(TextBlock.ForegroundProperty,
-                blocks > 1 ? "GoldBrush" : "TextMutedBrush");
+            ShowTranslateStatus(from, to, blocks, result.Length);
 
             if (AutoCopyCheck.IsChecked == true && result.Length > 0 && await CopyToClipboardAsync(result))
                 ShowToast(blocks > 1
@@ -109,6 +104,9 @@ public partial class MainWindow
         catch (Exception ex)
         {
             TranslateStatus.Text = $"Failed: {Friendly(ex)}";
+            // Reset the colour too: gold means "too long", and an error left in gold after a long
+            // translation reads as if the failure were about the length.
+            TranslateStatus.SetResourceReference(TextBlock.ForegroundProperty, "TextMutedBrush");
         }
         finally
         {
@@ -146,10 +144,15 @@ public partial class MainWindow
             for (int i = 0; i < spans.Count; i++)
             {
                 var (start, length) = spans[i];
-                // Whatever sits between two blocks (the space the split broke on) is the cut itself.
                 if (start > cursor)
-                    paragraph.Inlines.Add(new System.Windows.Documents.Run(_lastTranslation[cursor..start])
-                    { Background = cut });
+                {
+                    // Whatever separates two blocks is the cut itself — paint it red. Before the
+                    // FIRST block there is no cut, only leading whitespace: painting that red would
+                    // mark a boundary that isn't one.
+                    var gap = new System.Windows.Documents.Run(_lastTranslation[cursor..start]);
+                    if (i > 0) gap.Background = cut;
+                    paragraph.Inlines.Add(gap);
+                }
 
                 var run = new System.Windows.Documents.Run(_lastTranslation.Substring(start, length));
                 if (i % 2 == 1) run.Background = tint;   // alternate, so each block's extent is obvious
@@ -165,6 +168,19 @@ public partial class MainWindow
         return Math.Max(1, spans.Count);
     }
 
+    /// <summary>The line under the buttons: the direction, and — when the translation needs several
+    /// chat messages — how many and why. Gold is reserved for that warning, so it must be cleared
+    /// again when it no longer applies.</summary>
+    private void ShowTranslateStatus(string from, string to, int blocks, int characters)
+    {
+        TranslateStatus.Text = blocks > 1
+            ? $"{from} → {to}  ·  {characters} characters — too long for one chat message: " +
+              $"send it as {blocks}, one highlighted block at a time"
+            : $"{from} → {to}";
+        TranslateStatus.SetResourceReference(TextBlock.ForegroundProperty,
+            blocks > 1 ? "GoldBrush" : "TextMutedBrush");
+    }
+
     private void Swap_Click(object sender, RoutedEventArgs e)
     {
         var from = SelectedTag(FromCombo);
@@ -176,8 +192,14 @@ public partial class MainWindow
         // Swap the text too, so a round-trip is easy. The output is a FlowDocument now, so the
         // translation it is showing is kept in _lastTranslation rather than read back off the box.
         var previous = _lastTranslation;
-        ShowTranslation(TranslateInput.Text ?? "");
+        var swappedIn = TranslateInput.Text ?? "";
+        int blocks = ShowTranslation(swappedIn);
         TranslateInput.Text = previous;
+
+        // The status described the OLD output. Left alone it would keep claiming "send it as 3
+        // blocks" over a text that is now three words long — or say nothing over one that isn't.
+        ShowTranslateStatus(SelectedTag(FromCombo) ?? "en", SelectedTag(ToCombo) ?? "ru",
+                            blocks, swappedIn.Length);
     }
 
     private async void CopyResult_Click(object sender, RoutedEventArgs e)

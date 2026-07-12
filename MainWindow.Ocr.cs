@@ -24,6 +24,19 @@ public partial class MainWindow
     private bool IsOcrReady()
         => _ocr.IsAvailable && (_ocr.ActiveLanguage?.StartsWith("ru", StringComparison.OrdinalIgnoreCase) ?? false);
 
+    /// <summary>Bring the user to the Screen OCR tab and explain, THERE, that the Russian pack is
+    /// what's missing. The explanation used to be written into ScreenReadStatus — which lives on the
+    /// Translator tab, i.e. the one we just navigated them away from, so the only thing they ever saw
+    /// was a toast that vanished. LiveStatus is on the tab they actually land on.</summary>
+    private void ShowOcrPackNeeded(string whatToDoNext)
+    {
+        if (_overlay is { IsVisible: true }) ExitCompactMode(); else BringToFront();
+        MainTabs.SelectedIndex = TabScreenOcr;
+        LiveStatus.Text = "⚠ The Russian OCR pack isn't installed, so nothing can be read at all. " +
+                          "Install it with the \"Install Russian OCR\" button on this tab — " + whatToDoNext;
+        ShowToast("Russian OCR pack needed — install it on this tab (1 click).");
+    }
+
     private bool CheckOcrAvailability()
     {
         var lang = _ocr.ActiveLanguage;
@@ -38,7 +51,9 @@ public partial class MainWindow
         }
         else
         {
-            OcrLangStatus.Text = "Russian OCR language pack: not installed — Cyrillic won't read well until it is.";
+            // Not "won't read well" — without it nothing is read AT ALL. The app no longer falls back
+            // to the Windows engine, because a Latin engine reads Cyrillic as confident gibberish.
+            OcrLangStatus.Text = "Russian OCR language pack: NOT INSTALLED — screen reading is off until it is.";
             OcrLangStatus.SetResourceReference(TextBlock.ForegroundProperty, "GoldBrush");
             InstallOcrButton.Content = "Install Russian OCR (1 click)";
         }
@@ -119,7 +134,8 @@ public partial class MainWindow
         try
         {
             var embedded = ReadEmbeddedJson("slang.json");
-            var path = FindOrCreateEditable("slang.json", embedded);
+            var path = FindOrCreateEditable("slang.json", embedded, out var backup);
+            if (backup != null) NoteDataFileRefreshed("slang.json", backup);
             string? json = embedded;
             if (path != null)
                 try { json = File.ReadAllText(path); } catch { /* keep embedded */ }
@@ -170,14 +186,7 @@ public partial class MainWindow
         // Same reason as StartLive: with no Russian engine there is nothing to read, and the app has
         // to say so — rather than show an empty result (or, before the fallback was removed, a
         // confidently garbled one).
-        if (!IsOcrReady())
-        {
-            MainTabs.SelectedIndex = TabScreenOcr;
-            ScreenReadStatus.Text = "⚠ The Russian OCR pack isn't installed, so nothing can be read. " +
-                                    "Install it here (1 click), then try again.";
-            ShowToast("Russian OCR pack needed — install it on this tab (1 click).");
-            return;
-        }
+        if (!IsOcrReady()) { ShowOcrPackNeeded("then read the area again."); return; }
 
         _readingOnce = true;
         MainTabs.SelectedIndex = TabTranslator;   // results show on the Translator page

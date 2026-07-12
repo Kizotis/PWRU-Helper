@@ -48,6 +48,43 @@ public class GameChatBlockSpanTests
     }
 
     [Fact]
+    public void A_multi_line_translation_over_the_limit_is_still_split_and_still_highlighted()
+    {
+        // The Translator input is multi-line (Shift+Enter), so a translation can carry a newline. The
+        // highlighter used to LOCATE its blocks by searching for them in the original text — and the
+        // splitter rejoined words with single spaces, so any block spanning a newline was never found.
+        // Result: spans empty, no highlight, and the status cheerfully reported a 100-character text
+        // as fitting in one 78-character chat message. The compact overlay, splitting the same text,
+        // disagreed. Both are built on one primitive now.
+        var text = new string('а', 50) + "\n" + new string('б', 50);   // 101 chars, separated by a newline
+
+        var spans = TextMatching.GameChatBlockSpans(text, TextMatching.GameChatLimit);
+
+        Assert.Equal(2, spans.Count);
+        Assert.Equal(TextMatching.SplitForGameChat(text, TextMatching.GameChatLimit),
+                     spans.Select(s => text.Substring(s.Start, s.Length)).ToList());
+    }
+
+    [Fact]
+    public void A_double_space_between_words_does_not_hide_the_cut_either()
+    {
+        var text = string.Join("  ", Enumerable.Repeat("слово", 20));   // double spaces throughout
+
+        Assert.True(TextMatching.GameChatBlockSpans(text, TextMatching.GameChatLimit).Count > 1);
+    }
+
+    [Fact]
+    public void A_block_never_exceeds_the_limit_even_counting_the_separators_it_spans()
+    {
+        // The span is what the user selects and the game counts — separators included. Measuring the
+        // rejoined words instead would under-count a newline-separated block.
+        var text = string.Join("\n", Enumerable.Repeat("длинное сообщение", 12));
+
+        Assert.All(TextMatching.GameChatBlockSpans(text, TextMatching.GameChatLimit),
+                   s => Assert.True(s.Length <= TextMatching.GameChatLimit));
+    }
+
+    [Fact]
     public void Rebuilding_from_the_spans_gives_back_the_original_even_across_a_hard_split_word()
     {
         // A word longer than the limit is cut mid-word, with NO space between the halves. Rejoining

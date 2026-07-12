@@ -33,21 +33,37 @@ internal static class StaTestHost
             if (_dispatcher != null) return _dispatcher;
 
             var ready = new ManualResetEventSlim();
+            Exception? startupFailure = null;
             var thread = new Thread(() =>
             {
-                // Loading App.xaml merges Theme.xaml into Application.Resources, which every
-                // StaticResource / FindResource lookup in the windows and templates resolves against.
-                var app = new App();
-                app.InitializeComponent();
-                _dispatcher = Dispatcher.CurrentDispatcher;
-                ready.Set();
-                Dispatcher.Run();
+                try
+                {
+                    // Loading App.xaml merges Theme.xaml into Application.Resources, which every
+                    // StaticResource / FindResource lookup in the windows and templates resolves against.
+                    var app = new App();
+                    app.InitializeComponent();
+                    _dispatcher = Dispatcher.CurrentDispatcher;
+                }
+                catch (Exception ex)
+                {
+                    // Without this, the exception died with the thread, ready.Set() never ran, and the
+                    // whole test suite hung forever on ready.Wait() with nothing to show for it.
+                    startupFailure = ex;
+                }
+                finally { ready.Set(); }
+
+                if (startupFailure == null) Dispatcher.Run();
             })
             { IsBackground = true };   // no explicit shutdown: it dies with the test host
             thread.SetApartmentState(ApartmentState.STA);
             thread.Start();
             ready.Wait();
-            return _dispatcher!;
+
+            if (startupFailure != null || _dispatcher == null)
+                throw new Xunit.Sdk.XunitException(
+                    "The WPF test host could not start (no Application / STA dispatcher):\n" + startupFailure);
+
+            return _dispatcher;
         }
     }
 }

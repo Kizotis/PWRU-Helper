@@ -78,7 +78,7 @@ public static class TextMatching
         // Every one of these was read off a real screenshot of the game chat.
         "мир",                                  // world
         "клан", "фракц", "фракция", "фр",       // faction
-        "сист", "сиcт", "система",              // system
+        "сист", "система",                      // system
         "лично", "личн", "личное", "личка", "лс",   // private / whisper
         "оснв", "осн", "основной",              // main
         "групп", "группа", "гр",                // group
@@ -118,19 +118,34 @@ public static class TextMatching
     public static bool TryPeelChannelTag(string line, out string rest)
     {
         var tokens = (line ?? "").Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-        int i = 0;
+        int i = 0, afterFirstTag = -1;
         bool found = false;
 
         while (i < tokens.Length)
         {
-            if (IsChatTag(tokens[i])) { found = true; i++; continue; }
+            if (IsChatTag(tokens[i]))
+            {
+                found = true;
+                i++;
+                if (afterFirstTag < 0) afterFirstTag = i;
+                continue;
+            }
             // A 1–2 character speck sitting between the chip border and the tag itself.
             if (i + 1 < tokens.Length && tokens[i].Length <= 2 && IsChatTag(tokens[i + 1])) { i++; continue; }
             break;
         }
 
+        if (!found) { rest = string.Join(" ", tokens); return false; }
+
+        // Consume EVERY tag when the line is nothing but badges — that is the filter-on case, where
+        // several chips are read together ("Мир Мир Клан Клан") and the whole line must vanish.
+        //
+        // But a line that still carries text wears exactly ONE badge, so only the first is peeled.
+        // Peeling them all would eat the nickname of a player CALLED after a channel ("Мир Мир:
+        // привет" → the header would be lost and the message glued onto the one above it).
         rest = string.Join(" ", tokens.Skip(i));
-        return found;
+        if (rest.Length > 0) rest = string.Join(" ", tokens.Skip(afterFirstTag));
+        return true;
     }
 
     /// <summary>
@@ -227,7 +242,10 @@ public static class TextMatching
             // drop it. It still marks a boundary — the badge belongs to the message that follows.
             if (tagged && rest.Length == 0) { Flush(); continue; }
 
-            if (TryParseHeader(rest, out var sp, out var bd))
+            // The ORIGINAL line, not `rest`: TryParseHeader peels the badge itself, and it knows the
+            // one thing this call site doesn't — that the token before the colon is the nickname and
+            // must survive even when it happens to be spelled like a channel ("мир Мир: привет").
+            if (TryParseHeader(line, out var sp, out var bd))
             {
                 Flush();
                 speaker = sp;
@@ -255,8 +273,11 @@ public static class TextMatching
                 // never read, so it looked like the wrapped tail of the player above — and was glued
                 // onto their message. It starts its own message instead. (Its OWN wrapped tail, which
                 // carries no marker, still glues onto it correctly: that's the branch below.)
+                //
+                // Use `rest` when a badge WAS read here ("сист. X joined the squad"): a system marker
+                // behind a channel word settles it — that word is the chip, not part of the sentence.
                 Flush();
-                body.Add(line);
+                body.Add(tagged ? rest : line);
                 lineCount = 1;
             }
             else
@@ -321,10 +342,22 @@ public static class TextMatching
         var head = s[..colon].Trim();
         body = s[(colon + 1)..].Trim();
 
-        // Peel an optional leading channel tag: "[Мир] Nick" / "Мир Nick" / "(Клан) Nick".
+        // Peel the leading channel badge: "[Мир] Nick" / "Мир Nick" / "т мир Nick" (with the speck of
+        // chip border the OCR sometimes leaves in front of it).
+        //
+        // NEVER the last token, whatever it looks like: in a header that one is the NICKNAME. A
+        // player is perfectly entitled to be called "Мир", and peeling their name as if it were a
+        // badge left the message headerless — glued, nameless, onto the one above it.
         var tokens = head.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).ToList();
-        bool hadTag = tokens.Count > 0 && IsChatTag(tokens[0]);
-        if (hadTag) tokens.RemoveAt(0);
+        int peel = 0;
+        bool hadTag = false;
+        while (peel < tokens.Count - 1)
+        {
+            if (IsChatTag(tokens[peel])) { hadTag = true; peel++; continue; }
+            if (tokens[peel].Length <= 2 && IsChatTag(tokens[peel + 1])) { peel++; continue; }   // border speck
+            break;
+        }
+        tokens.RemoveRange(0, peel);
 
         // Whatever the OCR made of the badge's border ("[32)", "|") carries no letters and is not
         // part of the nickname — drop it, but never the last token (that IS the nick).
@@ -338,9 +371,13 @@ public static class TextMatching
         // decoration off both ends — including the em/en dashes it likes to turn a tilde into.
         var nick = string.Join(" ", tokens).Trim(NickEdgeTrim);
 
-        // A real nickname has a letter (so "12" in "12:30" is rejected), isn't absurdly long, and
-        // is at most a few words. A recognised tag with a garbled nick still marks a boundary.
-        bool nickOk = nick.Length is > 0 and <= 22 && nick.Any(char.IsLetter) && tokens.Count <= 3;
+        // A real nickname has a letter (so "12" in "12:30" is rejected), isn't absurdly long, and is
+        // at most a few words. One word more is allowed behind a badge: the badge PROVES this is a
+        // header, so whatever stands between it and the colon is the name — even a spaced-out one
+        // like "С α к э", a real player. Without that proof, a fourth word means we are reading a
+        // sentence, not a nickname. A recognised tag with a garbled nick still marks a boundary.
+        bool nickOk = nick.Length is > 0 and <= 22 && nick.Any(char.IsLetter)
+                      && tokens.Count <= (hadTag ? 4 : 3);
         if (!nickOk && !hadTag) return false;
 
         speaker = nickOk ? nick : "";
@@ -371,69 +408,78 @@ public static class TextMatching
     /// the cut falls.</summary>
     public const int GameChatLimit = 78;
 
-    /// <summary>The same blocks as <see cref="SplitForGameChat"/>, but as (start, length) spans into
-    /// the ORIGINAL text. A UI can then highlight where each chat message ends without rebuilding the
-    /// string — rebuilding would re-insert a space between the halves of a hard-split long word, and
-    /// the text the user copies would no longer be the text that was translated.
-    /// Returns an empty list when the text fits in one message (nothing to show) or if the spans
-    /// can't be located, so the caller falls back to rendering it plain.</summary>
+    /// <summary>The blocks a long message has to be sent in, as (start, length) spans into the
+    /// ORIGINAL text — so a UI can highlight where each chat message ends without rebuilding the
+    /// string. Rebuilding is what a UI must never do: re-joining the pieces would insert a space
+    /// between the halves of a hard-split long word, and the text the user copies would no longer be
+    /// the text that was translated. Empty when the whole thing fits in one message (nothing to
+    /// show), so the caller renders it plain.</summary>
     public static List<(int Start, int Length)> GameChatBlockSpans(string text, int maxChars)
     {
-        var spans = new List<(int, int)>();
-        text ??= "";
-        var blocks = SplitForGameChat(text, maxChars);
-        if (blocks.Count <= 1) return spans;
-
-        int cursor = 0;
-        foreach (var block in blocks)
-        {
-            int at = text.IndexOf(block, cursor, StringComparison.Ordinal);
-            if (at < 0) return new();   // can't line them up — caller shows plain text
-            spans.Add((at, block.Length));
-            cursor = at + block.Length;
-        }
-        return spans;
+        var spans = BlockSpans(text ?? "", maxChars);
+        return spans.Count > 1 ? spans : new List<(int, int)>();
     }
 
-    /// <summary>Split a message into chunks no longer than <paramref name="maxChars"/>,
-    /// breaking only between words (never mid-word) so each chunk can be pasted into a
-    /// game chat that caps a single message's length. A word longer than the limit on its
-    /// own is hard-split as a last resort. Returns one chunk if it already fits.</summary>
+    /// <summary>Split a message into chunks no longer than <paramref name="maxChars"/>, breaking only
+    /// between words (never mid-word) so each chunk can be pasted into a game chat that caps a single
+    /// message's length. A word longer than the limit on its own is hard-split as a last resort.
+    /// Returns one chunk if it already fits.</summary>
     public static List<string> SplitForGameChat(string text, int maxChars)
     {
-        var chunks = new List<string>();
         text = text?.Trim() ?? "";
         if (maxChars <= 0 || text.Length <= maxChars)
+            return text.Length > 0 ? new List<string> { text } : new List<string>();
+
+        return BlockSpans(text, maxChars).Select(s => text.Substring(s.Start, s.Length)).ToList();
+    }
+
+    /// <summary>
+    /// The one place a message is cut into chat-sized blocks. Both the compact overlay (which sends
+    /// the blocks) and the Translator tab (which highlights where they fall) are built on it, so the
+    /// two can no longer disagree about where the cut is — they used to: the highlighter located the
+    /// blocks by searching for them in the original text, which silently failed on ANY separator that
+    /// wasn't a single space (a newline from a Shift+Enter input, a double space), and then reported
+    /// the message as fitting when it plainly did not.
+    ///
+    /// Spans measure the text as it really is, separators included — which is exactly what the game
+    /// counts when the user pastes it.
+    /// </summary>
+    private static List<(int Start, int Length)> BlockSpans(string text, int maxChars)
+    {
+        var spans = new List<(int Start, int Length)>();
+        if (maxChars <= 0 || text.Length == 0) return spans;
+
+        int blockStart = -1, blockEnd = -1;
+        void Flush()
         {
-            if (text.Length > 0) chunks.Add(text);
-            return chunks;
+            if (blockStart >= 0) spans.Add((blockStart, blockEnd - blockStart));
+            blockStart = -1;
         }
 
-        var current = "";
-        foreach (var word in Regex.Split(text, @"\s+"))
+        int i = 0;
+        while (i < text.Length)
         {
-            if (word.Length == 0) continue;
+            if (char.IsWhiteSpace(text[i])) { i++; continue; }
 
-            // A single over-long word: emit what we have, then hard-split the word itself.
-            if (word.Length > maxChars)
+            int wordStart = i;
+            while (i < text.Length && !char.IsWhiteSpace(text[i])) i++;
+            int wordEnd = i;
+
+            // A single word longer than a whole chat message: nothing can be done but cut it.
+            if (wordEnd - wordStart > maxChars)
             {
-                if (current.Length > 0) { chunks.Add(current); current = ""; }
-                var rest = word;
-                while (rest.Length > maxChars)
-                {
-                    chunks.Add(rest[..maxChars]);
-                    rest = rest[maxChars..];
-                }
-                current = rest;
+                Flush();
+                for (int p = wordStart; p < wordEnd; p += maxChars)
+                    spans.Add((p, Math.Min(maxChars, wordEnd - p)));
                 continue;
             }
 
-            if (current.Length == 0) current = word;
-            else if (current.Length + 1 + word.Length <= maxChars) current += " " + word;
-            else { chunks.Add(current); current = word; }
+            if (blockStart < 0) { blockStart = wordStart; blockEnd = wordEnd; }
+            else if (wordEnd - blockStart <= maxChars) blockEnd = wordEnd;   // still fits, separators and all
+            else { Flush(); blockStart = wordStart; blockEnd = wordEnd; }
         }
-        if (current.Length > 0) chunks.Add(current);
-        return chunks;
+        Flush();
+        return spans;
     }
 
     /// <summary>
@@ -445,20 +491,47 @@ public static class TextMatching
     /// nothing about the message and flicker from frame to frame — counting them would make the same
     /// message look like a new one and translate it twice.
     ///
-    /// So a digit only counts when it sits in a token carrying at most two letters: "+5дд" → "5",
-    /// "4-1" → "41", "100+" → "100", "2" → "2". A digit buried in a word is ignored.
+    /// A digit counts when it OPENS its run — a bare number ("4-1", "100+", "2") or a count fused to
+    /// the Russian word it counts ("+5дд" → "5", "танк+5прист" → "5"). It does not count when it sits
+    /// inside or at the end of a word, or ahead of a LATIN one: that is the shape of every invention
+    /// the OCR makes ("f100my", "геа1", "01ympus" — a misread "Olympus", digits and all).
+    ///
+    /// The runs are cut on punctuation, not just on spaces, because the OCR glues tokens together:
+    /// as one whitespace token, "танк+5прист" is a nine-letter word and its count would go in the bin
+    /// with it — the very message this rule exists to save.
+    ///
+    /// The OCR's own O↔0 and l/I↔1 confusion is folded out, but ONLY when folding turns the run into
+    /// a pure number ("1OO+" → "100"): otherwise "ОР" — Knights Island — would become "0Р" and the
+    /// app would invent a count out of a dungeon name.
     /// </summary>
     public static string MeaningfulDigits(string? s)
     {
         var sb = new System.Text.StringBuilder();
-        foreach (var token in (s ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+        foreach (var run in Regex.Split(s ?? "", @"[^\p{L}\p{Nd}]+"))
         {
-            if (token.Count(char.IsLetter) > 2) continue;   // a word — its digits are OCR inventions
-            foreach (var ch in token)
-                if (char.IsDigit(ch)) sb.Append(ch);
+            if (run.Length == 0 || !run.Any(char.IsDigit)) continue;
+
+            var folded = new string(run.Select(ch => ch switch
+            {
+                'O' or 'o' or 'О' or 'о' => '0',
+                'l' or 'I' or 'i' or 'І' or 'і' => '1',
+                _ => ch,
+            }).ToArray());
+
+            if (folded.All(char.IsDigit)) { sb.Append(folded); continue; }   // "100", "1OO" → "100", "4"
+
+            int digits = 0;
+            while (digits < run.Length && char.IsDigit(run[digits])) digits++;
+            if (digits == 0) continue;                          // "f100my", "геа1" — buried, invented
+
+            // A count is followed by the Russian word it counts. Latin letters after the digits mean
+            // we are looking at a mangled English word, not a number.
+            if (run[digits..].All(IsCyrillicLetter)) sb.Append(run[..digits]);
         }
         return sb.ToString();
     }
+
+    private static bool IsCyrillicLetter(char ch) => ch is >= 'Ѐ' and <= 'ԯ';
 
     /// <summary>True if a line is worth translating (has at least <paramref name="minLetters"/>
     /// letters), rather than background specks. The threshold is user-tunable in live mode.</summary>
