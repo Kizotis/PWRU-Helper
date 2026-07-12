@@ -46,13 +46,18 @@ public partial class MainWindow
     // ============================================================
     private async void Translate_Click(object sender, RoutedEventArgs e) => await RunTranslation();
 
+    /// <summary>Enter translates, like the compact overlay's reply box (and like every chat box the
+    /// user is already in). The input is multi-line, so Shift+Enter keeps the plain new-line — and
+    /// Ctrl+Enter, the old shortcut, still works, for the muscle memory it built.</summary>
+    internal static bool IsTranslateKey(Key key, ModifierKeys modifiers)
+        => key == Key.Enter && (modifiers & ModifierKeys.Shift) == 0;
+
     private async void TranslateInput_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
-        {
-            e.Handled = true;
-            await RunTranslation();
-        }
+        if (!IsTranslateKey(e.Key, Keyboard.Modifiers)) return;
+
+        e.Handled = true;              // don't ALSO insert the line break
+        await RunTranslation();        // no-ops on empty input or while one is already running
     }
 
     private async Task RunTranslation()

@@ -248,7 +248,8 @@
                     <TextBlock Grid.Row="0" Margin="0,0,0,6" FontSize="13">
                         <Run Text="✍  Write — type and get the translation"
                              FontWeight="Bold" Foreground="{StaticResource GoldBrush}"/><Run
-                             Text="    ·  press Ctrl+Enter to translate" Foreground="{StaticResource TextMutedBrush}"/>
+                             Text="    ·  press Enter to translate  (Shift+Enter for a new line)"
+                             Foreground="{StaticResource TextMutedBrush}"/>
                     </TextBlock>
 
                     <!-- direction controls -->
