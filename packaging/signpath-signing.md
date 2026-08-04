@@ -82,12 +82,14 @@ by its **signed** copy — so the installer wraps a signed exe, and the MSI itse
 signed afterwards. Every SignPath step is gated on the token existing.
 
 ```yaml
+      # No -p:EnableCompressionInSingleFile — see the comment in release.yml. These flags must stay
+      # identical to the ones live in release.yml, or applying this block would quietly change the
+      # shipped build (compressing it again costs ~110 MB of RAM at runtime).
       - name: Publish portable single-file exe
         run: >
           dotnet publish PWRUHelper.csproj -c Release -r win-x64 --self-contained true
           -p:PublishSingleFile=true
           -p:IncludeNativeLibrariesForSelfExtract=true
-          -p:EnableCompressionInSingleFile=true
           -p:DebugType=none
 
       - name: Stage the portable exe

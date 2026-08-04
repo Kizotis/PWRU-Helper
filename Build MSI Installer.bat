@@ -20,11 +20,15 @@ if not exist "%WIX%" (
 )
 
 REM 2) Publish the single-file exe (bundles .NET + all DLLs).
+REM    These flags MUST match "Build Portable EXE.bat" and .github/workflows/release.yml —
+REM    the MSI is supposed to wrap the very same build the portable download gives you.
+REM    In particular: no -p:EnableCompressionInSingleFile. Compressing the bundle costs ~110 MB
+REM    of RAM at runtime (the assemblies can no longer be memory-mapped and are decompressed into
+REM    private memory instead) and buys only download size, which the MSI's own CAB recovers anyway.
 echo Publishing the portable exe...
 "%DOTNET%" publish -c Release -r win-x64 --self-contained true ^
   -p:PublishSingleFile=true ^
   -p:IncludeNativeLibrariesForSelfExtract=true ^
-  -p:EnableCompressionInSingleFile=true ^
   -p:DebugType=none
 if errorlevel 1 goto :fail
 
