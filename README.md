@@ -216,7 +216,17 @@ the slang decoder and version parsing). They run headless — no window, no netw
 
 ## 📄 License
 
-Released under the [MIT License](LICENSE) — free to use, modify and share.
+[![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
+
+Released under the [Creative Commons Attribution-NonCommercial 4.0 International License
+(CC BY-NC 4.0)](LICENSE).
+
+PWRU Helper is **free for personal, non-commercial use** — use it, copy it, modify it and
+share it with your guild, as long as you credit Kizotis and link back to this project.
+
+**Reselling PWRU Helper, or including it in any paid product, paid service or other
+commercial offering, is strictly forbidden without prior written permission from the
+author.**
 
 ---
 

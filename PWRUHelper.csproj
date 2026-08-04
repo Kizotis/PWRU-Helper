@@ -12,6 +12,8 @@
     <AssemblyName>PWRUHelper</AssemblyName>
     <RootNamespace>PWRUHelper</RootNamespace>
     <Version>0.13.0</Version>
+    <!-- CC BY-NC 4.0: free for personal, non-commercial use. See LICENSE. -->
+    <PackageLicenseExpression>CC-BY-NC-4.0</PackageLicenseExpression>
     <ApplicationIcon>assets\icon.ico</ApplicationIcon>
     <!-- The test project lives under tests\ inside this folder; keep its sources out of the
          app's default .cs/.xaml globbing (it has its own csproj). -->

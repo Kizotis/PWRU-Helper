@@ -33,7 +33,7 @@ Get-FileHash .\PWRUHelper.exe, .\PWRUHelper-0.7.0-setup.msi -Algorithm SHA256 |
 
 ## 3. Submit to winget (free) — a trusted install channel
 `winget install Kizotis.PWRUHelper` is a clean path for technical players. The MSI
-(perMachine, stable `UpgradeCode`, MIT-licensed) is a good fit.
+(perMachine, stable `UpgradeCode`, CC BY-NC 4.0) is a good fit.
 
 Easiest is **wingetcreate**, which fills in the SHA-256 and MSI ProductCode for you
 from the release URL:

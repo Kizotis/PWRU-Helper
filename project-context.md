@@ -16,7 +16,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 
 ## What This Project Is
 
-**PWRU Helper** — a free Windows app (MIT, public repo `Kizotis/PWRU-Helper`) helping English/French speakers play **Perfect World Russia** (pwonline.ru). Five modules: Phrasebook (click → clipboard), Screen OCR (one-shot + LIVE loop over the game chat), Translator (EN↔RU with game-slang expansion), Compact in-game overlay, Squad builder (RU LFM messages). Distributed as portable exe + MSI. **Tiny footprint is a product requirement — nothing may lag the game.** The UI is intentionally English-only (a decision, not an oversight).
+**PWRU Helper** — a free Windows app (CC BY-NC 4.0 — free for personal, non-commercial use; resale or bundling into a paid product needs written permission. Public repo `Kizotis/PWRU-Helper`) helping English/French speakers play **Perfect World Russia** (pwonline.ru). Five modules: Phrasebook (click → clipboard), Screen OCR (one-shot + LIVE loop over the game chat), Translator (EN↔RU with game-slang expansion), Compact in-game overlay, Squad builder (RU LFM messages). Distributed as portable exe + MSI. **Tiny footprint is a product requirement — nothing may lag the game.** The UI is intentionally English-only (a decision, not an oversight).
 
 ## Technology Stack & Versions
 
