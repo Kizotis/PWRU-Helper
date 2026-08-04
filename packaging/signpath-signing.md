@@ -64,9 +64,14 @@ Then add these to the GitHub repo (**Settings → Secrets and variables → Acti
 | Variable | `SIGNPATH_MSI_ARTIFACT_CONFIG` | artifact-config slug for the msi |
 | Variable | `SIGNPATH_CONNECTOR_URL` | the GitHub connector URL from SignPath's dashboard |
 
-That's the whole one-time part. **The workflow below already reads these**, and the
-signing steps stay dormant (pipeline builds unsigned, exactly as today) until
-`SIGNPATH_API_TOKEN` is present — so nothing breaks in the meantime.
+That's the whole one-time part **on the SignPath side**.
+
+> ⚠️ **Setting these secrets alone does NOT switch signing on.** The signing steps are
+> only *drafted* in Step 3 below — `.github/workflows/release.yml` does not contain a
+> single reference to SignPath today (`grep -i signpath .github/workflows/release.yml`
+> returns nothing). Until that block is actually applied to the workflow, a tagged
+> release keeps shipping unsigned no matter what secrets exist. Step 3 is a real
+> to-do, not a description of the current pipeline.
 
 ## Step 3 — CI wiring (already drafted; apply when secrets exist)
 
@@ -162,8 +167,27 @@ signed afterwards. Every SignPath step is gated on the token existing.
 ```
 
 Notes:
-- `${{ secrets.X != '' }}` in a step `if:` is valid and keeps the SignPath steps inert
-  until the token is added — the release keeps shipping unsigned exactly as it does now.
+- ⚠️ **Verify the `if:` guards before trusting them.** The `secrets` context is *not* in
+  GitHub's documented list of contexts available to a step-level `if:`
+  (`github, needs, strategy, matrix, job, runner, env, vars, steps, inputs`), so
+  `if: ${{ secrets.SIGNPATH_API_TOKEN != '' }}` may evaluate as empty/false — or error —
+  rather than doing what it looks like it does. `secrets` *is* available in a job-level
+  `env:`, so the unambiguous form is to map it once and test the mapped value:
+
+  ```yaml
+  jobs:
+    release:
+      runs-on: windows-latest
+      env:
+        SIGNING_ENABLED: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+      steps:
+        - name: Sign exe with SignPath
+          if: env.SIGNING_ENABLED == 'true'
+          ...
+  ```
+
+  Either way, the FIRST tag after wiring this up should be treated as a test: confirm the
+  release still produced both artifacts before assuming the guards behaved.
 - The exact `connector-url` and the artifact-configuration slugs come from the SignPath
   dashboard once the project is created; they're wired as repo variables above so no
   secret ever appears in the YAML.
