@@ -14,7 +14,17 @@ namespace PWRUHelper.Services;
 /// </summary>
 public class OcrService
 {
-    private OcrEngine? _engine;
+    // Built on FIRST USE, not in the constructor. Creating a Windows OCR engine costs 26–38 ms
+    // (measured in-app, not in isolation — a bare WinRT benchmark says ~100 ms, but most of that is
+    // loading the projections, which this app pays anyway). This service is constructed from a
+    // MainWindow field initialiser, so that work used to sit in front of the very first paint, on
+    // every launch, for every user — including the ones who only ever open the Phrasebook.
+    // Worth being honest about the size of this: ~30 ms out of a ~1200 ms warm start. The reason to
+    // do it is that an optional subsystem shouldn't be built before the window exists, not the ms.
+    // Lazy<T>'s default mode is already thread-safe (ExecutionAndPublication), which matters here:
+    // the first touch can come from the live loop's worker thread as easily as from the UI thread.
+    // CreateEngine never throws, so no failed-value caching to worry about.
+    private readonly Lazy<OcrEngine?> _engine;
     private readonly string _languageTag;
 
     // Enlarge captures whose longest side is under this many pixels, up to MaxUpscale×.
@@ -26,14 +36,16 @@ public class OcrService
     public OcrService(string languageTag = "ru")
     {
         _languageTag = languageTag;
-        _engine = CreateEngine(languageTag);
+        _engine = new Lazy<OcrEngine?>(() => CreateEngine(languageTag));
     }
 
-    /// <summary>True when an OCR engine is ready (language pack present).</summary>
-    public bool IsAvailable => _engine != null;
+    /// <summary>True when an OCR engine is ready (language pack present). The first call to this
+    /// (or to <see cref="ActiveLanguage"/> / <see cref="ReadLinesAsync"/>) is what builds the
+    /// engine — call it off the UI thread if you don't want to block for ~30 ms.</summary>
+    public bool IsAvailable => _engine.Value != null;
 
     /// <summary>The BCP-47 tag the active engine recognizes, or null if none.</summary>
-    public string? ActiveLanguage => _engine?.RecognizerLanguage.LanguageTag;
+    public string? ActiveLanguage => _engine.Value?.RecognizerLanguage.LanguageTag;
 
     /// <summary>
     /// Create the engine for <paramref name="languageTag"/> — and NEVER a substitute for it.
@@ -81,7 +93,8 @@ public class OcrService
     /// </summary>
     public async Task<List<string>> ReadLinesAsync(Bitmap bitmap)
     {
-        if (_engine == null) return new List<string>();
+        var engine = _engine.Value;                     // builds it on the first read, then cached
+        if (engine == null) return new List<string>();
 
         // Pick a scale factor before recognition:
         //  • DOWNSCALE huge captures — Windows.Media.Ocr rejects images whose width or
@@ -118,7 +131,7 @@ public class OcrService
         try
         {
             using var software = await ToSoftwareBitmapAsync(source);
-            result = await _engine.RecognizeAsync(software);
+            result = await engine.RecognizeAsync(software);
         }
         finally
         {

@@ -91,7 +91,11 @@ public partial class MainWindow : Window
         LoadSlang();
         LoadSquad();
         BuildSquadTab();
-        CheckOcrAvailability();
+        // NOT CheckOcrAvailability() — it reads OcrService.IsAvailable, and the first such read is
+        // what builds the Windows OCR engine (26–38 ms, measured). Doing it here put that in front
+        // of the first paint on every launch. It now runs from OnWindowLoaded, off the UI thread,
+        // once the window is already on screen. The Screen OCR tab it writes to is not the one you
+        // land on, so nobody sees the difference — except in the time to first paint.
         ApplySettings();
         // Track "my language" only from here on, so the init-time combo changes above
         // (and the translator's auto-flip to Russian) don't overwrite it.
@@ -124,6 +128,13 @@ public partial class MainWindow : Window
     private async void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
         // (No first-run welcome dialog — the app opens straight to the tabs.)
+
+        // Build the OCR engine now that the window is up, on a worker thread so its WinRT work
+        // doesn't freeze the UI we just showed. Touching IsAvailable is what forces the lazy
+        // engine; CheckOcrAvailability then only reads the finished result and writes the Screen
+        // OCR tab's status labels.
+        await Task.Run(() => _ocr.IsAvailable);
+        CheckOcrAvailability();
 
         if (_dataRefreshNote != null) ShowToast(_dataRefreshNote);
 
