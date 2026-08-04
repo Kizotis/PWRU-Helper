@@ -144,12 +144,24 @@ public partial class MainWindow
         catch { _slang = SlangGlossary.FromJson(null); }
     }
 
-    /// <summary>Hide the window, let the user drag a rectangle, return it (physical px).</summary>
+    /// <summary>Tuck away whatever window is currently on screen, let the user drag a rectangle,
+    /// return it (physical px), and put that same window back.
+    ///
+    /// "Whatever window" is the point. In compact mode the main window is already hidden and must
+    /// STAY hidden — what the user is looking at is the overlay. Unconditionally Show()ing the main
+    /// window here is what used to force read-once to leave compact mode altogether, so the whole
+    /// thing read as the app throwing you out of the mode you were playing in.
+    ///
+    /// The overlay still has to step aside for the drag itself: it is Topmost, like the selection
+    /// window, so it would otherwise float over the dimmed layer — and sit inside the very region
+    /// being captured. It comes straight back, so from the user's side the compact chat blinks
+    /// rather than being replaced.</summary>
     private async Task<System.Drawing.Rectangle?> SelectRegionAsync()
     {
+        bool compact = _overlay is { IsVisible: true };
         var wasTopmost = Topmost;
         _selectingRegion = true;   // block hotkey-live / a second selection while dragging
-        Hide();
+        if (compact) _overlay!.Hide(); else Hide();
         await Task.Delay(150);
         try
         {
@@ -159,9 +171,17 @@ public partial class MainWindow
         finally
         {
             _selectingRegion = false;
-            Show();
-            Topmost = wasTopmost;
-            Activate();
+            if (compact)
+            {
+                _overlay!.Show();       // NOT EnterCompactMode: we never left it
+                _overlay.Activate();
+            }
+            else
+            {
+                Show();
+                Topmost = wasTopmost;
+                Activate();
+            }
         }
     }
 
@@ -170,34 +190,16 @@ public partial class MainWindow
     /// <summary>Single entry point for "select area &amp; read once": the Translator tab's button and
     /// the compact overlay's. Both must behave identically, so neither owns the logic.
     ///
-    /// Picking an area needs the FULL window — <see cref="SelectRegionAsync"/> hides it, shows the
-    /// drag overlay, then Show()s it again — so a call from the compact overlay leaves compact mode
-    /// first. Otherwise Show() would surface the main window on top of a still-visible overlay, and
-    /// the overlay itself would sit in the region being captured. Same move ToggleLive makes when it
-    /// has to surface the picker.
-    ///
-    /// Leaving compact is a means, not the destination: whoever started in the overlay is put BACK
-    /// there when the read finishes, with the result waiting framed in the feed. Going compact →
-    /// full window → and staying there would make the button feel like it had thrown you out of the
-    /// mode you were playing in.</summary>
+    /// Compact mode is never left. <see cref="SelectRegionAsync"/> hides and restores whichever
+    /// window was on screen, so from the overlay the compact chat simply blinks for the drag and
+    /// the framed result lands in the feed the user was already watching. The earlier version
+    /// bounced out to the full window and back, which looked exactly as bad as it sounds.</summary>
     internal async Task SelectAreaAndReadOnceAsync()
     {
         if (_selectingRegion) return;
-
-        bool startedInCompact = _overlay is { IsVisible: true };
-        if (startedInCompact) ExitCompactMode();
         StopLive();
-        try
-        {
-            var region = await SelectRegionAsync();
-            if (region is { } rect) await ReadRegionOnceAsync(rect);
-        }
-        finally
-        {
-            // Also on cancel (Esc during the drag) and on a failed read: the user asked to be in
-            // compact mode, and an error is no reason to leave them in a window they didn't open.
-            if (startedInCompact) EnterCompactMode();
-        }
+        var region = await SelectRegionAsync();
+        if (region is { } rect) await ReadRegionOnceAsync(rect);
     }
 
     /// <summary>Capture a region once, OCR it into sentences and translate them onto the
@@ -221,7 +223,7 @@ public partial class MainWindow
         // NOT _ocrItems.Clear(): the result is appended to the feed and framed instead (see
         // TranslateSentencesInto). Wiping the history to show one answer threw away the live lines
         // the user was reading — most obviously from the overlay, where the feed IS the window.
-        ScreenReadStatus.Text = "Reading…";
+        SetScreenStatus("Reading…");
         try
         {
             using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
@@ -231,19 +233,19 @@ public partial class MainWindow
                 .Where(l => l.Length > 0).ToList();
             if (sentences.Count == 0)
             {
-                ScreenReadStatus.Text = IsOcrReady()
+                SetScreenStatus(IsOcrReady()
                     ? "No text detected there. Try a tighter box around the text."
-                    : "No text detected — the Russian OCR pack isn't installed. Install it on the Screen OCR tab (1 click).";
+                    : "No text detected — the Russian OCR pack isn't installed. Install it on the Screen OCR tab (1 click).");
                 return;
             }
             var target = SelectedTag(OcrTargetCombo) ?? "en";
-            ScreenReadStatus.Text = $"Read {sentences.Count} line(s). Translating…";
+            SetScreenStatus($"Read {sentences.Count} line(s). Translating…");
             await TranslateSentencesInto(sentences, target);
-            ScreenReadStatus.Text = $"Done — {sentences.Count} line(s) translated.";
+            SetScreenStatus($"Done — {sentences.Count} line(s) translated.");
         }
         catch (Exception ex)
         {
-            ScreenReadStatus.Text = $"OCR failed: {Friendly(ex)}";
+            SetScreenStatus($"OCR failed: {Friendly(ex)}");
         }
         finally
         {

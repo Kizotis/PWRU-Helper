@@ -95,8 +95,8 @@ public partial class CompactOverlay : Window
     }
 
     /// <summary>Same action as the Translator tab's "Select area &amp; read once" — the owner holds
-    /// the logic so the two buttons can't drift apart. It leaves compact mode on the way, because
-    /// dragging a capture box needs the full window.</summary>
+    /// the logic so the two buttons can't drift apart. Compact mode is kept throughout: this
+    /// overlay just steps aside for the drag itself, then the framed result lands in the feed.</summary>
     private async void ReadOnce_Click(object sender, RoutedEventArgs e)
         => await _owner.SelectAreaAndReadOnceAsync();
 

@@ -104,7 +104,7 @@ public partial class MainWindow
         _ocrItems.Clear();
         SetLiveUi(true);
         MainTabs.SelectedIndex = TabTranslator;
-        SetLiveStatus("🔴 Live — watching the area. Translations appear when new text shows up.");
+        SetScreenStatus("🔴 Live — watching the area. Translations appear when new text shows up.");
 
         _liveCts = new CancellationTokenSource();
         _ = LiveLoop(rect, _liveCts.Token);
@@ -147,12 +147,14 @@ public partial class MainWindow
         _liveCts = null;
         _liveRegion = null;
         SetLiveUi(false);
-        SetLiveStatus("Live stopped.");
+        SetScreenStatus("Live stopped.");
     }
 
-    /// <summary>Set the live status text on the main window AND (if shown) the overlay,
-    /// so the state is visible whichever window the user is looking at.</summary>
-    private void SetLiveStatus(string msg)
+    /// <summary>Set the screen-reading status on the main window AND (if shown) the overlay, so the
+    /// state is visible whichever window the user is looking at. Used by the live loop AND by
+    /// read-once: in compact mode ScreenReadStatus lives on a hidden window, so writing only there
+    /// left "Reading…" and every OCR error invisible to someone working from the overlay.</summary>
+    private void SetScreenStatus(string msg)
     {
         ScreenReadStatus.Text = msg;
         _overlay?.SetStatus(msg);
@@ -201,16 +203,16 @@ public partial class MainWindow
                 if (confirmed.Count > 0)
                 {
                     var target = SelectedTag(OcrTargetCombo) ?? "en";
-                    SetLiveStatus($"🔴 Live — {confirmed.Count} new line(s), translating…");
+                    SetScreenStatus($"🔴 Live — {confirmed.Count} new line(s), translating…");
                     await AppendLinesToHistory(confirmed, target, ct);
                     if (ct.IsCancellationRequested) break;
-                    SetLiveStatus($"🔴 Live — {_ocrItems.Count} message(s) so far (check #{_liveTicks}).");
+                    SetScreenStatus($"🔴 Live — {_ocrItems.Count} message(s) so far (check #{_liveTicks}).");
                 }
                 else
                 {
                     // Reassure the user it's really working even before the first message
                     // (a calm chat can be silent for minutes) — and show it's reading text.
-                    SetLiveStatus(_ocrItems.Count == 0
+                    SetScreenStatus(_ocrItems.Count == 0
                         ? $"🔴 Live — watching (check #{_liveTicks}, sees {lines.Count} line(s), waiting for new text)…"
                         : $"🔴 Live — {_ocrItems.Count} message(s) so far (check #{_liveTicks}).");
                 }
@@ -230,10 +232,10 @@ public partial class MainWindow
                 {
                     Services.Logging.Error("Live translation auto-stopped after 5 consecutive errors", ex);
                     StopLive();   // this sets "Live stopped." first…
-                    SetLiveStatus($"Live stopped after repeated errors ({Friendly(ex)}).");   // …then the real reason
+                    SetScreenStatus($"Live stopped after repeated errors ({Friendly(ex)}).");   // …then the real reason
                     break;
                 }
-                SetLiveStatus($"Live hiccup ({Friendly(ex)}) — retrying…");
+                SetScreenStatus($"Live hiccup ({Friendly(ex)}) — retrying…");
             }
 
             // Keep a roughly steady cadence: subtract the time the read+translate just took.
