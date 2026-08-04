@@ -174,14 +174,30 @@ public partial class MainWindow
     /// drag overlay, then Show()s it again — so a call from the compact overlay leaves compact mode
     /// first. Otherwise Show() would surface the main window on top of a still-visible overlay, and
     /// the overlay itself would sit in the region being captured. Same move ToggleLive makes when it
-    /// has to surface the picker.</summary>
+    /// has to surface the picker.
+    ///
+    /// Leaving compact is a means, not the destination: whoever started in the overlay is put BACK
+    /// there when the read finishes, with the result waiting framed in the feed. Going compact →
+    /// full window → and staying there would make the button feel like it had thrown you out of the
+    /// mode you were playing in.</summary>
     internal async Task SelectAreaAndReadOnceAsync()
     {
         if (_selectingRegion) return;
-        if (_overlay is { IsVisible: true }) ExitCompactMode();
+
+        bool startedInCompact = _overlay is { IsVisible: true };
+        if (startedInCompact) ExitCompactMode();
         StopLive();
-        var region = await SelectRegionAsync();
-        if (region is { } rect) await ReadRegionOnceAsync(rect);
+        try
+        {
+            var region = await SelectRegionAsync();
+            if (region is { } rect) await ReadRegionOnceAsync(rect);
+        }
+        finally
+        {
+            // Also on cancel (Esc during the drag) and on a failed read: the user asked to be in
+            // compact mode, and an error is no reason to leave them in a window they didn't open.
+            if (startedInCompact) EnterCompactMode();
+        }
     }
 
     /// <summary>Capture a region once, OCR it into sentences and translate them onto the
@@ -189,9 +205,8 @@ public partial class MainWindow
     private async Task ReadRegionOnceAsync(System.Drawing.Rectangle rect)
     {
         // Only one read-once may run at a time: the OCR engine is shared and non-reentrant, so a
-        // second Ctrl+Alt+R (or a live start) that fired RecognizeAsync on it concurrently would
-        // race — and its _ocrItems.Clear() below would wipe a just-started live feed. The flag
-        // gates ToggleLive/StartLive/ReadLastAreaOnce too; button disabling stays as a UI cue.
+        // second Ctrl+Alt+R (or a live start) firing RecognizeAsync on it concurrently would race.
+        // The flag gates ToggleLive/StartLive/ReadLastAreaOnce too; button disabling stays a UI cue.
         if (_readingOnce) return;
 
         // Same reason as StartLive: with no Russian engine there is nothing to read, and the app has
@@ -203,7 +218,9 @@ public partial class MainWindow
         MainTabs.SelectedIndex = TabTranslator;   // results show on the Translator page
         SetReadOnceEnabled(false);
         LiveButton.IsEnabled = false;        // don't let live start mid-read (shared OCR engine)
-        _ocrItems.Clear();
+        // NOT _ocrItems.Clear(): the result is appended to the feed and framed instead (see
+        // TranslateSentencesInto). Wiping the history to show one answer threw away the live lines
+        // the user was reading — most obviously from the overlay, where the feed IS the window.
         ScreenReadStatus.Text = "Reading…";
         try
         {
@@ -248,7 +265,10 @@ public partial class MainWindow
     /// message body is translated; the speaker's nickname is kept verbatim as a prefix.</summary>
     private async Task TranslateSentencesInto(List<string> sentences, string target)
     {
-        _ocrItems.Clear();
+        // APPENDS to the feed — it used to Clear() it first. Reading once from the compact overlay
+        // is meant to drop an answer INTO the live flow you are watching, not to wipe the flow to
+        // show it. Every item is flagged IsReadOnce so both feeds frame it and you can find it
+        // among the live lines; the same MaxHistory cap as the live loop keeps the list bounded.
         // SplitSpeakerStrict, not SplitSpeaker: a body that itself starts "word:" (e.g. the slang
         // "тс: сбор у входа") must not lose its first word as a fake nickname and skip translation.
         var parts = sentences.Select(TextMatching.SplitSpeakerStrict).ToList();   // (Speaker, Body)
@@ -261,10 +281,13 @@ public partial class MainWindow
                 OriginalBody = parts[i].Body,
                 TranslationBody = "…",
                 Glossary = _slang.Decode(sentences[i]),
+                IsReadOnce = true,
             };
             _ocrItems.Add(item);
             items.Add(item);
+            while (_ocrItems.Count > MaxHistory) _ocrItems.RemoveAt(0);   // drop the oldest
         }
+        ResultsScroller?.ScrollToEnd();   // the overlay's feed scrolls itself on CollectionChanged
 
         List<string> translations;
         try { translations = await TranslateBodiesAsync(parts.Select(p => p.Body).ToList(), target, default); }

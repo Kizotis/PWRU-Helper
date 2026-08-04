@@ -311,9 +311,25 @@
                             <ItemsControl x:Name="OcrResults">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Background="{StaticResource PanelBrush}" CornerRadius="8"
-                                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                                                Padding="12" Margin="0,0,0,8">
+                                        <!-- Background/border live in the Style, NOT as attributes: a local
+                                             value beats a style trigger in WPF, so the read-once frame
+                                             below would never win against them. -->
+                                        <Border CornerRadius="8" Padding="12" Margin="0,0,0,8">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="Background" Value="{StaticResource PanelBrush}"/>
+                                                    <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+                                                    <Setter Property="BorderThickness" Value="1"/>
+                                                    <Style.Triggers>
+                                                        <!-- A "read once" result sits inside the live history now,
+                                                             so it gets a teal frame to be findable in the flow. -->
+                                                        <DataTrigger Binding="{Binding IsReadOnce}" Value="True">
+                                                            <Setter Property="BorderBrush" Value="{StaticResource TealBrush}"/>
+                                                            <Setter Property="BorderThickness" Value="2"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*"/>
