@@ -7,6 +7,16 @@ for free. This file is everything needed to get it running; it's split into the
 **one-time action only Kizotis can do** (apply + set up the account) and the
 **CI wiring** (already drafted below — activates itself once the secrets exist).
 
+> ⚠️ **Read this before applying — eligibility is no longer met.**
+> The project was relicensed from MIT to **CC BY-NC 4.0**. The SignPath Foundation only
+> signs **OSI-approved open-source** projects, and CC BY-NC 4.0 is **not** OSI-approved —
+> the NonCommercial clause disqualifies it. As things stand, PWRU Helper **does not
+> qualify** for free signing.
+> The MIT wording below is left untouched on purpose: it is still accurate for every
+> release published before the relicensing, and it is the wording to reuse if the project
+> ever goes back to MIT. Do not submit an application claiming an OSI license until that
+> choice is made.
+
 > Trade-offs to accept up front:
 > - The certificate is issued to **"SignPath Foundation"**, so Windows will show
 >   *publisher: SignPath Foundation* — not "Kizotis" / "PWRU Helper".
