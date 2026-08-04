@@ -32,12 +32,18 @@ jobs:
           dotnet tool install --global wix --version 5.0.2
           wix extension add -g WixToolset.UI.wixext/5.0.2
 
+      # Deliberately NOT -p:EnableCompressionInSingleFile. Compressing the bundle stops Windows
+      # memory-mapping the assemblies, so they are decompressed into private RAM on every launch.
+      # Measured, same machine and build: compressed = 74 MB exe / 267 MB working set / 153 MB
+      # private; uncompressed = 179 MB exe / 155 MB working set / 95 MB private. Giving ~110 MB of
+      # RAM back to the machine that is also running the game is worth more than the download size —
+      # and the MSI recovers most of that size in its own CAB anyway. Keep these flags identical to
+      # "Build Portable EXE.bat" and "Build MSI Installer.bat".
       - name: Publish portable single-file exe
         run: >
           dotnet publish PWRUHelper.csproj -c Release -r win-x64 --self-contained true
           -p:PublishSingleFile=true
           -p:IncludeNativeLibrariesForSelfExtract=true
-          -p:EnableCompressionInSingleFile=true
           -p:DebugType=none
 
       - name: Build MSI installer + stage both artifacts
