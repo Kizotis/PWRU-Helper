@@ -165,9 +165,20 @@ public partial class MainWindow
         }
     }
 
-    private async void SelectArea_Click(object sender, RoutedEventArgs e)
+    private async void SelectArea_Click(object sender, RoutedEventArgs e) => await SelectAreaAndReadOnceAsync();
+
+    /// <summary>Single entry point for "select area &amp; read once": the Translator tab's button and
+    /// the compact overlay's. Both must behave identically, so neither owns the logic.
+    ///
+    /// Picking an area needs the FULL window — <see cref="SelectRegionAsync"/> hides it, shows the
+    /// drag overlay, then Show()s it again — so a call from the compact overlay leaves compact mode
+    /// first. Otherwise Show() would surface the main window on top of a still-visible overlay, and
+    /// the overlay itself would sit in the region being captured. Same move ToggleLive makes when it
+    /// has to surface the picker.</summary>
+    internal async Task SelectAreaAndReadOnceAsync()
     {
         if (_selectingRegion) return;
+        if (_overlay is { IsVisible: true }) ExitCompactMode();
         StopLive();
         var region = await SelectRegionAsync();
         if (region is { } rect) await ReadRegionOnceAsync(rect);
@@ -190,7 +201,7 @@ public partial class MainWindow
 
         _readingOnce = true;
         MainTabs.SelectedIndex = TabTranslator;   // results show on the Translator page
-        SelectAreaButton.IsEnabled = false;
+        SetReadOnceEnabled(false);
         LiveButton.IsEnabled = false;        // don't let live start mid-read (shared OCR engine)
         _ocrItems.Clear();
         ScreenReadStatus.Text = "Reading…";
@@ -219,10 +230,18 @@ public partial class MainWindow
         }
         finally
         {
-            SelectAreaButton.IsEnabled = true;
+            SetReadOnceEnabled(true);
             LiveButton.IsEnabled = true;
             _readingOnce = false;
         }
+    }
+
+    /// <summary>Grey out BOTH read-once buttons while a read is in flight. Ctrl+Alt+R can start one
+    /// without ever leaving compact mode, so the overlay's copy has to follow the main window's.</summary>
+    private void SetReadOnceEnabled(bool enabled)
+    {
+        SelectAreaButton.IsEnabled = enabled;
+        _overlay?.SetReadOnceEnabled(enabled);
     }
 
     /// <summary>Fill the reading list with each Russian message and its translation. Only the

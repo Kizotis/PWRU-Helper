@@ -30,7 +30,11 @@ public partial class MainWindow
 
         try
         {
-            var editable = FindOrCreateEditablePhrases(json);
+            // Same versioned-refresh path as slang.json / squad.json. It used to have its own
+            // create-only locator, so a phrasebook change NEVER reached anyone who had already run
+            // the app: their editable copy was written once and then frozen forever.
+            var editable = FindOrCreateEditable("phrases.json", json, out var backup);
+            if (backup != null) NoteDataFileRefreshed("phrases.json", backup);
             if (editable != null && File.Exists(editable))
                 json = File.ReadAllText(editable);
         }
@@ -41,23 +45,19 @@ public partial class MainWindow
 
         try
         {
-            if (json != null)
+            var items = ParsePhrases(json);
+            if (items != null)
             {
-                var items = JsonSerializer.Deserialize<List<Phrase>>(json,
-                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                if (items != null)
+                // A user-edited file may have missing/null fields — coalesce so the
+                // search filter (p.En.Contains…) can never hit a NullReferenceException.
+                // (Nullable ref types are compile-time only; JSON can still write null.)
+                static string Safe(string? s) => s ?? "";
+                foreach (var p in items)
                 {
-                    // A user-edited file may have missing/null fields — coalesce so the
-                    // search filter (p.En.Contains…) can never hit a NullReferenceException.
-                    // (Nullable ref types are compile-time only; JSON can still write null.)
-                    static string Safe(string? s) => s ?? "";
-                    foreach (var p in items)
-                    {
-                        p.En = Safe(p.En); p.Ru = Safe(p.Ru); p.Translit = Safe(p.Translit);
-                        p.Category = string.IsNullOrEmpty(p.Category) ? "Other" : p.Category;
-                    }
-                    _allPhrases.AddRange(items.Where(p => p.Ru.Length > 0 || p.En.Length > 0));
+                    p.En = Safe(p.En); p.Ru = Safe(p.Ru); p.Translit = Safe(p.Translit);
+                    p.Category = string.IsNullOrEmpty(p.Category) ? "Other" : p.Category;
                 }
+                _allPhrases.AddRange(items.Where(p => p.Ru.Length > 0 || p.En.Length > 0));
             }
         }
         catch (Exception ex)
@@ -66,6 +66,37 @@ public partial class MainWindow
         }
 
         RebuildPhraseView();
+    }
+
+    /// <summary>
+    /// Read the phrase list out of EITHER shape, because both are in the wild:
+    ///
+    ///   • <c>{ "version": N, "phrases": [ … ] }</c> — what we ship now. The version is what lets a
+    ///     phrasebook edit reach someone who already ran the app (see UpgradeEditableIfStale).
+    ///   • <c>[ … ]</c> — a bare array. Every editable copy written before this change, plus anyone
+    ///     who hand-edited theirs down to just the list. DataVersionOf reads such a file as version
+    ///     0, so it is refreshed to the shipped one on the next launch (backed up first) — but it
+    ///     still has to LOAD correctly on the run where that refresh doesn't happen, e.g. when the
+    ///     folder is read-only. Dropping array support would empty those users' phrasebook.
+    ///
+    /// Returns null when there is no usable list; throws on malformed JSON so the caller can say so.
+    /// </summary>
+    internal static List<Phrase>? ParsePhrases(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+
+        using var doc = JsonDocument.Parse(json,
+            new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+
+        var root = doc.RootElement;
+        JsonElement list;
+        if (root.ValueKind == JsonValueKind.Array) list = root;
+        else if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("phrases", out var p)) list = p;
+        else return null;
+        if (list.ValueKind != JsonValueKind.Array) return null;
+
+        return JsonSerializer.Deserialize<List<Phrase>>(list.GetRawText(),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
     }
 
     /// <summary>Rebuild the grouped phrase list: a "🕑 Recent" group and a "★ Favourites"
@@ -133,41 +164,6 @@ public partial class MainWindow
         if (!_settings.Favourites.Remove(p.Ru)) _settings.Favourites.Insert(0, p.Ru);
         SettingsService.Save(_settings);
         RebuildPhraseView();
-    }
-
-    /// <summary>
-    /// Returns the path of an editable phrases.json the user can customise, creating it
-    /// from the embedded copy on first run. Prefers next to the exe (portable), but falls
-    /// back to %AppData%\PWRUHelper when that folder isn't writable (e.g. an MSI install
-    /// under Program Files). Returns null if no editable copy could be provided.
-    /// </summary>
-    private static string? FindOrCreateEditablePhrases(string? embedded)
-    {
-        var candidates = new[]
-        {
-            Path.Combine(AppContext.BaseDirectory, "Data", "phrases.json"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                         "PWRUHelper", "phrases.json"),
-        };
-
-        // If an editable copy already exists anywhere, use it.
-        foreach (var path in candidates)
-            if (File.Exists(path)) return path;
-
-        // Otherwise try to create one (best-effort) so the user has something to edit.
-        if (embedded != null)
-            foreach (var path in candidates)
-            {
-                try
-                {
-                    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                    File.WriteAllText(path, embedded);
-                    return path;
-                }
-                catch { /* not writable here — try the next location */ }
-            }
-
-        return null;
     }
 
     private void PhrasesFilter(object sender, FilterEventArgs e)

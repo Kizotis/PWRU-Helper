@@ -42,7 +42,9 @@ public class SquadDataTests
     {
         Assert.Equal(2, MainWindow.DataVersionOf("""{ "version": 2, "classes": [] }"""));
         Assert.Equal(0, MainWindow.DataVersionOf("""{ "classes": [] }"""));   // unversioned → never refreshed
-        Assert.Equal(0, MainWindow.DataVersionOf("[ { \"en\": \"hi\" } ]"));  // phrases.json is an array, not an object
+        // A bare array = every editable copy written before phrases.json became versioned. Reading
+        // it as 0 is what gets those users refreshed onto the shipped list.
+        Assert.Equal(0, MainWindow.DataVersionOf("[ { \"en\": \"hi\" } ]"));
         Assert.Equal(0, MainWindow.DataVersionOf("not json at all"));         // corrupt → left strictly alone
         Assert.Equal(0, MainWindow.DataVersionOf(null));
     }

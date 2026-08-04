@@ -34,11 +34,12 @@ Made for English/French (and now Spanish/German) speakers who play on the Russia
 just paste it in the game chat with `Ctrl+V`. Every phrase shows the English meaning and
 how to pronounce it. There's a search bar to find anything fast.
 
-**2. Screen OCR** — click **"Select area & read once"**, draw a box over any Russian text
+**2. Screen OCR** — click **"Select area & read once"** (on the **Translator** tab, and in
+the compact overlay), draw a box over any Russian text
 on your screen, and the app reads it and translates it (English, French, Spanish or
 German), **message by message** (it understands the game's `[Channel] Nick:` chat
 structure, so wrapped lines are grouped back into whole messages and nicknames are never
-mangled by the translator). Or hit **"Start live translation"** and it keeps re-reading
+mangled by the translator). Or hit **"Start live translation"** on the Screen OCR tab and it keeps re-reading
 that area and re-translating automatically whenever new text appears — until you press
 Stop. Either way, the results appear on the **Translator** tab. Russian **gaming slang**
 (LFM squad-forming, instance/role/class abbreviations, event names) is **decoded
