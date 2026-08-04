@@ -118,12 +118,14 @@ public partial class MainWindow : Window
     // Set when a data file the user could have edited (squad.json, slang.json) was replaced by a
     // newer shipped one at startup. Replacing it silently would be rude — their edits are in the
     // backup, and they have to be told the backup exists. Shown once the window is up.
-    private string? _dataRefreshNote;
+    private readonly List<string> _dataRefreshNotes = new();
 
     /// <summary>Remember that an editable data file was refreshed, to tell the user when the window
-    /// appears (LoadSquad/LoadSlang run in the constructor, before there is anything to show it on).</summary>
+    /// appears (LoadPhrases/LoadSquad/LoadSlang run in the constructor, before there is anything to
+    /// show it on). A LIST, not one slot: an upgrade that bumps two files at once used to report
+    /// only the last one, silently hiding that the other had been backed up too.</summary>
     private void NoteDataFileRefreshed(string fileName, string backupName)
-        => _dataRefreshNote = $"{fileName} was updated to this version's list — your previous copy is saved as {backupName}";
+        => _dataRefreshNotes.Add($"{fileName} was updated to this version's list — your previous copy is saved as {backupName}");
 
     private async void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
@@ -136,7 +138,7 @@ public partial class MainWindow : Window
         await Task.Run(() => _ocr.IsAvailable);
         CheckOcrAvailability();
 
-        if (_dataRefreshNote != null) ShowToast(_dataRefreshNote);
+        if (_dataRefreshNotes.Count > 0) ShowToast(string.Join("   ·   ", _dataRefreshNotes));
 
         // Run the update check once the window is up, so the dialog has an owner and
         // appears in front of our always-on-top window instead of behind it.

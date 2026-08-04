@@ -50,7 +50,67 @@ public class TemplateRenderTests
 
             AssertRendersCleanly(window.OcrResults.ItemTemplate, item);
             AssertRendersCleanly(compact.FeedItems.ItemTemplate, item);
+
+            // The same item as a "read once" result: both templates then take a DataTrigger branch
+            // that repaints the card's frame. A trigger is a binding too — an IsReadOnce that got
+            // renamed or dropped would fail silently here rather than at the user.
+            var framed = new OcrResultItem
+            {
+                Speaker = item.Speaker,
+                OriginalBody = item.OriginalBody,
+                TranslationBody = item.TranslationBody,
+                Glossary = item.Glossary,
+                IsReadOnce = true,
+            };
+
+            AssertRendersCleanly(window.OcrResults.ItemTemplate, framed);
+            AssertRendersCleanly(compact.FeedItems.ItemTemplate, framed);
         });
+    }
+
+    [Fact]
+    public void A_read_once_card_is_framed_and_a_live_card_is_not()
+    {
+        using var _ = new TempSettings("{}");
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+            var compact = new CompactOverlay(window);
+
+            // The whole point of the flag: a read-once result now lands INSIDE the live history
+            // instead of wiping it, so it has to be visually findable among the live lines. If the
+            // frame stops rendering, the feature is gone while every other test still passes.
+            foreach (var template in new[] { window.OcrResults.ItemTemplate, compact.FeedItems.ItemTemplate })
+            {
+                var live = FrameThicknessOf(template, new OcrResultItem { OriginalBody = "привет" });
+                var once = FrameThicknessOf(template, new OcrResultItem { OriginalBody = "привет", IsReadOnce = true });
+
+                Assert.True(once > live, $"a read-once card must be framed more heavily than a live one ({once} vs {live})");
+            }
+        });
+    }
+
+    /// <summary>Render one item and report the top border thickness the card actually ended up with.</summary>
+    private static double FrameThicknessOf(DataTemplate template, OcrResultItem item)
+    {
+        var host = new ContentControl { ContentTemplate = template, Content = item };
+        host.ApplyTemplate();
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+        host.UpdateLayout();
+
+        var border = FindBorder(host) ?? throw new Xunit.Sdk.XunitException("the card template has no Border to frame");
+        return border.BorderThickness.Top;
+
+        static Border? FindBorder(DependencyObject root)
+        {
+            if (root is Border b) return b;
+            int n = VisualTreeHelper.GetChildrenCount(root);
+            for (int i = 0; i < n; i++)
+                if (FindBorder(VisualTreeHelper.GetChild(root, i)) is { } found) return found;
+            return null;
+        }
     }
 
     // ----- helpers -----

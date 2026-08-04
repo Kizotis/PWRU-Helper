@@ -144,12 +144,24 @@ public partial class MainWindow
         catch { _slang = SlangGlossary.FromJson(null); }
     }
 
-    /// <summary>Hide the window, let the user drag a rectangle, return it (physical px).</summary>
+    /// <summary>Tuck away whatever window is currently on screen, let the user drag a rectangle,
+    /// return it (physical px), and put that same window back.
+    ///
+    /// "Whatever window" is the point. In compact mode the main window is already hidden and must
+    /// STAY hidden — what the user is looking at is the overlay. Unconditionally Show()ing the main
+    /// window here is what used to force read-once to leave compact mode altogether, so the whole
+    /// thing read as the app throwing you out of the mode you were playing in.
+    ///
+    /// The overlay still has to step aside for the drag itself: it is Topmost, like the selection
+    /// window, so it would otherwise float over the dimmed layer — and sit inside the very region
+    /// being captured. It comes straight back, so from the user's side the compact chat blinks
+    /// rather than being replaced.</summary>
     private async Task<System.Drawing.Rectangle?> SelectRegionAsync()
     {
+        bool compact = _overlay is { IsVisible: true };
         var wasTopmost = Topmost;
         _selectingRegion = true;   // block hotkey-live / a second selection while dragging
-        Hide();
+        if (compact) _overlay!.Hide(); else Hide();
         await Task.Delay(150);
         try
         {
@@ -159,13 +171,30 @@ public partial class MainWindow
         finally
         {
             _selectingRegion = false;
-            Show();
-            Topmost = wasTopmost;
-            Activate();
+            if (compact)
+            {
+                _overlay!.Show();       // NOT EnterCompactMode: we never left it
+                _overlay.Activate();
+            }
+            else
+            {
+                Show();
+                Topmost = wasTopmost;
+                Activate();
+            }
         }
     }
 
-    private async void SelectArea_Click(object sender, RoutedEventArgs e)
+    private async void SelectArea_Click(object sender, RoutedEventArgs e) => await SelectAreaAndReadOnceAsync();
+
+    /// <summary>Single entry point for "select area &amp; read once": the Translator tab's button and
+    /// the compact overlay's. Both must behave identically, so neither owns the logic.
+    ///
+    /// Compact mode is never left. <see cref="SelectRegionAsync"/> hides and restores whichever
+    /// window was on screen, so from the overlay the compact chat simply blinks for the drag and
+    /// the framed result lands in the feed the user was already watching. The earlier version
+    /// bounced out to the full window and back, which looked exactly as bad as it sounds.</summary>
+    internal async Task SelectAreaAndReadOnceAsync()
     {
         if (_selectingRegion) return;
         StopLive();
@@ -178,9 +207,8 @@ public partial class MainWindow
     private async Task ReadRegionOnceAsync(System.Drawing.Rectangle rect)
     {
         // Only one read-once may run at a time: the OCR engine is shared and non-reentrant, so a
-        // second Ctrl+Alt+R (or a live start) that fired RecognizeAsync on it concurrently would
-        // race — and its _ocrItems.Clear() below would wipe a just-started live feed. The flag
-        // gates ToggleLive/StartLive/ReadLastAreaOnce too; button disabling stays as a UI cue.
+        // second Ctrl+Alt+R (or a live start) firing RecognizeAsync on it concurrently would race.
+        // The flag gates ToggleLive/StartLive/ReadLastAreaOnce too; button disabling stays a UI cue.
         if (_readingOnce) return;
 
         // Same reason as StartLive: with no Russian engine there is nothing to read, and the app has
@@ -190,10 +218,12 @@ public partial class MainWindow
 
         _readingOnce = true;
         MainTabs.SelectedIndex = TabTranslator;   // results show on the Translator page
-        SelectAreaButton.IsEnabled = false;
+        SetReadOnceEnabled(false);
         LiveButton.IsEnabled = false;        // don't let live start mid-read (shared OCR engine)
-        _ocrItems.Clear();
-        ScreenReadStatus.Text = "Reading…";
+        // NOT _ocrItems.Clear(): the result is appended to the feed and framed instead (see
+        // TranslateSentencesInto). Wiping the history to show one answer threw away the live lines
+        // the user was reading — most obviously from the overlay, where the feed IS the window.
+        SetScreenStatus("Reading…");
         try
         {
             using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
@@ -203,33 +233,44 @@ public partial class MainWindow
                 .Where(l => l.Length > 0).ToList();
             if (sentences.Count == 0)
             {
-                ScreenReadStatus.Text = IsOcrReady()
+                SetScreenStatus(IsOcrReady()
                     ? "No text detected there. Try a tighter box around the text."
-                    : "No text detected — the Russian OCR pack isn't installed. Install it on the Screen OCR tab (1 click).";
+                    : "No text detected — the Russian OCR pack isn't installed. Install it on the Screen OCR tab (1 click).");
                 return;
             }
             var target = SelectedTag(OcrTargetCombo) ?? "en";
-            ScreenReadStatus.Text = $"Read {sentences.Count} line(s). Translating…";
+            SetScreenStatus($"Read {sentences.Count} line(s). Translating…");
             await TranslateSentencesInto(sentences, target);
-            ScreenReadStatus.Text = $"Done — {sentences.Count} line(s) translated.";
+            SetScreenStatus($"Done — {sentences.Count} line(s) translated.");
         }
         catch (Exception ex)
         {
-            ScreenReadStatus.Text = $"OCR failed: {Friendly(ex)}";
+            SetScreenStatus($"OCR failed: {Friendly(ex)}");
         }
         finally
         {
-            SelectAreaButton.IsEnabled = true;
+            SetReadOnceEnabled(true);
             LiveButton.IsEnabled = true;
             _readingOnce = false;
         }
+    }
+
+    /// <summary>Grey out BOTH read-once buttons while a read is in flight. Ctrl+Alt+R can start one
+    /// without ever leaving compact mode, so the overlay's copy has to follow the main window's.</summary>
+    private void SetReadOnceEnabled(bool enabled)
+    {
+        SelectAreaButton.IsEnabled = enabled;
+        _overlay?.SetReadOnceEnabled(enabled);
     }
 
     /// <summary>Fill the reading list with each Russian message and its translation. Only the
     /// message body is translated; the speaker's nickname is kept verbatim as a prefix.</summary>
     private async Task TranslateSentencesInto(List<string> sentences, string target)
     {
-        _ocrItems.Clear();
+        // APPENDS to the feed — it used to Clear() it first. Reading once from the compact overlay
+        // is meant to drop an answer INTO the live flow you are watching, not to wipe the flow to
+        // show it. Every item is flagged IsReadOnce so both feeds frame it and you can find it
+        // among the live lines; the same MaxHistory cap as the live loop keeps the list bounded.
         // SplitSpeakerStrict, not SplitSpeaker: a body that itself starts "word:" (e.g. the slang
         // "тс: сбор у входа") must not lose its first word as a fake nickname and skip translation.
         var parts = sentences.Select(TextMatching.SplitSpeakerStrict).ToList();   // (Speaker, Body)
@@ -242,10 +283,13 @@ public partial class MainWindow
                 OriginalBody = parts[i].Body,
                 TranslationBody = "…",
                 Glossary = _slang.Decode(sentences[i]),
+                IsReadOnce = true,
             };
             _ocrItems.Add(item);
             items.Add(item);
+            while (_ocrItems.Count > MaxHistory) _ocrItems.RemoveAt(0);   // drop the oldest
         }
+        ResultsScroller?.ScrollToEnd();   // the overlay's feed scrolls itself on CollectionChanged
 
         List<string> translations;
         try { translations = await TranslateBodiesAsync(parts.Select(p => p.Body).ToList(), target, default); }

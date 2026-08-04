@@ -291,8 +291,13 @@
                                    FontWeight="Bold" FontSize="13" Foreground="{StaticResource GoldBrush}"
                                    VerticalAlignment="Center"/>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <!-- Moved here from the Screen OCR tab: this is where the lines it reads
+                                 actually appear, so the button now sits with its own output. -->
+                            <Button x:Name="SelectAreaButton" Style="{StaticResource AccentButton}"
+                                    Padding="10,3" Content="Select area &amp; read once" Click="SelectArea_Click"
+                                    ToolTip="Draw a box over Russian text and read it once. Ctrl+Alt+R re-reads the same area while in game."/>
                             <TextBlock x:Name="LiveIndicator" Text="● LIVE" Foreground="{StaticResource AccentBrush}"
-                                       FontWeight="Bold" VerticalAlignment="Center" Visibility="Collapsed"/>
+                                       FontWeight="Bold" VerticalAlignment="Center" Margin="12,0,0,0" Visibility="Collapsed"/>
                             <Button x:Name="StopLiveButton" Content="■ Stop" Style="{StaticResource GhostButton}"
                                     Padding="10,3" Margin="10,0,0,0" Visibility="Collapsed" Click="StopLive_Click"/>
                         </StackPanel>
@@ -302,13 +307,29 @@
                         <StackPanel>
                             <TextBlock x:Name="ScreenReadStatus" TextWrapping="Wrap" Margin="0,0,0,8"
                                        Foreground="{StaticResource TextMutedBrush}"
-                                       Text="Pick a screen area in the Screen OCR tab (read once, or live). The Russian text and its translation will appear here."/>
+                                       Text="Use “Select area &amp; read once” above to draw a box over Russian text (or start live on the Screen OCR tab). The Russian text and its translation will appear here."/>
                             <ItemsControl x:Name="OcrResults">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Background="{StaticResource PanelBrush}" CornerRadius="8"
-                                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                                                Padding="12" Margin="0,0,0,8">
+                                        <!-- Background/border live in the Style, NOT as attributes: a local
+                                             value beats a style trigger in WPF, so the read-once frame
+                                             below would never win against them. -->
+                                        <Border CornerRadius="8" Padding="12" Margin="0,0,0,8">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="Background" Value="{StaticResource PanelBrush}"/>
+                                                    <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+                                                    <Setter Property="BorderThickness" Value="1"/>
+                                                    <Style.Triggers>
+                                                        <!-- A "read once" result sits inside the live history now,
+                                                             so it gets a teal frame to be findable in the flow. -->
+                                                        <DataTrigger Binding="{Binding IsReadOnce}" Value="True">
+                                                            <Setter Property="BorderBrush" Value="{StaticResource TealBrush}"/>
+                                                            <Setter Property="BorderThickness" Value="2"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*"/>
@@ -353,11 +374,11 @@
                         <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextMutedBrush}" Margin="0,0,0,10"
                                    Text="Capture Russian text from your screen and translate it. The results appear in the Translator tab."/>
 
+                        <!-- "Select area & read once" now lives on the Translator tab, next to the
+                             results it produces (and in the compact overlay). Only the target
+                             language stays here, with the rest of the reading settings. -->
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                            <Button x:Name="SelectAreaButton" Style="{StaticResource AccentButton}"
-                                    Content="Select area &amp; read once" Click="SelectArea_Click"
-                                    ToolTip="Draw a box over Russian text and read it once. Ctrl+Alt+R re-reads the same area while in game."/>
-                            <TextBlock Text="translate to" VerticalAlignment="Center" Margin="12,0,6,0"
+                            <TextBlock Text="Read the screen and translate to" VerticalAlignment="Center" Margin="0,0,6,0"
                                        Foreground="{StaticResource TextMutedBrush}"/>
                             <ComboBox x:Name="OcrTargetCombo" VerticalAlignment="Center" Width="120"/>
                         </StackPanel>

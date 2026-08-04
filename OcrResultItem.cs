@@ -9,6 +9,12 @@ public class OcrResultItem : INotifyPropertyChanged
     /// <summary>Speaker nickname (empty when none), set once when the item is created.</summary>
     public string Speaker { get; set; } = "";
 
+    /// <summary>True for a line produced by "read once" rather than by the live loop. Both feeds
+    /// draw those with a coloured frame: a read-once result now lands IN the live history instead
+    /// of wiping it, so it needs to be findable among the lines that were already there. Set once
+    /// at creation, before the item reaches the collection — so no change notification is needed.</summary>
+    public bool IsReadOnce { get; set; }
+
     /// <summary>"Nick: " prefix shown greyed before the body on both lines; "" when no speaker.</summary>
     public string SpeakerPrefix => string.IsNullOrEmpty(Speaker) ? "" : Speaker + ": ";
 
