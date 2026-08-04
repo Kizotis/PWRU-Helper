@@ -77,4 +77,45 @@ public class LoggingTests
         }
         finally { Directory.Delete(dir, true); }
     }
+
+    /// <summary>
+    /// The guard for the bug this pair of tests exists for: running the suite used to append the
+    /// tests' own deliberate failures ("deepl down", squad.json refreshes) to the DEVELOPER's real
+    /// %AppData% log — the file the About tab's "Copy error report" hands to the user to paste on
+    /// Discord. <see cref="TestLogRedirect"/> redirects it for the whole assembly; if that file is
+    /// ever deleted or stops running, this fails instead of quietly polluting a real log again.
+    /// </summary>
+    [Fact]
+    public void The_test_run_never_writes_to_the_real_AppData_log()
+    {
+        Assert.NotNull(Logging.DirectoryOverride);
+
+        var real = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PWRUHelper", "logs");
+        Assert.NotEqual(
+            Path.GetFullPath(real).TrimEnd(Path.DirectorySeparatorChar),
+            Path.GetFullPath(Logging.DirectoryOverride!).TrimEnd(Path.DirectorySeparatorChar));
+    }
+
+    [Fact]
+    public void DirectoryOverride_sends_the_static_facade_somewhere_else_and_restores()
+    {
+        var previous = Logging.DirectoryOverride;
+        var dir = TempDir();
+        try
+        {
+            Logging.DirectoryOverride = dir;
+            Logging.Warn("redirected marker");
+
+            Assert.Contains("redirected marker", Logging.ReadRecent());
+            Assert.True(File.Exists(Path.Combine(dir, "log.txt")));
+        }
+        finally
+        {
+            Logging.DirectoryOverride = previous;   // never leave the suite pointed at a deleted dir
+            // Best-effort: xUnit runs collections in parallel, so another test may still have a
+            // write in flight into this directory. Failing to bin a temp folder is not a test result.
+            try { Directory.Delete(dir, true); } catch { /* the OS will get it */ }
+        }
+    }
 }

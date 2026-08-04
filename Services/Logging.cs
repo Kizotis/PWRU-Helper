@@ -19,14 +19,35 @@ public static class Logging
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "PWRUHelper", "logs"));
 
-    public static void Info(string message) => Default.Write("INFO", message);
-    public static void Warn(string message) => Default.Write("WARN", message);
+    private static LogWriter? _redirected;
+    private static string? _redirectedDir;
+
+    /// <summary>Where the log is written. Tests point this at a temp directory (see the test
+    /// assembly's module initialiser), because the suite deliberately exercises failing
+    /// translations, dead DeepL keys and stale data files — all of which log warnings. Those
+    /// warnings used to land in the DEVELOPER's own %AppData% log, which is precisely what the
+    /// About tab's "Copy error report" button then sends to someone on Discord: a report full of
+    /// fixture failures ("deepl down") that never happened to the user. Null = the real log.</summary>
+    internal static string? DirectoryOverride
+    {
+        get => _redirectedDir;
+        set
+        {
+            _redirectedDir = value;
+            _redirected = value == null ? null : new LogWriter(value);
+        }
+    }
+
+    private static LogWriter Writer => _redirected ?? Default;
+
+    public static void Info(string message) => Writer.Write("INFO", message);
+    public static void Warn(string message) => Writer.Write("WARN", message);
 
     public static void Error(string message, Exception? ex = null) =>
-        Default.Write("ERROR", ex == null ? message : $"{message}: {ex.GetType().Name}: {ex.Message}\n{ex}");
+        Writer.Write("ERROR", ex == null ? message : $"{message}: {ex.GetType().Name}: {ex.Message}\n{ex}");
 
     /// <summary>Recent log text for a copy-to-clipboard error report ("" if nothing/failed).</summary>
-    public static string ReadRecent(int maxChars = 30_000) => Default.ReadRecent(maxChars);
+    public static string ReadRecent(int maxChars = 30_000) => Writer.ReadRecent(maxChars);
 }
 
 /// <summary>
