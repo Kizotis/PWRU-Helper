@@ -29,15 +29,18 @@ Made for English/French (and now Spanish/German) speakers who play on the Russia
 
 <img src="assets/screenshot-phrasebook.png" width="480" alt="Phrasebook"/>
 
-**1. Phrasebook** — a big list of ready-made Russian phrases and gamer slang
-(hello, gg, изи, imba, "need heal", trading, yes/no…). **Click one and it's copied** —
-just paste it in the game chat with `Ctrl+V`. Every phrase shows the English meaning and
-how to pronounce it. There's a search bar to find anything fast.
+**1. Phrasebook** — a tight list of ready-made Russian phrases and gamer slang
+(hello, gg, изи, imba, "need heal", trading, yes/no…), plus **every dungeon, role and class**
+from the Squad builder — tick-free, one tap each: *Terrace of Dreams (legendary)* copies `лега`,
+*Cleric* copies `прист`. **Click one and it's copied** — just paste it in the game chat with
+`Ctrl+V`. Every phrase shows the English meaning and how to pronounce it. There's a search bar
+to find anything fast.
 
 **2. Screen OCR** — click **"Select area & read once"** (on the **Translator** tab, and in
 the compact overlay), draw a box over any Russian text
 on your screen, and the app reads it and translates it (English, French, Spanish or
-German), **message by message** (it understands the game's `[Channel] Nick:` chat
+German), **message by message**, dropping the result **into the feed with an outline** so you
+can find it among the live lines rather than replacing them (it understands the game's `[Channel] Nick:` chat
 structure, so wrapped lines are grouped back into whole messages and nicknames are never
 mangled by the translator). Or hit **"Start live translation"** on the Screen OCR tab and it keeps re-reading
 that area and re-translating automatically whenever new text appears — until you press
@@ -72,9 +75,12 @@ so you can add dungeons, classes, roles and columns without touching the code.
 Both builds are on the **[Releases](../../releases)** page — pick whichever you prefer:
 
 - **`PWRUHelper.exe`** — *no installation.* Download and double-click; everything is inside
-  the one file. Great for putting it on a USB stick or running it anywhere.
-- **`PWRUHelper-x.y.z-setup.msi`** — *classic installer.* Installs the app into
-  Program Files with **Start-menu and desktop shortcuts**, and shows up in
+  the one file. Great for putting it on a USB stick or running it anywhere. It's a chunky
+  download (~180 MB) because it carries the whole .NET runtime **uncompressed** — that's
+  deliberate: it lets Windows share those pages instead of unpacking them into RAM, which
+  saves about **120 MB of memory** while you play.
+- **`PWRUHelper-x.y.z-setup.msi`** — *classic installer, and a much smaller download.* Installs
+  the app into Program Files with **Start-menu and desktop shortcuts**, and shows up in
   *Add or remove programs* for a clean uninstall. Updating just means running the newer MSI.
 
 > Works on Windows 10 & 11. The first time you run it, Windows might warn about an
@@ -114,6 +120,10 @@ The app makes this easy: open the **Screen OCR** tab and click
   Russian, copied). If your reply is too long for one chat message, it's **split into
   numbered blocks** you copy and send one after another. Drag the **title bar** to move it and
   **any edge or corner** to resize it, like a normal window. Click **⤢** to go back to the full window.
+- **👁 Read once, without leaving the overlay.** The compact window has its own read-once
+  button: the overlay just steps aside while you drag a box, then comes straight back with the
+  translation waiting in the feed, **outlined** so you can spot it among the live lines. The full
+  window never appears.
 - **Global shortcuts** (work while you're in the game):
   **Ctrl+Alt+P** brings the app to the front · **Ctrl+Alt+T** jumps to the translator ·
   **Ctrl+Alt+L** starts/stops live translation · **Ctrl+Alt+M** toggles the compact overlay ·
