@@ -72,14 +72,15 @@ public class DeepLTranslator : ITranslator
         // response is malformed — throw so the Google fallback (see FallbackTranslator) takes over.
         // (Previously we padded the missing slots with the untranslated source lines, but that
         // bypassed the fallback AND cached raw Russian source as if it were a translation.)
-        throw new TranslationException("DeepL returned an unexpected response.");
+        throw new TranslationException(TranslationErrorKind.BadResponse,
+            "DeepL returned an unexpected response.");
     }
 
     private async Task<List<string>> RequestAsync(IReadOnlyList<string> texts, string source,
         string target, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(_key))
-            throw new TranslationException("No DeepL API key set.");
+            throw new TranslationException(TranslationErrorKind.AuthFailed, "No DeepL API key set.");
 
         var form = new List<KeyValuePair<string, string>>();
         foreach (var t in texts) form.Add(new KeyValuePair<string, string>("text", t));
@@ -106,11 +107,13 @@ public class DeepLTranslator : ITranslator
             // OperationCanceledException) with the caller's ct NOT cancelled. Turn it into a
             // TranslationException so the Google fallback kicks in instead of the raw OCE bubbling
             // up past the FallbackTranslator (which correctly refuses to swallow real cancellations).
-            throw new TranslationException("DeepL timed out — check your connection or try again.");
+            throw new TranslationException(TranslationErrorKind.Timeout,
+                "DeepL timed out — check your connection or try again.");
         }
         catch (HttpRequestException)
         {
-            throw new TranslationException("Couldn't reach DeepL. Check your Internet connection.");
+            throw new TranslationException(TranslationErrorKind.Network,
+                "Couldn't reach DeepL. Check your Internet connection.");
         }
 
         using (resp)
@@ -118,13 +121,19 @@ public class DeepLTranslator : ITranslator
             if (!resp.IsSuccessStatusCode)
             {
                 int code = (int)resp.StatusCode;
-                throw new TranslationException(code switch
+                // A key is always sent on this path (the empty-key case threw above), so 403 is a
+                // rejected key, not a bot block — §4.2 rows 5 and 7. Messages are unchanged.
+                var (kind, message) = code switch
                 {
-                    401 or 403 => "DeepL rejected the API key — check it in Settings.",
-                    456 => "DeepL free quota is used up for this month.",
-                    429 => "DeepL is rate-limiting right now — try again shortly.",
-                    _ => $"DeepL service error (HTTP {code}).",
-                });
+                    401 or 403 => (TranslationErrorKind.AuthFailed,
+                        "DeepL rejected the API key — check it in Settings."),
+                    456 => (TranslationErrorKind.QuotaExhausted,
+                        "DeepL free quota is used up for this month."),
+                    429 => (TranslationErrorKind.RateLimited,
+                        "DeepL is rate-limiting right now — try again shortly."),
+                    _ => (TranslationErrorKind.Unknown, $"DeepL service error (HTTP {code})."),
+                };
+                throw new TranslationException(kind, message);
             }
 
             var json = await resp.Content.ReadAsStringAsync(ct);
@@ -146,7 +155,8 @@ public class DeepLTranslator : ITranslator
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
         {
-            throw new TranslationException("DeepL returned an unexpected response.");
+            throw new TranslationException(TranslationErrorKind.BadResponse,
+                "DeepL returned an unexpected response.");
         }
     }
 

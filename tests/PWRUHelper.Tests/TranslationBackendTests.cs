@@ -75,7 +75,10 @@ public class FallbackTranslatorTests
     public async Task Falls_back_when_primary_fails()
     {
         var fallback = new Fake(() => "G");
-        var ft = new FallbackTranslator(new Fake(() => throw new TranslationException("deepl down")), fallback);
+        // The fixture is "the primary failed"; which Kind is arbitrary — any but Cancelled, which
+        // nothing may construct (see TranslationErrorsTests).
+        var ft = new FallbackTranslator(
+            new Fake(() => throw new TranslationException(TranslationErrorKind.Unavailable, "deepl down")), fallback);
 
         Assert.Equal("G", await ft.TranslateAsync("x", "ru", "en"));
         Assert.Equal(1, fallback.Calls);

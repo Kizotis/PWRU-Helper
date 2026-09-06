@@ -66,7 +66,7 @@ development_status:
   # ---- Release A.0 · increment 0 · may ship alone -------------------------------
   epic-1: in-progress
   e1-s1-http-handler-seam: done
-  e1-s2-typed-translation-errors: ready-for-dev
+  e1-s2-typed-translation-errors: review
   e1-s3-provider-error-mapper: ready-for-dev
   e1-s4-html-abuse-page-sniffing: ready-for-dev
   e1-s5-per-request-diagnostic-log: ready-for-dev

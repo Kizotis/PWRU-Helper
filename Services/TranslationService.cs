@@ -6,11 +6,7 @@ using System.Web;
 
 namespace PWRUHelper.Services;
 
-/// <summary>A translation problem worth showing to the user in plain language.</summary>
-public class TranslationException : Exception
-{
-    public TranslationException(string message) : base(message) { }
-}
+// TranslationException moved to Services/TranslationErrors.cs, where it carries a Kind.
 
 /// <summary>Anything that can translate text. Kept as an interface so the app depends on
 /// the capability, not on Google specifically — a different backend (or a test double) can
@@ -165,13 +161,18 @@ public class TranslationService : ITranslator
                 bool transient = code == 429 || code >= 500;
                 if (!transient)
                     // A real, non-retryable error (e.g. 400/403) — report it as-is instead of
-                    // retrying and then mislabeling it as "no Internet".
-                    throw new TranslationException($"Translation service error (HTTP {code}). Please try again later.");
+                    // retrying and then mislabeling it as "no Internet". This branch still folds
+                    // 403 in with 400/404, so the Kind stays Unknown here on purpose:
+                    // E1.S3 replaces this with ProviderErrorMapper.Classify, which is where the
+                    // 403 split (Blocked vs AuthFailed) belongs.
+                    throw new TranslationException(TranslationErrorKind.Unknown,
+                        $"Translation service error (HTTP {code}). Please try again later.");
                 if (code == 429 && attempt == 2)
-                    throw new TranslationException(
+                    throw new TranslationException(TranslationErrorKind.RateLimited,
                         "Google is limiting translations right now — wait a minute and try again.");
                 if (attempt == 2)
-                    throw new TranslationException($"Translation service is unavailable (HTTP {code}). Try again shortly.");
+                    throw new TranslationException(TranslationErrorKind.Unavailable,
+                        $"Translation service is unavailable (HTTP {code}). Try again shortly.");
                 // transient and attempts left → fall through to the delay + retry below.
             }
             catch (HttpRequestException) when (attempt < 2) { /* network blip — retry */ }
@@ -180,7 +181,8 @@ public class TranslationService : ITranslator
         }
 
         if (json == null)
-            throw new TranslationException("Couldn't reach the translation service. Check your Internet connection.");
+            throw new TranslationException(TranslationErrorKind.Network,
+                "Couldn't reach the translation service. Check your Internet connection.");
 
         // Response shape: [[["translated","original",...], ...], ...]
         try
@@ -197,8 +199,10 @@ public class TranslationService : ITranslator
         }
         catch (JsonException)
         {
-            // Usually an HTML captcha / throttle page instead of JSON.
-            throw new TranslationException(
+            // Usually an HTML captcha / throttle page instead of JSON. BadResponse is what reaching
+            // the parser means; E1.S4 sniffs the body BEFORE it gets here, so a real block page
+            // becomes RateLimited/Blocked instead of arriving as a JsonException.
+            throw new TranslationException(TranslationErrorKind.BadResponse,
                 "The translation service returned an unexpected response (it may be temporarily blocked). Try again shortly.");
         }
     }
