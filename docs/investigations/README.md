@@ -235,5 +235,15 @@ Continuous execution, story by story: Amelia **DS** (test-first, one commit) the
 
 **Epic E1 / Release A.0 complete (2026-09-06):** 7 stories, 14 commits, 256 → 405 tests, no network in tests, no `%AppData%` writes. PR #55 marked ready for review (stacked on #54 — merge #54 first, GitHub retargets #55 to `main`).
 
+### Epic E2 — `ProviderGate` (branch `feature/p2-a1-gate-and-endpoint`, stacked on A.0; ships with E3 in one release)
+Story files E2.S3–S6 written by Amelia (CS) on 2026-09-06; eight drifts vs `epics.md` recorded in the stories (E1 shifted every `file:line`; the Chrome UA is Google's only — a provider option in `HttpProviderCore`; DeepL gains a retry loop it never had — max 2, `Unavailable`/`Timeout` only). **Architect's rulings for E2:**
+| # | Question | Ruling |
+|---|---|---|
+| E2-a | Persisted `AuthFailed = MaxValue` vs the reload clamp to `OpenCapMinutes` (E2.S4 AC 4) | **`AuthFailed` is never persisted in A.1** (in-memory only; restart resets it). Every time-based window read from disk is clamped to the cap. E6 adds "key saved → that provider's gate resets". No state may lock the user out without a way back. |
+| E2-b | Which transitions get a log line (E2.S6) | Closed→open, open→half-open (probe grant), half-open→closed / →open, and reload-from-disk. **No line** for strike resets, soft cooldowns, or per-call `TryEnter` waits. |
+| E2-c | Implementation order | **S1 → S2 → S3 → S4 → S6 → S5** (S5 `HttpProviderCore` is the riskiest — it consolidates three OCE catches and routes a keyed provider through the log — and consumes a finished gate). |
+| E2-d | The three per-line placeholder strings still outside the deck | Belong to **E3.S8** (batch policy) and **E7.S1** (copy), not to `HttpProviderCore`. |
+| E2-e | E2.S4 AC 2 "first `TryEnter`" trigger | Lazy load hangs off `ProviderGate.TryEnter` (the read chain is a field initializer, pre-first-paint); "off the UI thread" becomes true with E2.S5's `ConfigureAwait(false)`; `Flush()` in `OnClosing` is the one permitted `ProviderGates` reference outside `Services/` and TP-START-02's scan carves it out. |
+
 ### Field data received during Phase 4
 - [`01-demarrage/mesures-resultats-machine-2.md`](01-demarrage/mesures-resultats-machine-2.md) — owner's personal machine (Defender-default, BAFS armed, MSI install, no MOTW): **known hash starts in ~1.1 s** (pre-process 3–29 ms); Google `gtx` healthy from that connection. Two follow-up runs requested (after reboot; fresh MOTW download).
