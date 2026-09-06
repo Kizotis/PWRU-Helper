@@ -14,11 +14,12 @@ namespace PWRUHelper.Services;
 /// </list>
 ///
 /// A table and nothing else: no methods, no state, no I/O, and no dependency — not even on
-/// <c>Logging</c> (I2). It holds <b>today's</b> values only. The §5.6 target numbers
-/// (<c>OpenBaseSeconds</c>, <c>MinSpacingMs</c>, <c>MaxAttempts = 2</c>, <c>PerLineCap</c>,
-/// <c>CacheCapacity = 2000</c> …) arrive with the code that reads them — E2.S1/E2.S3/E2.S5 for the
-/// gate and the retry, E3.S8 for the batch cap, E4 for the cache, E5 for LIVE — because an unused
-/// constant is a constant nobody grades.
+/// <c>Logging</c> (I2). It holds today's values plus the §5.6 target numbers whose code has
+/// landed — the six breaker numbers arrived with <c>ProviderGate</c> (E2.S1). The rest
+/// (<c>MinSpacingMs</c>, <c>MaxAttempts = 2</c>, <c>PerLineCap</c>, <c>CacheCapacity = 2000</c> …)
+/// still arrive with the code that reads them — E2.S3/E2.S5 for the ceiling and the retry, E3.S8
+/// for the batch cap, E4 for the cache, E5 for LIVE — because an unused constant is a constant
+/// nobody grades.
 /// Source: <c>docs/investigations/02-traduction/architecture-cible.md</c> §5.6 (the target table),
 /// §4.3 (the HTML markers).
 /// </summary>
@@ -51,6 +52,40 @@ internal static class TranslationPolicy
     /// <summary>The text travels in a GET query string, so it is chunked to stay well under
     /// typical URL limits.</summary>
     public const int MaxQueryBytes = 1500;          // [CONFIRMED] now read at TranslationService.cs:76, :81, :100
+
+    // ---- circuit breaker (§5.6) --------------------------------------------------------------
+    // Read by Services/ProviderGate.cs (E2.S1). Every one of the six is [ASSUMED]: they are
+    // calibrated to a REPORTED range (mecanismes-de-blocage-google.md Q3: "a few minutes" ..
+    // "12-24 h") and this project has never measured one. They ship instrumented and are tuned
+    // from >= 3 field reports after the A.1 release (U9 / E2.S7) — instrument first, tune from the
+    // logs, never from an opinion. A field experiment can override all six at runtime through
+    // GatePolicy.Parse, which is why the gate reads them through GatePolicy rather than directly.
+
+    /// <summary>First strike's open window. Also the window three consecutive
+    /// <c>BadResponse</c>s open, and the floor the strikes reset to after a clean run.</summary>
+    public const int OpenBaseSeconds = 60;      // [ASSUMED] architecture-cible.md §5.6; matches the app's own "wait a minute"
+
+    /// <summary>Ceiling on the doubling — 60 s, 2, 4, 8, 16, then 30 min for ever. Also the clamp
+    /// on a server-sent <c>Retry-After</c> (§5.5): beyond this a user restarts rather than waits,
+    /// so a 24-hour hint would simply read as a broken app.</summary>
+    public const int OpenCapMinutes = 30;       // [ASSUMED] architecture-cible.md §5.6
+
+    /// <summary>How long a provider must behave before its strike count is forgiven, so the next
+    /// failure opens for 60 s and not for the escalated window.</summary>
+    public const int CleanResetMinutes = 10;    // [ASSUMED] architecture-cible.md §5.6
+
+    /// <summary>A quota is refilled by a billing period, not by a back-off, so the gate waits an
+    /// hour instead of escalating. Re-saving the key clears it (§5.3).</summary>
+    public const int QuotaOpenMinutes = 60;     // [ASSUMED] architecture-cible.md §5.6, §15 R9
+
+    /// <summary>The no-strike cooldown after a 5xx, a timeout, a DNS blip or an unclassifiable
+    /// failure. Small, and not optional: without it the next LIVE tick re-hits the same dead
+    /// provider 700 ms later.</summary>
+    public const int SoftCooldownSecs = 5;      // [ASSUMED] architecture-cible.md §5.6
+
+    /// <summary>Consecutive <c>BadResponse</c>s that open the gate. One is a hiccup; three in a row
+    /// is a provider whose shape has changed.</summary>
+    public const int BadResponseStrikesToOpen = 3;  // [ASSUMED] architecture-cible.md §5.6
 
     // ---- HTML abuse-page markers (§4.3) ------------------------------------------------------
     // Matched lower-cased against DE-TAGGED text — E1.S4 does the de-tagging and lower-casing, so
