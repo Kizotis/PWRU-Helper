@@ -170,11 +170,22 @@ internal static class ProviderErrorMapper
         return TranslationErrorKind.Unknown;
     }
 
-    /// <summary>Row 6's envelope test. Case-insensitive because the wording is the provider's, and
-    /// a null head simply means the caller did not read the body — which is not a quota answer.</summary>
+    /// <summary>
+    /// Row 6's envelope test. Case-insensitive because the wording is the provider's, and a null
+    /// head simply means the caller did not read the body — which is not a quota answer.
+    ///
+    /// <para><b>Bounded like every other body reader here</b> (<see cref="MaxScanChars"/>, the
+    /// de-tagger's own input bound). The parameter is called <c>bodyHead</c> and every caller in
+    /// E1 handed it one; E2.S5 made the core hand over what the transport actually returned, which
+    /// can be a whole HTML page. Unbounded, one occurrence of the word "quota" anywhere in a long
+    /// proxy or vendor error page turns a keyed 403 into a <c>QuotaExhausted</c> — a 60-minute
+    /// gate block instead of an <c>AuthFailed</c> — on the strength of prose far below the
+    /// envelope. A real quota envelope says so at the top.</para>
+    /// </summary>
     internal static bool NamesAQuota(string? bodyHead) =>
         bodyHead != null &&
-        QuotaMarkers.Any(m => bodyHead.Contains(m, StringComparison.OrdinalIgnoreCase));
+        QuotaMarkers.Any(m => bodyHead.AsSpan(0, Math.Min(bodyHead.Length, MaxScanChars))
+                                      .Contains(m, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// §4.3 steps 1–2 — is this body an HTML page rather than the provider's JSON? Two signals, in

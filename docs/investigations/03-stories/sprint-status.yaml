@@ -22,6 +22,11 @@
 #   - in-progress: Developer actively working on implementation
 #   - review: Ready for code review (via Dev's code-review workflow)
 #   - done: Story completed
+#   - blocked-owner: The story file exists and is complete, but the work cannot start without the
+#                    owner: a network capture / soak he must designate a connection for (E3.S1/S2/S9),
+#                    or a decision only he can make. NOT a backlog item — the context work is done.
+#   - blocked-dep: The story file exists and is complete, but a hard gate in another story is not
+#                  met yet (E3.S5 needs E3.S2's capture; no code may be written before it).
 #
 # Retrospective Status:
 #   - optional: Can be completed but not required
@@ -54,9 +59,16 @@
 #    for the requests they send, and must not run from the dev box (Phase-1 incident).
 # 5. RELEASE COUPLING: epic-2 and epic-3 are separate PRs but ONE release. A sprint that
 #    schedules them into different releases is wrong (owner's decision 2; architecture R7).
+# 6. EPIC 3 IMPLEMENTATION ORDER (2026-09-07, Amelia CS): e3-s3 -> e3-s6 -> e3-s4 -> e3-s8 -> e3-s7.
+#    E3.S6 is pulled ahead of E3.S4 because E3.S4 needs TextChunker; e3-s5 slots before e3-s7 only
+#    if e3-s2's capture lands. Release A.1 CAN ship without Edge: the free chain is then
+#    GoogleDict -> GoogleGtx, and the loss of the independent second vendor is recorded as R1 raised.
+# 7. E3.S4 IS NOT BLOCKED BY E3.S1. The single-line dict-chrome-ex contract is already measured
+#    (benchmark 3.2); only the \n-batch is unknown, and OQ-A's per-line answer is the safe default
+#    that ships. U1 is an optimisation (halves LIVE volume), not a gate.
 
 generated: 2026-09-06
-last_updated: 2026-09-06
+last_updated: 2026-09-07
 project: PWRU Helper — translation-path rebuild (P2) and startup expectations (P1)
 project_key: NOKEY
 tracking_system: file-system
@@ -80,22 +92,22 @@ development_status:
   e2-s2-provider-gates-registry: done
   e2-s3-rate-ceiling-interactive-reserve: done
   e2-s4-persist-gate-state: done
-  e2-s5-http-provider-core: review
+  e2-s5-http-provider-core: done
   e2-s6-log-gate-transitions: done
   e2-s7-tune-gate-windows-spike-u9: backlog      # spike; scheduled AFTER the A.1 release ships
   epic-2-retrospective: optional
 
   # ---- Release A.1 · increment 2 · ONE RELEASE WITH EPIC 2 ----------------------
-  epic-3: backlog
-  e3-s1-capture-dict-chrome-ex-batch-spike-u1: backlog   # spike; owner's go for 2 requests
-  e3-s2-capture-edge-shapes-spike-u2: backlog            # spike; no EdgeTranslator before it
-  e3-s3-chain-translator: backlog
-  e3-s4-google-dict-translator: backlog
-  e3-s5-edge-translator: backlog
-  e3-s6-demote-gtx-extract-textchunker: backlog
-  e3-s7-build-both-chains-once: backlog
-  e3-s8-bound-per-line-fallback: backlog
-  e3-s9-soak-dict-chrome-ex-spike-u3: backlog            # spike; designated connection only
+  epic-3: in-progress
+  e3-s1-capture-dict-chrome-ex-batch-spike-u1: blocked-owner   # U1; ONE request, owner-designated connection
+  e3-s2-capture-edge-shapes-spike-u2: blocked-owner            # U2; hard gate on e3-s5, no code before it
+  e3-s3-chain-translator: ready-for-dev                        # order 1 — riskiest unblocked story (R-01/R-03)
+  e3-s4-google-dict-translator: ready-for-dev                  # order 3 — needs TextChunker (e3-s6); NOT gated on U1
+  e3-s5-edge-translator: blocked-dep                           # depends on e3-s2; may end 'cancelled' (R1 raised)
+  e3-s6-demote-gtx-extract-textchunker: ready-for-dev          # order 2 — pulled ahead: e3-s4 needs TextChunker
+  e3-s7-build-both-chains-once: ready-for-dev                  # order 5 — the only ctor change; TP-START-02 applies
+  e3-s8-bound-per-line-fallback: ready-for-dev                 # order 4 — PerLineCap; urgency up under OQ-A per-line
+  e3-s9-soak-dict-chrome-ex-spike-u3: blocked-owner            # U3; ~2 req/s for >=2 h on >=2 owner-named networks
   epic-3-retrospective: optional
 
   # ---- Release A.2 · increment 3 ------------------------------------------------

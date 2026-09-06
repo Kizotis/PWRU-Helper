@@ -347,9 +347,21 @@ public class ProviderGatesTests : GatesTestBase
                 return cut >= 0 ? l[..cut] : l;
             }));
 
-            if (!code.Contains("ProviderGates.", StringComparison.Ordinal)) continue;
+            // Two triggers, not one. Naming the registry is the obvious way to touch it; DERIVING
+            // GatesTestBase is the other, and it is the one that was quietly routed around — the
+            // base's constructor and Dispose reset the registry and re-point its clock without the
+            // derived file ever writing `ProviderGates.`, so a scan keyed on that literal alone
+            // could not see it (E2.S5's review).
+            if (!code.Contains("ProviderGates.", StringComparison.Ordinal) &&
+                !code.Contains(": GatesTestBase", StringComparison.Ordinal)) continue;
 
+            // …and two accepted answers. "Gates" is the collection; "log-file" is the one class
+            // that legitimately cannot join a second collection (RequestLogTests owns the log-file
+            // override AND drives real providers), and it carries DisableParallelization for
+            // exactly this reason — so it is serialised against "Gates" like a member would be.
             if (code.Contains("[Collection(\"Gates\")]", StringComparison.Ordinal)) joined.Add(name);
+            else if (code.Contains("[Collection(LogFileCollection.Name)]", StringComparison.Ordinal))
+                joined.Add(name);
             else offenders.Add(name);
         }
 

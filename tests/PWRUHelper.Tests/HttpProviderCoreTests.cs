@@ -51,6 +51,43 @@ public class HttpProviderCoreTests : GatesTestBase
         Assert.Equal(TranslationErrorKind.Blocked, ex.Kind);
     }
 
+    /// <summary>
+    /// Behaviour change 7, and it is a request-count change on a <b>paid vendor</b>, so it is
+    /// pinned rather than described: DeepL had no retry loop at all (one <c>SendAsync</c>), and
+    /// §7.0's shared pipeline gives it one. A 5xx now costs two requests where it cost one.
+    /// </summary>
+    [Fact]
+    public async Task DeepL_gains_the_retry_it_never_had_and_a_503_now_costs_it_two_requests()
+    {
+        var fake = new FakeHandler().Respond(HttpStatusCode.ServiceUnavailable);
+
+        var ex = await Assert.ThrowsAsync<TranslationException>(
+            () => new DeepLTranslator("k:fx", fake).TranslateAsync("привет", "ru", "en"));
+
+        Assert.Equal(2, fake.Requests);
+        Assert.Equal(TranslationErrorKind.Unavailable, ex.Kind);
+    }
+
+    /// <summary>
+    /// Behaviour change 11 — E1.S3's deferred row, landed here: an <see cref="IOException"/> (and
+    /// <c>HttpIOException</c> with it) is in neither provider's filter today and would escape raw.
+    /// It is a transport failure that is <b>not</b> a timeout, so it is a <c>Network</c> with the
+    /// <c>Network</c> sentence — not the timeout one today's ternary would have produced — and,
+    /// being a <c>Network</c>, it costs exactly one request.
+    /// </summary>
+    [Fact]
+    public async Task An_IOException_is_a_Network_failure_with_the_network_sentence_and_costs_one_request()
+    {
+        var fake = new FakeHandler().Throws(new IOException("the connection was reset"));
+
+        var ex = await Assert.ThrowsAsync<TranslationException>(
+            () => new TranslationService(fake).TranslateAsync("привет", "ru", "en"));
+
+        Assert.Equal(TranslationErrorKind.Network, ex.Kind);
+        Assert.Equal("Couldn't reach the translation service. Check your Internet connection.", ex.Message);
+        Assert.Equal(1, fake.Requests);
+    }
+
     /// <summary>The other half of TP-RET-03: the second attempt is a real second chance, so a 503
     /// followed by a 200 comes back as a translation.</summary>
     [Fact]
@@ -70,11 +107,14 @@ public class HttpProviderCoreTests : GatesTestBase
     {
         Assert.Equal(2, TranslationPolicy.MaxAttempts);
 
-        using var client = HttpProviderCore.CreateClient(ProviderIds.GoogleGtx, new FakeHandler(), null);
+        using var client = HttpProviderCore.CreateClient(new FakeHandler(), null);
         Assert.Equal(TimeSpan.FromSeconds(TranslationPolicy.RequestTimeoutSeconds), client.Timeout);
 
-        // …and the bound the LOG renders is the same number, not a second copy of it.
+        // …and the bound the LOG renders is the same number, not a second copy of it. The count is
+        // asserted first: `Assert.All` over an empty list passes, and `LinesOf` returns one when
+        // the log file was never written.
         var lines = await LinesOf("q1", h => h.Respond(HttpStatusCode.ServiceUnavailable));
+        Assert.Equal(2, lines.Count);
         Assert.All(lines, l => Assert.EndsWith("/2", Field(l, "attempt")));
     }
 
@@ -108,21 +148,31 @@ public class HttpProviderCoreTests : GatesTestBase
         finally { HttpProviderCore.JitterOverride = null; }
     }
 
-    /// <summary>IS-7 itself: the retry really goes through the injected delay, and it asks for a
-    /// value inside the band. If it did not, this suite would be paying ~500 ms of production
-    /// back-off per retried case again.</summary>
+    /// <summary>
+    /// IS-7 itself: the retry really goes through the injected delay. Asserted on an <b>exact</b>
+    /// jitter draw rather than on a band, because a band cannot fail here: filtering the recorded
+    /// delays by "below <c>BackoffBaseMs</c>" and then asserting they are below
+    /// <c>BackoffBaseMs</c> is the same predicate twice, and <c>MinSpacingMs</c> happens to equal
+    /// <c>BackoffBaseMs</c>, so a §5.4 ceiling wait would satisfy the leftover <c>NotEmpty</c> just
+    /// as well as a back-off. A pinned draw no ceiling wait can produce is falsifiable: a build in
+    /// which the retry stopped waiting would fail this, and one in which it stopped retrying would
+    /// fail the request count.
+    /// </summary>
     [Fact]
     public async Task The_retry_waits_through_the_injectable_delay_and_nothing_sleeps()
     {
         TestBackoffRedirect.Reset();
         var fake = new FakeHandler().Respond(HttpStatusCode.ServiceUnavailable).RespondJson(GoogleOk);
 
-        await new TranslationService(fake).TranslateAsync("привет", "ru", "en");
+        try
+        {
+            HttpProviderCore.JitterOverride = _ => 137;      // not a value the token bucket can ask for
+            await new TranslationService(fake).TranslateAsync("привет", "ru", "en");
+        }
+        finally { HttpProviderCore.JitterOverride = null; }
 
-        var backoffs = TestBackoffRedirect.Delays
-            .Where(d => d.TotalMilliseconds < TranslationPolicy.BackoffBaseMs).ToList();
-        Assert.NotEmpty(backoffs);
-        Assert.All(backoffs, d => Assert.InRange(d.TotalMilliseconds, 0, TranslationPolicy.BackoffBaseMs - 1));
+        Assert.Equal(2, fake.Requests);
+        Assert.Contains(TimeSpan.FromMilliseconds(137), TestBackoffRedirect.Delays);
     }
 
     // =============================================================================================
@@ -173,6 +223,47 @@ public class HttpProviderCoreTests : GatesTestBase
         Assert.Equal(GateState.Closed, gate.Snapshot().State);
         Assert.Null(gate.Snapshot().BlockedUntil);
         Assert.Equal(0, gate.Snapshot().Strikes);
+    }
+
+    /// <summary>
+    /// Behaviour change 12's newly-reachable half, end to end: the error body now reaches
+    /// <c>Classify</c>, so a keyed 403 whose envelope NAMES a quota is §4.2 row 6's
+    /// <c>QuotaExhausted</c> — a 60-minute window — rather than the <c>AuthFailed</c> E1.S4
+    /// shipped. The mapper had a unit test for the row; nothing drove it through the core to a
+    /// gate, which is where the 60 minutes actually happen.
+    /// </summary>
+    [Fact]
+    public async Task A_keyed_403_naming_a_quota_reaches_the_gate_as_QuotaExhausted()
+    {
+        var clock = new FakeClock();
+        var gate = new ProviderGate(clock.Read);
+        var fake = new FakeHandler().Respond(HttpStatusCode.Forbidden,
+            """{"message":"Quota for this billing period has been exceeded."}""");
+
+        var ex = await Assert.ThrowsAsync<TranslationException>(
+            () => new DeepLTranslator("k:fx", fake, gate).TranslateAsync("привет", "ru", "en"));
+
+        Assert.Equal(1, fake.Requests);                      // a refusal still costs one
+        Assert.Equal(TranslationErrorKind.QuotaExhausted, ex.Kind);
+        Assert.Equal(TranslationErrorKind.QuotaExhausted, gate.Snapshot().LastKind);
+        Assert.Equal(clock.Now + TimeSpan.FromMinutes(TranslationPolicy.QuotaOpenMinutes),
+                     gate.Snapshot().BlockedUntil);
+    }
+
+    /// <summary>
+    /// …and the bound that keeps it honest. <c>NamesAQuota</c> reads a <c>bodyHead</c>; since the
+    /// core hands over what the transport actually returned, that can be a whole page. One
+    /// occurrence of the word far below the envelope must not buy a 60-minute block — a real quota
+    /// answer says so at the top.
+    /// </summary>
+    [Fact]
+    public void A_quota_word_far_below_the_envelope_does_not_make_a_403_a_quota()
+    {
+        var near = "{\"message\":\"forbidden\"} " + new string('x', 100) + " quota";
+        var far = "{\"message\":\"forbidden\"} " + new string('x', 20000) + " quota";
+
+        Assert.True(ProviderErrorMapper.NamesAQuota(near));
+        Assert.False(ProviderErrorMapper.NamesAQuota(far));
     }
 
     /// <summary>A body that reaches the parser and is not the provider's shape is a
@@ -392,6 +483,45 @@ public class HttpProviderCoreTests : GatesTestBase
         finally { Restore(previous, dir); }
     }
 
+    /// <summary>
+    /// The same page, with the credential <b>split by markup</b> — and this is the case that made
+    /// the redaction move to the finished line. <c>ProviderErrorMapper.DeTaggedHead</c> replaces
+    /// every tag with a space, so <c>KEY-&lt;b&gt;PART&lt;/b&gt;-2</c> reaches the line as
+    /// <c>KEY- PART -2</c>: a scrub that ran on the raw body matched nothing, and the story's own
+    /// acceptance step ("grep the log for the key's first eight characters and get nothing") failed
+    /// on it.
+    /// </summary>
+    [Fact]
+    public async Task A_key_broken_up_by_markup_is_still_scrubbed_out_of_the_line()
+    {
+        const string key = "KIZOTIS-DEEPL-KEY-0000-1111:fx";
+        var previous = Logging.DirectoryOverride;
+        var dir = TempDir();
+        try
+        {
+            Logging.DirectoryOverride = dir;
+            RequestLog.ResetSuppression();
+
+            // A proxy that highlights part of the token it refused. No parameter name, and no
+            // contiguous occurrence of the key anywhere in the bytes on the wire.
+            var page = "<html><body><p>The credential KIZOTIS-<b>DEEPL</b>-KEY-0000-1111:fx "
+                     + "was rejected by this proxy.</p></body></html>";
+            Assert.DoesNotContain(key, page, StringComparison.Ordinal);   // the premise of the case
+
+            var fake = new FakeHandler().Respond(HttpStatusCode.Forbidden, page, "text/html");
+            await Assert.ThrowsAsync<TranslationException>(
+                () => new DeepLTranslator(key, fake).TranslateAsync("привет", "ru", "q7"));
+
+            var line = Assert.Single(LinesFor(dir, "ru->q7"));
+            var file = File.ReadAllText(Path.Combine(dir, "log.txt"));
+
+            Assert.Contains("rejected by this proxy", line);      // the page's prose still survives
+            Assert.DoesNotContain("KIZOTIS", file, StringComparison.Ordinal);
+            Assert.DoesNotContain("0000-1111", file, StringComparison.Ordinal);
+        }
+        finally { Restore(previous, dir); }
+    }
+
     /// <summary>The URL-encoded form too: a page that echoes the query it refused carries the key
     /// percent-escaped, and a scrub that only knew the literal would miss it.</summary>
     [Fact]
@@ -431,11 +561,91 @@ public class HttpProviderCoreTests : GatesTestBase
         Assert.Null(gate.Snapshot().LastKind);
     }
 
-    /// <summary>§10.1's own instruction for a value nobody can know: log <c>?</c> rather than guess.
-    /// A test handler has no connect callback, so that is what a suite sees — the real value comes
-    /// off the production handler's <c>ConnectCallback</c>, which cannot run offline.</summary>
+    /// <summary>
+    /// The second OCE pin, and the one nothing covered: a genuine cancel that lands <b>after</b>
+    /// the admission was granted and a request has already been made. It must leave as an
+    /// <see cref="OperationCanceledException"/>, cost no further request, and report <b>nothing</b>
+    /// to the gate — a cancel is not an outcome §5.3 has a row for.
+    ///
+    /// <para>Deterministic without a sleep: the request factory cancels as it builds attempt 2, so
+    /// the cancel falls between the 503's back-off and the second send. What the gate is left
+    /// holding is the accepted tradeoff, stated here rather than discovered later — a cancel
+    /// mid-probe leaves the probe outstanding until <c>ProbeTimeout</c> re-arms it.</para>
+    /// </summary>
     [Fact]
-    public async Task The_address_family_is_a_question_mark_under_a_test_handler()
+    public async Task A_cancel_after_the_admission_propagates_and_reports_nothing()
+    {
+        var clock = new FakeClock();
+        var gate = new ProviderGate(clock.Read);
+        var cts = new CancellationTokenSource();
+        var fake = new FakeHandler().Respond(HttpStatusCode.ServiceUnavailable).RespondJson(GoogleOk);
+
+        using var client = HttpProviderCore.CreateClient(fake, null);
+        var core = new HttpProviderCore(GoogleLikeOptions, client, gate);
+
+        int built = 0;
+        HttpRequestMessage Build()
+        {
+            // Attempt 2 is where the user presses Stop: attempt 1 has already been sent, logged
+            // and found retryable, and the back-off has already been waited through.
+            if (++built == 2) cts.Cancel();
+            return new HttpRequestMessage(HttpMethod.Get, "https://translate.googleapis.com/translate_a/single");
+        }
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => core.SendAsync(
+            new Uri("https://translate.googleapis.com/translate_a/single"), Build,
+            TranslationService.Parse, "ru", "en", "привет", RequestPriority.Interactive, cts.Token));
+
+        Assert.Equal(1, fake.Requests);                      // the 503, and nothing after it
+        Assert.Null(gate.Snapshot().LastKind);               // a cancel is not an outcome
+        Assert.Null(gate.Snapshot().BlockedUntil);
+    }
+
+    /// <summary>
+    /// The third OCE pin, made structural. I3's rule is that <b>every</b>
+    /// <c>OperationCanceledException</c> catch in <c>Services/</c> filters on
+    /// <c>ct.IsCancellationRequested</c> — an unfiltered one turns an <see cref="HttpClient"/>
+    /// timeout (a <c>TaskCanceledException</c> whose token is NOT cancelled) into a user cancel,
+    /// which is the bug that cost this project three releases. And the request path carries
+    /// <b>exactly one</b> of them, in the core, because consolidating three catches into one is
+    /// precisely the operation that reopens the trap.
+    /// </summary>
+    [Fact]
+    public void Every_cancel_catch_in_Services_is_filtered_and_the_core_has_exactly_one()
+    {
+        var unfiltered = new List<string>();
+        int inTheCore = 0;
+
+        foreach (var file in Directory.GetFiles(ServicesDir(), "*.cs"))
+        {
+            var code = string.Join("\n", File.ReadAllLines(file)
+                .Select(l => { var cut = l.IndexOf("//", StringComparison.Ordinal); return cut >= 0 ? l[..cut] : l; }));
+
+            foreach (Match m in Regex.Matches(code,
+                         @"catch\s*\(\s*(?:System\.)?(?:Operation|Task)CanceledException[^)]*\)\s*(?<filter>when[^{]*)?"))
+            {
+                var filter = m.Groups["filter"].Value;
+                if (!filter.Contains("IsCancellationRequested"))
+                    unfiltered.Add($"{Path.GetFileName(file)}: {m.Value.Trim()}");
+                else if (Path.GetFileName(file) == "HttpProviderCore.cs")
+                    inTheCore++;
+            }
+        }
+
+        Assert.True(unfiltered.Count == 0,
+            "an unfiltered cancel catch turns an HttpClient timeout into a user cancel (I3): "
+            + string.Join(" | ", unfiltered));
+        Assert.Equal(1, inTheCore);
+    }
+
+    /// <summary>§10.1's own instruction for a value nobody can know: log <c>?</c> rather than guess.
+    /// And nobody can know it — E2.S5's review removed the <c>ConnectCallback</c> that was the only
+    /// way in (replacing the runtime's connect path is not a price a diagnostic field may cost;
+    /// pinned in <c>HttpSeamGuardTests</c>), and .NET 8 exposes the peer address on no other public
+    /// per-request API. So this is what EVERY line says, in the field as well as in the suite,
+    /// until a non-invasive source exists.</summary>
+    [Fact]
+    public async Task The_address_family_is_a_question_mark_on_every_line()
     {
         var lines = await LinesOf("q6", h => h.Respond(HttpStatusCode.BadRequest, "nope"));
 
@@ -445,14 +655,26 @@ public class HttpProviderCoreTests : GatesTestBase
     /// <summary>
     /// The <c>ConfigureAwait(false)</c> scan E1.S5 recorded and this story owes. Callers await from
     /// UI-thread methods (<c>MainWindow.Translate.cs:37,94</c>), so without it <c>LogWriter</c>'s
-    /// synchronous <c>File.AppendAllText</c> — and E2.S4's lazy state load — run on the dispatcher.
-    /// A scan rather than a behaviour test because there is no headless way to observe the
-    /// difference, and the one thing that can go wrong is someone adding an await without it.
+    /// synchronous <c>File.AppendAllText</c> runs on the dispatcher. A scan rather than a behaviour
+    /// test because there is no headless way to observe the difference, and the one thing that can
+    /// go wrong is someone adding an await without it.
+    ///
+    /// <para><c>RequestLog.cs</c> is in the list because <c>SafeBodyAsync</c> is awaited by the core
+    /// on every non-success attempt — it is on the request path even though it does not look like
+    /// it, and a scan that stops at the three obvious files is one edit away from being wrong.</para>
+    ///
+    /// <para><b>What this does NOT protect</b>, contrary to what it used to claim: E2.S4's lazy
+    /// state load. <c>ProviderGates.EnsureLoaded</c> is invoked synchronously from
+    /// <c>gate.TryEnter</c> inside <c>AdmitAsync</c>, which runs <i>before</i> the first await in
+    /// <c>SendAsync</c> — so the first translation of a session reads <c>provider-state.json</c> on
+    /// whatever thread called it, dispatcher included, and no <c>ConfigureAwait</c> anywhere can
+    /// change that. Recorded against ruling E2-e rather than papered over.</para>
     /// </summary>
     [Fact]
     public void Every_await_on_the_request_path_configures_away_the_context()
     {
-        foreach (var file in new[] { "HttpProviderCore.cs", "TranslationService.cs", "DeepLTranslator.cs" })
+        foreach (var file in new[] { "HttpProviderCore.cs", "TranslationService.cs",
+                                     "DeepLTranslator.cs", "RequestLog.cs" })
         {
             var offenders = Statements(SourceOf(file))
                 .Where(s => Regex.IsMatch(s, @"(^|[^\w.])await\s") && !s.Contains(".ConfigureAwait(false)"))
@@ -476,22 +698,49 @@ public class HttpProviderCoreTests : GatesTestBase
     /// lines.</summary>
     private static List<string> Statements(string path)
     {
-        var code = string.Join("\n", File.ReadAllLines(path)
-            .Select(l => { var cut = l.IndexOf("//", StringComparison.Ordinal); return cut >= 0 ? l[..cut] : l; }));
+        var code = string.Join("\n", File.ReadAllLines(path).Select(StripComment));
         return code.Split(';').Select(s => s.Replace("\n", " ").Trim()).Where(s => s.Length > 0).ToList();
     }
 
+    /// <summary>Everything before a real <c>//</c>. "Real" matters: a naive <c>IndexOf("//")</c>
+    /// truncates at the slashes inside <c>"https://api-free.deepl.com/…"</c>, throwing away that
+    /// line's terminating <c>;</c> and merging it with the next — which can hide an await, or lend
+    /// it a neighbour's <c>ConfigureAwait</c>. Only a <c>//</c> with an even number of quotes
+    /// before it is outside a string literal.</summary>
+    private static string StripComment(string line)
+    {
+        for (int i = 0; i + 1 < line.Length; i++)
+        {
+            if (line[i] == '"' || line[i] != '/' || line[i + 1] != '/') continue;
+            if (line[..i].Count(c => c == '"') % 2 == 0) return line[..i];
+        }
+        return line;
+    }
+
     private static string SourceOf(string fileName)
+    {
+        var path = Path.Combine(ServicesDir(), fileName);
+        Assert.True(File.Exists(path), $"{fileName} not found at {path}");
+        return path;
+    }
+
+    private static string ServicesDir()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir != null && !File.Exists(Path.Combine(dir.FullName, "PWRUHelper.csproj")))
             dir = dir.Parent;
         Assert.True(dir != null, "could not find the repo root (no PWRUHelper.csproj above the test output)");
-
-        var path = Path.Combine(dir!.FullName, "Services", fileName);
-        Assert.True(File.Exists(path), $"{fileName} not found at {path}");
-        return path;
+        return Path.Combine(dir!.FullName, "Services");
     }
+
+    /// <summary>A keyless provider's options, for the two cases that drive the core directly
+    /// because they need a seam a provider does not expose (the request factory).</summary>
+    private static ProviderOptions GoogleLikeOptions => new(
+        ProviderIds.GoogleGtx,
+        KeyWasSent: false,
+        StatusMessage: code => $"HTTP {code}",
+        TransportMessage: kind => kind.ToString(),
+        PausedMessage: "paused");
 
     /// <summary>One failing Google call with the log pointed at a fresh directory; hands back this
     /// call's own lines, found by its unique language pair (other classes' deliberate failures land

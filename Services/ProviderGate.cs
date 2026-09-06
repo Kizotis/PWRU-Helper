@@ -226,13 +226,31 @@ internal sealed class ProviderGate
     private double _tokens = TranslationPolicy.BucketCapacity;   // starts full in every process
     private DateTimeOffset? _tokensAt;        // null = never refilled; the first TryEnter seeds it
 
-    /// <summary>How long a half-open probe may be outstanding before the gate re-arms it. It is the
-    /// request timeout on purpose rather than a new ungraded number: a probe is one request, and a
-    /// request cannot outlive that timeout. It also closes the only way this class could pause the
-    /// app forever (R-01): a caller that takes the probe and never reports — a cancel mid-probe, or
-    /// a crash — would otherwise leave the gate half-open, admitting nobody, for good.</summary>
-    private static readonly TimeSpan ProbeTimeout =
-        TimeSpan.FromSeconds(TranslationPolicy.RequestTimeoutSeconds);
+    /// <summary>
+    /// How long a half-open probe may be outstanding before the gate re-arms it. Derived rather
+    /// than a new ungraded number, and derived from what a probe actually <b>is</b>: since E2.S5 an
+    /// admission covers one LOGICAL CALL, so a probe is up to
+    /// <see cref="TranslationPolicy.MaxAttempts"/> requests — each bounded by the client's own
+    /// timeout — plus the back-off drawn between them.
+    ///
+    /// <para>It used to read "a probe is one request, and a request cannot outlive that timeout".
+    /// That stopped being true the moment the probe covered a retry: two 12 s timeouts plus jitter
+    /// outlive a 12 s bound, and the gate would then re-arm <i>while the probe was still in
+    /// flight</i> — handing a second caller a real request into the same closed door, and leaving
+    /// the original probe's report to be rejected by <see cref="IsOutstandingProbe"/>, so even a
+    /// SUCCESSFUL probe could no longer close the gate. Derived from the policy, the bound moves
+    /// with it and E2.S7 cannot tune one without the other.</para>
+    ///
+    /// <para>It also closes the only way this class could pause the app forever (R-01): a caller
+    /// that takes the probe and never reports — a cancel mid-probe, or a crash — would otherwise
+    /// leave the gate half-open, admitting nobody, for good.</para>
+    /// </summary>
+    internal static readonly TimeSpan ProbeTimeout =
+        TimeSpan.FromSeconds(TranslationPolicy.RequestTimeoutSeconds * TranslationPolicy.MaxAttempts)
+        // The gaps between attempts: full jitter draws below BackoffBaseMs << n, so the attempts-1
+        // gaps sum to less than BackoffBaseMs * (2^(MaxAttempts-1) - 1).
+        + TimeSpan.FromMilliseconds(
+            TranslationPolicy.BackoffBaseMs * ((1 << (TranslationPolicy.MaxAttempts - 1)) - 1));
 
     /// <summary>How long a <c>Background</c> caller stands aside before taking a probe itself
     /// (§5.4, architect's concern #1). <c>Interactive</c> is never deferred.</summary>

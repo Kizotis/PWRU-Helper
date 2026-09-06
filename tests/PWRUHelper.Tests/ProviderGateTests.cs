@@ -43,8 +43,10 @@ public class ProviderGateTests
 
     private static readonly TimeSpan Base = TimeSpan.FromSeconds(TranslationPolicy.OpenBaseSeconds);
     private static readonly TimeSpan Cap = TimeSpan.FromMinutes(TranslationPolicy.OpenCapMinutes);
-    private static readonly TimeSpan ProbeTimeout =
-        TimeSpan.FromSeconds(TranslationPolicy.RequestTimeoutSeconds);
+    // Read from the gate rather than re-derived here: since E2.S5 a probe covers a whole logical
+    // call (MaxAttempts requests plus the back-off between them), and a mirror of the old
+    // one-request formula would have drifted silently.
+    private static readonly TimeSpan ProbeTimeout = ProviderGate.ProbeTimeout;
 
     // §5.4's rate ceiling, as relationships rather than literals (U9: E2.S7 tunes all four).
     private static readonly TimeSpan Spacing = TimeSpan.FromMilliseconds(TranslationPolicy.MinSpacingMs);

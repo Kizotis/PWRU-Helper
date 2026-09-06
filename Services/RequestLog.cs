@@ -47,10 +47,12 @@ internal static class RequestLog
     /// prefix, so a dual-stack machine silently switching families looks like a block that "cleared
     /// itself"). <b>Not obtainable on this path today</b> — <see cref="HttpClient"/> does not expose
     /// the socket, and the only cheap way in is a <c>ConnectCallback</c> on the production handler,
-    /// which E2.S5's <c>HttpProviderCore</c> now owns: the production handler records the connected
-    /// family and hands it to <see cref="Line"/>. This value is what a caller that CANNOT know one
-    /// still says — a test handler has no connect callback — because §10.1's instruction for that
-    /// case is to log <c>?</c> rather than to guess.
+    /// which <b>E2.S5's review deliberately refused to install</b> (Winston's ruling): a connect
+    /// callback replaces the runtime's own connect path — DNS, dual-stack Happy Eyeballs, proxy
+    /// tunnelling, connect-timeout semantics — on a tool that runs on arbitrary home and corporate
+    /// networks with no way to diagnose one remotely, and no diagnostic field is worth that. .NET 8
+    /// exposes the peer address on no other public per-request API, so this is what every line
+    /// says, and §10.1's own instruction for that case is to log <c>?</c> rather than to guess.
     /// </summary>
     internal const string UnknownAddressFamily = "?";
 
@@ -310,28 +312,46 @@ internal static class RequestLog
 
     // ---- emission ------------------------------------------------------------------------------
 
-    // The three doors, all three carrying the address family since E2.S5: HttpProviderCore owns the
-    // production handler's ConnectCallback and is the only caller that can know which family a
-    // connection really used. It defaults to `?` so a caller that cannot know one — a test handler
-    // has no connect callback — says so rather than guessing (§10.1).
+    // The three doors. None of them carries an address family: E2.S5's review refused the
+    // ConnectCallback that was the only way to learn one (see UnknownAddressFamily), so `ipv=`
+    // renders Line's own `?` default and there is no parameter for a caller to get wrong. An
+    // optional argument nobody can supply is not a seam — it is a promise the code cannot keep.
+    //
+    // What they DO carry is `scrub` (I11). This class is UI-free and cannot know a key's VALUE,
+    // only the parameter names it stops at (EchoMarkers); a keyed provider hands its own scrubber
+    // in. It is applied to the FINISHED line and to nothing earlier, which is the only placement
+    // that holds: BodyHead de-tags the body AFTER any caller could have scrubbed it, so a page
+    // rendering `KEY-<b>PART</b>-2` reassembles the credential inside this class, past a scrub
+    // that ran on the raw body. The last thing before the write is the last chance.
 
     /// <summary>One line for an attempt that ended on a real response.</summary>
     internal static void Emit(Call call, int attempt, TimeSpan elapsed, int burst60,
-        HttpResponseMessage resp, string? body, string addressFamily = UnknownAddressFamily) =>
+        HttpResponseMessage resp, string? body, Func<string, string>? scrub = null) =>
         Write(call, StatusOf(resp),
-            () => Line(call, attempt, ResponseFacts.Of(resp, body), elapsed, burst60, addressFamily));
+            () => Scrubbed(Line(call, attempt, ResponseFacts.Of(resp, body), elapsed, burst60), scrub));
 
     /// <summary>One line for an attempt that ended in a transport exception.</summary>
     internal static void Emit(Call call, int attempt, TimeSpan elapsed, int burst60,
-        Exception transport, string addressFamily = UnknownAddressFamily) =>
+        Exception transport, Func<string, string>? scrub = null) =>
         Write(call, transport == null ? Nothing : transport.GetType().Name,
-            () => Line(call, attempt, ResponseFacts.OfTransport(transport), elapsed, burst60, addressFamily));
+            () => Scrubbed(Line(call, attempt, ResponseFacts.OfTransport(transport), elapsed, burst60), scrub));
 
     /// <summary>One line for an attempt whose response is already gone — the parse failure.</summary>
     internal static void EmitStatus(Call call, int attempt, TimeSpan elapsed, int burst60,
-        int status, string? body, string addressFamily = UnknownAddressFamily) =>
+        int status, string? body, Func<string, string>? scrub = null) =>
         Write(call, status <= 0 ? Nothing : status.ToString(),
-            () => Line(call, attempt, ResponseFacts.OfStatus(status, body), elapsed, burst60, addressFamily));
+            () => Scrubbed(Line(call, attempt, ResponseFacts.OfStatus(status, body), elapsed, burst60), scrub));
+
+    /// <summary>A keyless provider pays nothing; a keyed one pays one ordinal scan of a line that
+    /// is bounded at a few hundred characters, on the failure path only. A scrubber that throws is
+    /// a diagnostic problem, never a translation problem — but it must not be allowed to write the
+    /// UNSCRUBBED line either, so a failure drops the body rather than risking the secret.</summary>
+    private static string Scrubbed(string line, Func<string, string>? scrub)
+    {
+        if (scrub == null) return line;
+        try { return scrub(line); }
+        catch { return Nothing; }
+    }
 
     /// <summary>The status the suppressor keys on, read without building the rest of the line —
     /// a suppressed attempt must not pay for the line it is not going to write.</summary>
@@ -371,7 +391,10 @@ internal static class RequestLog
     /// never blocks the failure it is describing: an unreadable body simply has no <c>body=</c>.</summary>
     internal static async Task<string?> SafeBodyAsync(HttpResponseMessage resp, CancellationToken ct)
     {
-        try { return await resp.Content.ReadAsStringAsync(ct); }
+        // ConfigureAwait(false) for the same reason the core's awaits carry it: this runs on the
+        // request path, whose callers await from UI-thread methods, and Services/ must never
+        // assume a dispatcher (I2).
+        try { return await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false); }
         catch { return null; }
     }
 

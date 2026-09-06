@@ -23,12 +23,24 @@ public class HttpSeamGuardTests : GatesTestBase
 
     // ---------- IS-10: no provider can be built without a handler in a test ----------
 
-    /// <summary>Every ITranslator in the app that holds an HttpClient. The list grows on its own as
-    /// providers are added — which is the point: a new provider without the seam fails here.</summary>
+    /// <summary>
+    /// Every ITranslator in the app that can reach the network. The list grows on its own as
+    /// providers are added — which is the point: a new provider without the seam fails here.
+    ///
+    /// <para>An <c>HttpProviderCore</c> field counts as well as an <c>HttpClient</c> one, and that
+    /// is the whole derivation since E2.S5. The comment on <c>FieldsIncludingBase</c> anticipated
+    /// the shared core arriving as a BASE CLASS; it arrived as a FIELD instead. E3's three new
+    /// providers are meant to be "a URL, a payload and a parser" — a natural one holds only an
+    /// <c>HttpProviderCore</c> and no <c>HttpClient</c> at all, and under the old derivation it
+    /// would not have been enumerated: not a failing guard, an <b>absent</b> one, with CI free to
+    /// reach the real Internet. Both shipped providers still keep a redundant <c>_http</c> field,
+    /// which is the only reason this was not already broken.</para>
+    /// </summary>
     private static List<Type> HttpProviders() =>
         AppTypes()
             .Where(t => t.IsClass && !t.IsAbstract && typeof(ITranslator).IsAssignableFrom(t))
-            .Where(t => FieldsIncludingBase(t).Any(f => f.FieldType == typeof(HttpClient)))
+            .Where(t => FieldsIncludingBase(t).Any(f => f.FieldType == typeof(HttpClient)
+                                                     || f.FieldType == typeof(HttpProviderCore)))
             .OrderBy(t => t.Name)
             .ToList();
 
@@ -124,15 +136,19 @@ public class HttpSeamGuardTests : GatesTestBase
         // Asserted on the factory each shared client is built from: digging the handler back out of
         // an HttpClient means reading a private runtime field, which breaks on a .NET servicing
         // update for a reason that has nothing to do with this app. Since E2.S5 there is ONE
-        // factory — the two were byte-identical — so this asserts the shape both providers get, and
-        // the ipv= callback the production path adds on top of it.
-        using var bare = HttpProviderCore.CreatePooledHandler();
-        using var recording = HttpProviderCore.CreatePooledHandler(ProviderIds.GoogleGtx);
+        // factory — the two were byte-identical — so this asserts the shape both providers get.
+        using var handler = HttpProviderCore.CreatePooledHandler();
 
-        Assert.Equal(TimeSpan.FromMinutes(2), bare.PooledConnectionLifetime);
-        Assert.Equal(TimeSpan.FromMinutes(2), recording.PooledConnectionLifetime);
-        Assert.Null(bare.ConnectCallback);
-        Assert.NotNull(recording.ConnectCallback);
+        Assert.Equal(TimeSpan.FromMinutes(2), handler.PooledConnectionLifetime);
+
+        // …and the production handler keeps the RUNTIME's connect path. E2.S5 first shipped a
+        // ConnectCallback to learn the address family for §10.1's `ipv=`; Winston's review removed
+        // it, because a connect callback replaces DNS resolution, dual-stack Happy Eyeballs, proxy
+        // tunnelling and the connect-timeout semantics with this app's own code — on a tool that
+        // runs on arbitrary home and corporate networks that nobody here can diagnose remotely. A
+        // diagnostic field is not worth owning the path every request travels on. `ipv=` stays `?`
+        // (pinned in HttpProviderCoreTests); this is the pin that stops the callback coming back.
+        Assert.Null(handler.ConnectCallback);
     }
 
     // ---------- IS-11: the double really drives the providers ----------

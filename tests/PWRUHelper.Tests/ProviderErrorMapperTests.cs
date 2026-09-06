@@ -299,7 +299,10 @@ public class ProviderErrorMapperTests : GatesTestBase
     /// Since E1.S6 that sentence is the LOG's account only: what the player reads is the Timeout
     /// Kind's copy-deck sentence from <c>UserMessages</c>, pinned in <c>UserMessagesTests</c>. This
     /// case pins the Kind and, since E2.S5, <b>TP-RET-04</b>: a <c>TaskCanceledException</c> whose
-    /// token is NOT cancelled costs two requests and comes back a Timeout — never a cancel.</summary>
+    /// token is NOT cancelled costs two requests, comes back a Timeout — never a cancel — and is
+    /// REPORTED as one. All three halves matter: the trap is that an unfiltered catch would turn it
+    /// into a cancel, and a cancel reports nothing, so a gate that never hears about a dead
+    /// provider is the silent second half of the same bug.</summary>
     [Fact]
     public async Task TP_RET_04_a_Google_timeout_is_a_Timeout_retried_once_and_never_a_cancel()
     {
@@ -311,6 +314,9 @@ public class ProviderErrorMapperTests : GatesTestBase
         Assert.Equal(TranslationErrorKind.Timeout, ex.Kind);
         Assert.Equal("the request timed out", ex.Message);
         Assert.Equal(2, fake.Requests);
+        // …and the gate heard about it, once, as a Timeout — §5.6's 5 s soft cooldown is what
+        // stops the next LIVE tick re-hitting the same dead provider 700 ms later.
+        Assert.Equal(TranslationErrorKind.Timeout, ProviderGates.Snapshot(ProviderIds.GoogleGtx)!.LastKind);
     }
 
     /// <summary>

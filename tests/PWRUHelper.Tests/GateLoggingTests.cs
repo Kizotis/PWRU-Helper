@@ -62,8 +62,10 @@ public class GateLoggingTests : GatesTestBase
     }
 
     private static readonly TimeSpan Base = TimeSpan.FromSeconds(TranslationPolicy.OpenBaseSeconds);
-    private static readonly TimeSpan ProbeTimeout =
-        TimeSpan.FromSeconds(TranslationPolicy.RequestTimeoutSeconds);
+    // Read from the gate rather than re-derived here: since E2.S5 a probe covers a whole logical
+    // call (MaxAttempts requests plus the back-off between them), and a mirror of the old
+    // one-request formula would have drifted silently.
+    private static readonly TimeSpan ProbeTimeout = ProviderGate.ProbeTimeout;
 
     /// <summary>Every <c>gate …</c> line written so far, with <c>Logging</c>'s own timestamp and
     /// level stripped — the builder emits from <c>gate </c> onwards and this asserts on exactly

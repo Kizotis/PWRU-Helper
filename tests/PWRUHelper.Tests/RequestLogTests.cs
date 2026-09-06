@@ -440,17 +440,18 @@ public class RequestLogTests : GatesTestBase
 
     /// <summary>TP-LOG-04 — the field set is complete for a real 429 taken through the real request
     /// path. Since E2.S5 a 429 is <b>not retried</b> (the gate owns the wait), so the whole episode
-    /// is one line; TP-RET-08's "one cid across both attempts" is asserted on a 503, which is what
-    /// a retry is now for, in <c>HttpProviderCoreTests</c>.</summary>
+    /// is one line, and this case is renamed to say so: it used to promise "one line per attempt
+    /// under a single correlation id" and then assert `Single(cids)` over one line, which cannot
+    /// fail. The shared-cid property moved to a case that really has two attempts —
+    /// <c>HttpProviderCoreTests.TP_RET_08</c>, on a 503, which is what a retry is now for.</summary>
     [Fact]
-    public async Task TP_LOG_04_a_429_logs_one_line_per_attempt_under_a_single_correlation_id()
+    public async Task TP_LOG_04_a_429_logs_one_complete_line_and_only_one()
     {
         var lines = await FailingCall("zz", "qa", h => h.Respond(HttpStatusCode.TooManyRequests,
             "{\"error\":\"rate limited\"}", "application/json"));
 
         Assert.Single(lines);
-        var cids = lines.Select(l => Field(l, "cid")).Distinct().ToList();
-        Assert.Single(cids);
+        Assert.Matches(@"^[0-9a-f]{1,8}$", Field(lines[0], "cid"));
         Assert.Equal(new[] { "1/2" }, lines.Select(l => Field(l, "attempt")).ToArray());
 
         foreach (var line in lines)
@@ -786,7 +787,13 @@ public class RequestLogTests : GatesTestBase
 /// would each read the other's lines, which is a flaky suite rather than a broken feature — and a
 /// flaky suite is how a real I11 regression gets re-run until it passes.
 /// </summary>
-[CollectionDefinition(Name)]
+/// <para><b>Not parallel with anything either, since E2.S5.</b> The classes in here now derive
+/// <c>GatesTestBase</c>, so their constructors and <c>Dispose</c> reset the process-wide
+/// <c>ProviderGates</c> registry and re-point its clock — the very state <c>[Collection("Gates")]</c>
+/// exists to serialise, reached from a second collection. It was safe only because "Gates" happens
+/// to set <c>DisableParallelization</c> and nothing else touched the registry; "safe because of a
+/// property nobody asserts" is exactly risk R-08. Saying it here makes it a fact instead.</para>
+[CollectionDefinition(Name, DisableParallelization = true)]
 public class LogFileCollection
 {
     internal const string Name = "log-file";

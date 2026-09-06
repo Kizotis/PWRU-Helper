@@ -88,7 +88,7 @@ public class TranslationService : ITranslator
     // and nothing else. The factory itself is the core's since E2.S5: it was byte-identical here
     // and in DeepLTranslator apart from this provider's User-Agent.
     private static HttpClient CreateClient(HttpMessageHandler? handler = null) =>
-        HttpProviderCore.CreateClient(ProviderId, handler, UserAgent);
+        HttpProviderCore.CreateClient(handler, UserAgent);
 
     /// <summary>
     /// Translate a single piece of text. Language codes are ISO ("en", "ru").

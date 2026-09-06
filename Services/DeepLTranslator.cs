@@ -81,7 +81,7 @@ public class DeepLTranslator : ITranslator
     // and nothing else. The factory itself is the core's since E2.S5: it was byte-identical here
     // and in TranslationService apart from that provider's User-Agent.
     private static HttpClient CreateClient(HttpMessageHandler? handler = null) =>
-        HttpProviderCore.CreateClient(ProviderId, handler, userAgent: null);
+        HttpProviderCore.CreateClient(handler, userAgent: null);
 
     // Free-tier keys carry a ":fx" suffix and must use the free host.
     internal static bool FreeKey(string key) => key.TrimEnd().EndsWith(":fx", StringComparison.Ordinal);
