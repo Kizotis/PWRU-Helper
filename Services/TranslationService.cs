@@ -108,6 +108,9 @@ public class TranslationService : ITranslator
                 // else: segmentation didn't line up — fall through to per-line.
             }
             catch (TranslationException) { throw; }  // rate-limit etc. — let the caller show it
+            // A genuine Stop must not be spent on a per-line retry of a batch the user abandoned.
+            // The bare catch below is an OCE catch too, and I3 asks every one of them to say so.
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch { /* fall through to per-line */ }
         }
 
@@ -120,7 +123,12 @@ public class TranslationService : ITranslator
         {
             if (rateLimited) { result.Add("(skipped — rate-limited, try again shortly)"); continue; }
             try { result.Add(await TranslateAsync(l, source, target, ct)); }
-            catch (OperationCanceledException) { throw; }   // a real cancel must propagate
+            // A real cancel must propagate — and ONLY a real one. Unfiltered, this catch rethrew an
+            // HttpClient timeout (an OCE whose token is NOT cancelled) as if the user had pressed
+            // Stop, which threw away every line already translated above it: exactly what the
+            // comment on this loop exists to prevent. RequestAsync now hands timeouts over as a
+            // Timeout-kind TranslationException, so they latch below like any other failure (I3).
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (TranslationException) { rateLimited = true; result.Add("(rate-limited — try again shortly)"); }
             catch (Exception ex) { result.Add($"(translation failed: {ex.Message})"); }
         }
@@ -155,36 +163,65 @@ public class TranslationService : ITranslator
                 }
 
                 int code = (int)resp.StatusCode;
+                // The single classification point (§4.2). keyWasSent is FALSE here — this is the
+                // keyless Google endpoint — which is precisely why its 403 is a Blocked (the
+                // endpoint refusing this network) and not a rejected key. No body is read: E1.S4
+                // is the story that hands the mapper a bodyHead, and reading it here would consume
+                // the stream the parser needs.
+                var kind = ProviderErrorMapper.Classify(resp, bodyHead: null, transport: null,
+                    keyWasSent: false, ct);
+                var retryAt = ProviderErrorMapper.RetryAfter(resp, DateTimeOffset.UtcNow);
+
+                // The retry DECISION is unchanged and stays here: 429 and 5xx are retried, nothing
+                // else. Which Kinds are worth retrying is E2.S5's question, not this story's.
                 bool transient = code == 429 || code >= 500;
                 if (!transient)
-                    // A real, non-retryable error (e.g. 400/403) — report it as-is instead of
-                    // retrying and then mislabeling it as "no Internet". This branch still folds
-                    // 403 in with 400/404, so the Kind stays Unknown here on purpose:
-                    // E1.S3 replaces this with ProviderErrorMapper.Classify, which is where the
-                    // 403 split (Blocked vs AuthFailed) belongs.
-                    throw new TranslationException(TranslationErrorKind.Unknown,
-                        $"Translation service error (HTTP {code}). Please try again later.");
+                    // A real, non-retryable error — report it as-is instead of retrying and then
+                    // mislabeling it as "no Internet". The sentence is unchanged; what changed is
+                    // that a 403 no longer arrives with the same Kind as a 400 (E1.S6 rewords it).
+                    throw new TranslationException(kind,
+                        $"Translation service error (HTTP {code}). Please try again later.", retryAt);
                 if (code == 429 && attempt == 2)
-                    throw new TranslationException(TranslationErrorKind.RateLimited,
-                        "Google is limiting translations right now — wait a minute and try again.");
+                    throw new TranslationException(kind,
+                        "Google is limiting translations right now — wait a minute and try again.", retryAt);
                 if (attempt == 2)
-                    throw new TranslationException(TranslationErrorKind.Unavailable,
-                        $"Translation service is unavailable (HTTP {code}). Try again shortly.");
+                    throw new TranslationException(kind,
+                        $"Translation service is unavailable (HTTP {code}). Try again shortly.", retryAt);
                 // transient and attempts left → fall through to the delay + retry below.
             }
-            catch (HttpRequestException) when (attempt < 2) { /* network blip — retry */ }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException)
+            {
+                // A network blip keeps its two retries (unchanged). What is new is the exit: on the
+                // last attempt the HttpRequestException used to escape RequestAsync raw — past the
+                // TranslationException contract the caller is written against, and leaving the
+                // could-not-reach sentence below the loop unreachable. A timeout is not retried
+                // today either, and it now leaves as a Timeout instead of a bare OCE.
+                if (ex is not HttpRequestException || attempt == 2)
+                    throw new TranslationException(
+                        ProviderErrorMapper.Classify(resp: null, bodyHead: null, transport: ex,
+                            keyWasSent: false, ct),
+                        ex is HttpRequestException
+                            ? "Couldn't reach the translation service. Check your Internet connection."
+                            // The exact sentence Friendly() renders today for a raw
+                            // TaskCanceledException (MainWindow.xaml.cs), so nothing the user reads
+                            // changes here. E1.S6 owns the wording.
+                            : "the request timed out");
+            }
 
             await Task.Delay(300 * (attempt + 1), ct);
         }
 
-        if (json == null)
-            throw new TranslationException(TranslationErrorKind.Network,
-                "Couldn't reach the translation service. Check your Internet connection.");
+        // Unreachable by construction: the third attempt always sets json or throws — every status
+        // branch and the transport catch above end in a throw once `attempt == 2`. The `Network`
+        // throw that used to stand here was dead code for the same reason (recorded by E1.S2's
+        // review); its sentence now lives on the last-attempt transport failure, where it is
+        // actually reached. The compiler cannot follow that, hence the single `!` below.
 
         // Response shape: [[["translated","original",...], ...], ...]
         try
         {
-            using var doc = JsonDocument.Parse(json);
+            using var doc = JsonDocument.Parse(json!);
             var sb = new StringBuilder();
             var segments = doc.RootElement[0];
             foreach (var seg in segments.EnumerateArray())

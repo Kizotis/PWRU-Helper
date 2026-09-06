@@ -95,54 +95,55 @@ public class DeepLTranslator : ITranslator
         // Header auth is DeepL's recommended scheme (keeps the key out of the body/logs).
         req.Headers.TryAddWithoutValidation("Authorization", "DeepL-Auth-Key " + _key);
 
-        HttpResponseMessage resp;
+        string json;
+        // The send AND the body read sit in the same try: a failure while reading the response used
+        // to escape raw, past the TranslationException contract the FallbackTranslator and the LIVE
+        // loop are written against. (With HttpClient's default ResponseContentRead the body is
+        // already buffered by SendAsync, so that escape is defensive today — but the contract is
+        // the point, not the odds.)
         try
         {
-            resp = await _http.SendAsync(req, ct);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (OperationCanceledException)
-        {
-            // On .NET 8 an HttpClient timeout surfaces as a TaskCanceledException (a subclass of
-            // OperationCanceledException) with the caller's ct NOT cancelled. Turn it into a
-            // TranslationException so the Google fallback kicks in instead of the raw OCE bubbling
-            // up past the FallbackTranslator (which correctly refuses to swallow real cancellations).
-            throw new TranslationException(TranslationErrorKind.Timeout,
-                "DeepL timed out — check your connection or try again.");
-        }
-        catch (HttpRequestException)
-        {
-            throw new TranslationException(TranslationErrorKind.Network,
-                "Couldn't reach DeepL. Check your Internet connection.");
-        }
+            using var resp = await _http.SendAsync(req, ct);
 
-        using (resp)
-        {
             if (!resp.IsSuccessStatusCode)
             {
                 int code = (int)resp.StatusCode;
-                // A key is always sent on this path (the empty-key case threw above), so 403 is a
-                // rejected key, not a bot block — §4.2 rows 5 and 7. Messages are unchanged.
-                var (kind, message) = code switch
+                // The single classification point (§4.2). A key is always sent on this path (the
+                // empty-key case threw above), so the mapper reads 403 as a rejected key and not
+                // as a bot block. No bodyHead: DeepL signals an exhausted allowance with its own
+                // 456, so row 6's envelope test has nothing to read here — Azure (E6) is the
+                // provider that will pass one. Every sentence below is unchanged.
+                var kind = ProviderErrorMapper.Classify(resp, bodyHead: null, transport: null,
+                    keyWasSent: true, ct);
+                var message = code switch
                 {
-                    401 or 403 => (TranslationErrorKind.AuthFailed,
-                        "DeepL rejected the API key — check it in Settings."),
-                    456 => (TranslationErrorKind.QuotaExhausted,
-                        "DeepL free quota is used up for this month."),
-                    429 => (TranslationErrorKind.RateLimited,
-                        "DeepL is rate-limiting right now — try again shortly."),
-                    // §4.2 row 10: a 5xx is Unavailable at every provider. It shares the generic
-                    // sentence below (unchanged), but it must not land in Unknown — Unknown is the
-                    // last resort and a DeepL outage is the commonest failure there is.
-                    >= 500 => (TranslationErrorKind.Unavailable, $"DeepL service error (HTTP {code})."),
-                    _ => (TranslationErrorKind.Unknown, $"DeepL service error (HTTP {code})."),
+                    401 or 403 => "DeepL rejected the API key — check it in Settings.",
+                    456 => "DeepL free quota is used up for this month.",
+                    429 => "DeepL is rate-limiting right now — try again shortly.",
+                    _ => $"DeepL service error (HTTP {code}).",
                 };
-                throw new TranslationException(kind, message);
+                throw new TranslationException(kind, message,
+                    ProviderErrorMapper.RetryAfter(resp, DateTimeOffset.UtcNow));
             }
 
-            var json = await resp.Content.ReadAsStringAsync(ct);
-            return Parse(json);
+            json = await resp.Content.ReadAsStringAsync(ct);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex) when (ex is OperationCanceledException or HttpRequestException)
+        {
+            // The OCE trap: on .NET 8 an HttpClient timeout is a TaskCanceledException with the
+            // caller's ct NOT cancelled. The filter above takes every real cancellation, so the
+            // mapper sees only the timeout — and says so, which is what makes the Google fallback
+            // kick in instead of a raw OCE bubbling up past the FallbackTranslator.
+            throw new TranslationException(
+                ProviderErrorMapper.Classify(resp: null, bodyHead: null, transport: ex,
+                    keyWasSent: true, ct),
+                ex is HttpRequestException
+                    ? "Couldn't reach DeepL. Check your Internet connection."
+                    : "DeepL timed out — check your connection or try again.");
+        }
+
+        return Parse(json);
     }
 
     /// <summary>Pull the ordered translations out of a DeepL JSON response.</summary>
@@ -159,6 +160,10 @@ public class DeepLTranslator : ITranslator
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
         {
+            // §4.2 row 12: a success whose body is not the provider's shape. The parser is what
+            // DETECTS that — the mapper only names it — and this method has no HttpResponseMessage
+            // to hand it, so the Kind is stated here and pinned against Classify by
+            // ProviderErrorMapperTests (a 200 with an unparseable body ⇒ BadResponse).
             throw new TranslationException(TranslationErrorKind.BadResponse,
                 "DeepL returned an unexpected response.");
         }
