@@ -690,6 +690,8 @@ fragility of §7.1. When a key is present it is therefore also the **safest** ti
 
 ### 7.6 `BergamotTranslator` — **prototype only**, Phase 2
 
+> **Amendment A-1 (Winston, 2026-09-06, after the owner's answer to OQ-C).** The owner asked for "a very small, very fast, one-click local translator that takes over when internet requests fail, even at a RAM cost". That is this component, with three changes to the text below: **(a)** installation is **one click** from the About tab (download of the engine + the needed language pairs on explicit consent, per `ux-mode-degrade.md` §4; `OfflineFallbackEnabled` is written by the Download/Remove actions, ruling R-4); **(b)** once installed, the model is **loaded on the first fallback use and kept loaded while LIVE is running** — it is unloaded only after LIVE stops and an idle timeout elapses, not on every idle window; **(c)** the RAM budget line below is **relaxed by the owner's explicit acceptance** (+127–310 MiB while active). Everything else stands: last tier of both chains, downstream of `SlangGlossary.Expand` (I6), prototype with a measured go/no-go (U6/U7), no dependency of any other component on it. True LLMs (Qwen/Gemma/Phi, 1–3 GB, seconds per line on CPU) remain rejected per `benchmark-fournisseurs.md` §6.
+
 Not a shipping component. It is in this architecture so the prototype is built against the same invariants.
 
 | | |

@@ -166,3 +166,34 @@ Paige (WD/VD): `SYNTHESE.md` — per problem: top-3 causes with evidence, quick 
 - **`SYNTHESE.md` validated** (Paige: 28 claims spot-checked, 23/23 links, six diagrams rendered). It is the entry point for the owner and any contributor; this README stays the index.
 - **Pending owner questions carried to Phase 3** (from `architecture-cible.md` §15.3): **OQ-A** batching fallback if newlines are lost on `translate_a/t` (per-line ≈2× volume vs revisiting the declined multi-`q=`); **OQ-B** whether a paused LIVE loop keeps capturing/OCR-ing (architecture says no); **OQ-C** LLM write-path tier parked or revisited after increment 5; **OQ-D** close PR #49 (CC BY-NC) — prerequisite for SignPath.
 - **Owner's personal to-do** (`SYNTHESE.md` §7.2): close PR #49 · apply to SignPath Foundation · run the three `tools/diagnostics/` scripts on one slow, Defender-only machine with a **downloaded** exe (before/after `Unblock-File`, portable vs MSI) · answer OQ-A–C · send nothing more to Google from this connection · say "go" for Phase 3.
+
+### Owner's answers to OQ-A–C and Phase 3 go (2026-09-06)
+| # | Question | Owner's answer | Consequence |
+|---|----------|----------------|-------------|
+| OQ-A | Batching fallback if `\n`-joined batches are lost on `translate_a/t?client=dict-chrome-ex` | **One request per line** | ≈2× LIVE volume in that case, bounded by the rate ceiling and the gate; multi-`q=` stays a declined non-feature. |
+| OQ-B | Paused LIVE keeps capturing/OCR-ing? | **No — full pause** | Feed freezes with a countdown; zero CPU while paused; no retry queue to bound. As designed in `architecture-cible.md` §9.1. |
+| OQ-C | LLM API tier | Owner asked instead for a **small, fast, one-click, offline local translator that takes over when internet requests fail, even at a RAM cost** | That is **Bergamot** (already decision 4). **Architecture amendment A-1:** Bergamot stays the last tier of both chains, but (a) one-click install from the About tab (download on consent, as in `ux-mode-degrade.md` §4), (b) once installed it is **kept loaded while LIVE is running** (unloaded only after LIVE stops + idle timeout), (c) the RAM budget line in `architecture-cible.md` §7 is relaxed by the owner's explicit acceptance (+127–310 MiB while active). True LLMs (Qwen/Gemma/Phi, 1–3 GB, seconds per line on CPU) remain rejected per the benchmark. The LLM **API** tier is parked. |
+| Go | Phase 3 | **Go, complete** | John (CE + IR) ∥ Murat/TEA (test design), then Amelia (SP + CS). |
+
+### Architect's rulings on the test architect's questions (Winston, 2026-09-06 — binding for the stories)
+| # | Question (from `03-stories/test-plan.md`) | Ruling |
+|---|---|---|
+| OQ-e | `LastRunVersion` seeding vs "`Migrate` gains no step" (§12) | **No `Migrate` step.** `LastRunVersion` absent/empty ⇒ treated as "version changed" ⇒ the expectation toast shows once, then the current version is stored. TP-SET-02 and TP-SET-10 both pass. |
+| GAP-3 | UX state S6 (no network) kept LIVE OCR-ing vs §9.1 full pause | **Full pause is universal** (owner's OQ-B). S6 behaves like S3/S5: no capture, no OCR, countdown/“no network” status. Sally's S6 text is amended accordingly in the stories. |
+| OQ-a | Read-once request priority | **`Interactive`** — it is a user click. |
+| OQ-b | Does a half-open probe consume a rate-ceiling token? | **Yes** — it is a real request; one rule, no special case. |
+| OQ-c | No gate state-change event → how does the status chip update? | **Poll at 1 Hz** from the countdown timer Sally already requires (≤ 1 Hz repaint). No event, `Services/` stays passive. |
+| GAP-4 | UX copy testable only as one constant table | **Yes:** `Services/UserMessages.cs`, a UI-free static class holding every user-facing sentence keyed by error kind / state; tests assert on it; XAML/code-behind reads it. |
+| GAP-1/2 | No automated guard for I6 (glossary upstream of every engine) and I7 (per-message source) on the new chain | **Add the two pin tests** (S-size) in the chain story. |
+
+### Architect's rulings on the readiness report's gaps (Winston, 2026-09-06 — binding for the stories)
+| # | Gap (from `03-stories/readiness-report.md`) | Ruling |
+|---|---|---|
+| R-2 | No gate state-changed notification for the UI | Same as OQ-c: **poll at 1 Hz**; `ProviderGate.Snapshot()` returns an immutable record `{State, BlockedUntil, Strikes, LastKind}`. No events out of `Services/`. |
+| R-3 | Nothing carries "which provider answered / why a higher tier was skipped" (needed for UX sentences S2 vs S3) without touching `ITranslator` (I1) | **`ChainTranslator.LastOutcome`** — an immutable record `{ProviderId, Skipped: [(ProviderId, Reason)], RetryAt?, Kind?}` set after every call, read by the code-behind (which owns the chain instance). `ITranslator` unchanged. |
+| R-4 | `OfflineFallbackEnabled` setting (§12) vs UX "downloaded ⇒ enabled, no toggle" (§4.2) | **Both are right:** the setting exists and is written by the About-tab actions — Download ⇒ `true`, Remove ⇒ `false`. No separate checkbox. |
+| R-5 | `LastRunVersion` seeding vs no `SettingsVersion` bump | Already ruled (OQ-e): **no `Migrate` step**; empty ⇒ "changed" ⇒ toast once. |
+| R-6 | No-network state S6 keeps LIVE OCR-ing (UX) vs full pause (architecture + owner's OQ-B) | Already ruled (GAP-3): **full pause is universal.** |
+| R-7 | Setting names disagree (`UseKeyForReading` vs `AzureForReading`; `OfflineFallbackEnabled` vs `OfflineEngineEnabled`) | **Architecture §12 names win:** `AzureApiKey`, `AzureRegion`, `UseKeyForReading`, `OfflineFallbackEnabled`, `LastRunVersion`. Stories use these; the UX doc is read with this mapping. |
+| R-8 | Amendment A-1 (Bergamot) lived only in this README; `architecture-cible.md` §7.6 read as superseded | **Applied in place** — an "Amendment A-1" block now opens §7.6. |
+| R-12 | No affected machine has ever been measured | **Owner task** (E9 diagnostics campaign) — it gates U6/U7 and every P1 threshold; nothing in E1–E3 depends on it. |
