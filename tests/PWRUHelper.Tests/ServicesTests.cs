@@ -158,6 +158,50 @@ public class TextChunkerTests
         Assert.Equal(text, string.Concat(chunks));
     }
 
+    /// <summary>
+    /// The bug E3.S4 found by becoming the splitter's second caller: <c>HardSplit</c> walked UTF-16
+    /// <b>code units</b>, so a budget that ran out between the two halves of a surrogate pair cut
+    /// the pair in half — one chunk ending in a lone high surrogate, the next starting with the lone
+    /// low one. Neither is valid UTF-8, so both encode to U+FFFD on their way into the query string
+    /// and the user's emoji comes back as two replacement characters, silently, in the middle of a
+    /// long message.
+    ///
+    /// <para>Asserted as a UTF-8 <b>round trip</b> rather than by looking for surrogates, because
+    /// that is exactly the harm: the query string is UTF-8, and a chunk that does not survive the
+    /// encode is a chunk whose text changed. The input is built to land the boundary inside the
+    /// pair on purpose — 1497 ASCII bytes leave three of the emoji's four.</para>
+    /// </summary>
+    [Fact]
+    public void ChunkText_NeverSplitsInsideASurrogatePair()
+    {
+        var text = new string('a', 1497) + "\U0001F600" + new string('a', 600);
+        const int limit = 1500;
+
+        var chunks = TextChunker.ChunkText(text, limit).ToList();
+
+        Assert.Equal(text, string.Concat(chunks));                       // nothing lost or duplicated
+        Assert.All(chunks, c => Assert.True(Encoding.UTF8.GetByteCount(c) <= limit));
+        Assert.All(chunks, c => Assert.Equal(c, Encoding.UTF8.GetString(Encoding.UTF8.GetBytes(c))));
+        Assert.All(chunks, c => Assert.False(char.IsHighSurrogate(c[^1]), "a chunk ends mid-pair"));
+        Assert.All(chunks, c => Assert.False(char.IsLowSurrogate(c[0]), "a chunk starts mid-pair"));
+        Assert.Contains(chunks, c => c.Contains("\U0001F600", StringComparison.Ordinal));
+    }
+
+    /// <summary>Ill-formed input is carried through unchanged rather than repaired: the property the
+    /// whole class rests on is that the chunks concatenate back to the input, and a splitter that
+    /// substituted U+FFFD for a lone surrogate would be editing the user's text on its way to a
+    /// translator. (This is why the fix walks chars in pairs instead of enumerating runes, which
+    /// substitutes.)</summary>
+    [Fact]
+    public void ChunkText_LeavesAnUnpairedSurrogateExactlyAsItFoundIt()
+    {
+        var text = new string('a', 1400) + '\uD83D' + new string('a', 400);   // a high surrogate, alone
+
+        var chunks = TextChunker.ChunkText(text, 1500).ToList();
+
+        Assert.Equal(text, string.Concat(chunks));
+    }
+
     /// <summary>Order is content: the chunks are stitched back together in the order they came out,
     /// so a splitter that returned them out of order would silently scramble a translation. Asserted
     /// on distinguishable sentences, which <c>string.Concat</c> equality alone cannot do when every

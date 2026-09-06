@@ -102,7 +102,7 @@ development_status:
   e3-s1-capture-dict-chrome-ex-batch-spike-u1: blocked-owner   # U1; ONE request, owner-designated connection
   e3-s2-capture-edge-shapes-spike-u2: blocked-owner            # U2; hard gate on e3-s5, no code before it
   e3-s3-chain-translator: done                                 # order 1 — riskiest unblocked story (R-01/R-03)
-  e3-s4-google-dict-translator: ready-for-dev                  # order 3 — TextChunker landed (e3-s6); NOT gated on U1
+  e3-s4-google-dict-translator: review                         # order 3 — landed per-line (OQ-A); U1 flips one policy flag
   e3-s5-edge-translator: blocked-dep                           # depends on e3-s2; may end 'cancelled' (R1 raised)
   e3-s6-demote-gtx-extract-textchunker: done                   # order 2 — pulled ahead: e3-s4 needs TextChunker
   e3-s7-build-both-chains-once: ready-for-dev                  # order 5 — the only ctor change; TP-START-02 applies

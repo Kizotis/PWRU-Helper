@@ -17,7 +17,12 @@ namespace PWRUHelper.Tests;
 /// </summary>
 public class TranslationPolicyTests
 {
-    private static readonly string[] Grades = { "[CONFIRMED]", "[MEASURED]", "[ASSUMED]" };
+    /// <summary>The vocabulary the table is graded in. <c>[UNKNOWN]</c> joined it with E3.S4: a
+    /// value that ships at the safe end of an open question is neither confirmed, nor measured, nor
+    /// calibrated to a reported range — and grading it <c>[ASSUMED]</c> to satisfy the scan would
+    /// have been the scan lying about the evidence, which is the one thing this file exists to stop.
+    /// A fourth word is cheap; a mis-graded number is not.</summary>
+    private static readonly string[] Grades = { "[CONFIRMED]", "[MEASURED]", "[ASSUMED]", "[UNKNOWN]" };
 
     // ---- AC 1: internal static, every member const or static readonly, nothing else ----------
 
@@ -90,6 +95,12 @@ public class TranslationPolicyTests
         Assert.Equal(500, TranslationPolicy.BackoffBaseMs);
         Assert.Equal(500, TranslationPolicy.CacheCapacityToday);
         Assert.Equal(1500, TranslationPolicy.MaxQueryBytes);
+
+        // OQ-A's shipped answer, pinned so that turning it on is a deliberate act with a red test
+        // in front of it rather than a one-character edit nobody reviews. E3.S1's capture flips
+        // this line and TP-PRV-04 together, or neither.
+        Assert.False(TranslationPolicy.GoogleDictBatchJoinEnabled,
+            "the \\n-joined batch stays off until U1 is settled by a capture (OQ-A, architecture-cible §7.1)");
     }
 
     [Fact]

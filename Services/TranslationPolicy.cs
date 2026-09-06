@@ -11,6 +11,11 @@ namespace PWRUHelper.Services;
 /// <item><c>[MEASURED]</c> — a value this project measured; the comment says where and when.</item>
 /// <item><c>[ASSUMED]</c> — calibrated to a reported range and never measured; the comment says what
 ///       would settle it.</item>
+/// <item><c>[UNKNOWN]</c> — the value ships at the SAFE end of an open question, and the comment
+///       names the open question and the capture that would close it. Different from
+///       <c>[ASSUMED]</c> on purpose: an assumption is calibrated to something, this is not
+///       calibrated to anything — it is the answer that is correct whether the question is ever
+///       settled or not.</item>
 /// </list>
 ///
 /// A table and nothing else: no methods, no state, no I/O, and no dependency — not even on
@@ -42,6 +47,25 @@ internal static class TranslationPolicy
     /// typical URL limits.</summary>
     public const int MaxQueryBytes = 1500;          // [CONFIRMED] now read at GoogleGtxTranslator.cs:111, :116, :135
                                                     // (:116 passes it on to Services/TextChunker.cs, E3.S6)
+
+    /// <summary>Whether <c>GoogleDictTranslator</c> may translate a multi-line group as ONE
+    /// <c>\n</c>-joined <c>q</c>, splitting the answer back on <c>\n</c>. <b>False</b>, which is
+    /// OQ-A's settled answer: <c>dict-chrome-ex</c> returns one string rather than gtx's segments,
+    /// and whether the newlines survive the round trip is U1 — the single most important [UNKNOWN]
+    /// of <c>architecture-cible.md</c> §7.1. Joining on a guess would silently glue a squad's
+    /// thirteen chat lines into one sentence.
+    ///
+    /// <para>It lives here rather than in the provider so the flip is a one-line change to a graded
+    /// table with a test on it, not an edit inside a request path. E3.S1's capture
+    /// (<c>google-dict-batch.txt</c>) is what flips it, in the same commit that turns TP-PRV-04 from
+    /// the negative pin ("3 lines cost 3 requests") into the positive one. Multi-<c>q=</c> is not
+    /// the alternative — it is a declined non-feature (<c>project-context.md</c>).</para>
+    ///
+    /// <para><c>static readonly</c> rather than <c>const</c>: a <c>const false</c> would make the
+    /// dormant join path unreachable code, and the compiler would report the very branch this value
+    /// exists to keep compiled, tested-adjacent and one edit from live.</para></summary>
+    // [UNKNOWN] until U1 — architecture-cible.md §7.1; settled by E3.S1's capture, test-plan TP-PRV-04
+    public static readonly bool GoogleDictBatchJoinEnabled = false;
 
     // ---- the retry policy (§5.6) ---------------------------------------------------------------
     // Read by Services/HttpProviderCore.cs (E2.S5), which replaced the three-attempt / 300 ms-linear
