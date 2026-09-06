@@ -641,8 +641,8 @@ public class RequestLogTests : GatesTestBase
 
             var deepl = new FakeHandler().Respond(HttpStatusCode.Forbidden, "{}");
             var google = new FakeHandler().Respond(HttpStatusCode.TooManyRequests, "{}");
-            var chain = new FallbackTranslator(new DeepLTranslator(key, deepl),
-                                               new TranslationService(google));
+            var chain = ChainTranslator.Of((ProviderIds.DeepL, new DeepLTranslator(key, deepl)),
+                                           (ProviderIds.GoogleGtx, new TranslationService(google)));
 
             await Assert.ThrowsAsync<TranslationException>(
                 () => chain.TranslateAsync(Sentinel, "ru", "zy"));

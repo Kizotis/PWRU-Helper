@@ -219,16 +219,23 @@ public partial class MainWindow
     //  TRANSLATION BACKEND (Google default, optional DeepL)
     // ============================================================
 
-    /// <summary>Build the WRITING translator from settings: DeepL (with Google fallback) when an API
-    /// key is set, otherwise plain Google — always wrapped in the cache. Rebuilt on key change.
+    /// <summary>Build the WRITING translator from settings: DeepL in front of Google when an API
+    /// key is set, otherwise Google alone — always wrapped in the cache. Rebuilt on key change.
     /// The screen-reading side never comes through here: it uses <c>_readTranslator</c> (Google only),
-    /// because a live loop translating every new chat line would eat a DeepL quota in one session.</summary>
+    /// because a live loop translating every new chat line would eat a DeepL quota in one session.
+    ///
+    /// <para>E3.S3 swapped <c>FallbackTranslator</c> for <see cref="ChainTranslator"/>, so a provider
+    /// whose gate is open is now SKIPPED instead of being spent a request on. The tiers are named by
+    /// id and the gates are resolved inside <c>Of</c> — this file may not name <c>ProviderGates</c>
+    /// (TP-START-02). The real §8.1 order (<c>google-dict → google-gtx</c> for reading, DeepL in
+    /// front for writing) is <b>E3.S7</b>'s; this keeps today's two tiers exactly as they were.</para></summary>
     private ITranslator BuildTranslator()
     {
         var key = (_settings.DeepLApiKey ?? "").Trim();
         ITranslator backend = key.Length > 0
-            ? new FallbackTranslator(new DeepLTranslator(key), new TranslationService())
-            : new TranslationService();
+            ? ChainTranslator.Of((ProviderIds.DeepL, new DeepLTranslator(key)),
+                                 (ProviderIds.GoogleGtx, new TranslationService()))
+            : ChainTranslator.Of((ProviderIds.GoogleGtx, new TranslationService()));
         return new CachingTranslator(backend);
     }
 

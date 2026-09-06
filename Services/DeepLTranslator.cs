@@ -9,7 +9,7 @@ namespace PWRUHelper.Services;
 /// paid keys hit api.deepl.com. DeepL translates several <c>text</c> params in ONE request and
 /// returns them in order, so the batch path has none of the join/split fragility of the Google
 /// one. Problems surface as <see cref="TranslationException"/> so the Google-fallback wrapper
-/// (see <see cref="FallbackTranslator"/>) can take over.
+/// (see <see cref="ChainTranslator"/>) can take over.
 /// </summary>
 public class DeepLTranslator : ITranslator
 {
@@ -104,7 +104,7 @@ public class DeepLTranslator : ITranslator
         if (outp.Count == lines.Count) return outp;
 
         // DeepL returns exactly one translation per input, in order. A count mismatch means the
-        // response is malformed — throw so the Google fallback (see FallbackTranslator) takes over.
+        // response is malformed — throw so the next tier of the chain (Google) takes over.
         // (Previously we padded the missing slots with the untranslated source lines, but that
         // bypassed the fallback AND cached raw Russian source as if it were a translation.)
         throw new TranslationException(TranslationErrorKind.BadResponse,

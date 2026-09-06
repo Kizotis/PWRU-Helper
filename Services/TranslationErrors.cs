@@ -40,6 +40,21 @@ public class TranslationException : Exception
     /// <summary>Which provider produced the failure. For the diagnostic log only — never shown.</summary>
     public string? ProviderId { get; }
 
+    /// <summary>
+    /// Ruling <b>E3-b</b>: this failure cost <b>no request</b> — the gate refused the call before
+    /// anything left the machine (an open window, or a rate-ceiling wait past
+    /// <c>MaxSpacingWaitMs</c>). Set only by <c>HttpProviderCore.Paused</c>, which is the only place
+    /// that can know it.
+    ///
+    /// <para>It exists because <see cref="ChainTranslator"/> has to tell "this tier was skipped"
+    /// from "this tier tried and failed" and, without it, cannot: a refusal raised from inside the
+    /// core carries the gate's last <see cref="Kind"/>, which is indistinguishable from the real 429
+    /// the provider once answered. A skipped tier must not become the sentence the player reads
+    /// while a healthy tier is still untried (AC 4), and it must not be counted as an engine that
+    /// was tried. One bool, no public surface, no new type.</para>
+    /// </summary>
+    internal bool NotSent { get; init; }
+
     // No message-only constructor, deliberately: it is what forces every throw site to state a Kind.
     public TranslationException(TranslationErrorKind kind, string message,
         DateTimeOffset? retryAt = null, string? providerId = null) : base(message)

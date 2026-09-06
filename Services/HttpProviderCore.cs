@@ -334,9 +334,12 @@ internal sealed class HttpProviderCore
     ///
     /// <para>The wait is bounded rather than a loop on a condition: the ceiling is a token bucket
     /// and another caller may take the token this one just waited for, and a request path that can
-    /// spin is worse than a refusal. <b>E3.S3</b> owns the chain's own version of this rule
-    /// (§5.4's <c>MaxSpacingWaitMs</c>, "move on to the next tier"); until it exists, raising is the
-    /// honest answer.</para>
+    /// spin is worse than a refusal. <b>E3.S3 landed the other half</b>, and not the way §5.4 read
+    /// it: the chain does <i>not</i> repeat this consult (ruling E3-a — one admission per logical
+    /// call, or the ceiling halves and the half-open probe is stolen by a caller that cannot report
+    /// it). It recognises the refusal this method raises by
+    /// <see cref="TranslationException.NotSent"/> and moves on to the next tier — so §5.4's "move on"
+    /// is the chain's, while the wait, its bound and the probe stay here, once.</para>
     /// </summary>
     /// <returns>The probe token to quote when reporting — 0 for an ordinary admission (ruling
     /// E2-h).</returns>
@@ -393,7 +396,13 @@ internal sealed class HttpProviderCore
         // stores a Kind only for the rows §5.3 reacts to, and the row this file may not name is
         // not one of them (I3).
         var kind = gate.Snapshot().LastKind ?? TranslationErrorKind.RateLimited;
-        return new TranslationException(kind, _options.PausedMessage, retryAt, _options.ProviderId);
+        // NotSent is the whole of ruling E3-b: this is the one place in the app that KNOWS the
+        // request never happened, and ChainTranslator cannot tell a refusal from a real 429 without
+        // being told. Set here and nowhere else.
+        return new TranslationException(kind, _options.PausedMessage, retryAt, _options.ProviderId)
+        {
+            NotSent = true,
+        };
     }
 
     /// <summary>One report per admission, and exactly one: a granted probe that never reports
