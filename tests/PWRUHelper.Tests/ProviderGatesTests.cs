@@ -154,7 +154,12 @@ public class ProviderGatesTests : GatesTestBase
             ProviderGates.ResetForTests();
 
             Assert.Null(ProviderGates.PathOverride);
-            Assert.Null(ProviderGates.TransitionHook);
+            // Back to the PRODUCTION default rather than to null: since E2.S6 the hook is where the
+            // gate log line hangs, installed as a field initialiser, so "put the process back where
+            // it started" means reinstalling it. Nulling it here would let one case that stubs the
+            // hook leave the app's own observability off for the rest of the run.
+            Assert.Equal((Action<string, GateState, GateSnapshot>)GateLog.Note,
+                         ProviderGates.TransitionHook);
         }
 
         // The wall clock is back: "now" is a real instant again, not the fixture's 2001-01-01 12:00.

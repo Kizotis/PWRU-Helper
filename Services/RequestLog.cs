@@ -482,23 +482,35 @@ internal sealed class LogSuppressor
     private readonly object _gate = new();
     private readonly TimeSpan _window;
     private readonly int _threshold;
+    private readonly string _prefix;
+    private readonly string _separator;
 
     private string? _signature;     // provider + status of the run in progress
     private int _run;               // how many lines that run has seen, written or not
     private int _held;              // how many of them were not written
     private DateTimeOffset _since;  // when the current summary window opened
 
+    /// <param name="prefix">The family the summary line belongs to — <c>"tr "</c> for E1.S5's
+    /// per-request lines, <c>"gate "</c> for E2.S6's transition lines. A summary that announced
+    /// itself as another family's line would be a report that reads as two streams.</param>
+    /// <param name="separator">What sits between the provider and the second half of the key, so
+    /// the summary is spelled in the grammar of the lines it replaces: <c>" status="</c> for a
+    /// request line, a plain space for a gate line, whose second half is already an edge
+    /// (<c>OPEN-&gt;HALF-OPEN</c>).</param>
     internal LogSuppressor(int threshold = Threshold,
-        int windowSeconds = RequestLog.BurstWindowSeconds)
+        int windowSeconds = RequestLog.BurstWindowSeconds,
+        string prefix = "tr ", string separator = " status=")
     {
         _threshold = threshold;
         _window = TimeSpan.FromSeconds(windowSeconds);
+        _prefix = prefix;
+        _separator = separator;
     }
 
     /// <summary>Records one line about to be emitted and answers whether to write it.</summary>
     internal Decision Note(string provider, string status, DateTimeOffset now)
     {
-        var signature = provider + " status=" + status;
+        var signature = provider + _separator + status;
         lock (_gate)
         {
             if (signature != _signature)
@@ -535,7 +547,7 @@ internal sealed class LogSuppressor
     {
         if (_held == 0) return null;
         var seconds = (long)Math.Max(0, (now - _since).TotalSeconds);
-        var line = $"tr provider={_signature} suppressed={_held} in={seconds}s " +
+        var line = $"{_prefix}provider={_signature} suppressed={_held} in={seconds}s " +
                    "(identical lines not written)";
         _held = 0;
         _since = now;

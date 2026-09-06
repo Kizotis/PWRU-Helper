@@ -176,12 +176,22 @@ internal static class ProviderGates
 
             var normalisedAny = false;
             foreach (var pair in state.Providers)
+            {
                 // For(id), not a fresh gate: MainWindow's field initializer may already have handed
                 // this id's gate to a chain, and seeding a different instance would restore the pause
                 // into an object nobody consults. TrySeedState declines a gate that has already
                 // recorded something in this process — live evidence beats a file.
-                if (For(pair.Key).TrySeedState(pair.Value, out var normalised) && normalised)
-                    normalisedAny = true;
+                var gate = For(pair.Key);
+                if (!gate.TrySeedState(pair.Value, out var normalised)) continue;
+                if (normalised) normalisedAny = true;
+
+                // Ruling E2-b's fifth logged edge (E2.S6). It is written here, and NOT announced
+                // through NoteTransition, because a seed is not a §5.2 transition — nothing moved,
+                // the gate was born in that state — and announcing it as one would queue a debounced
+                // save on every single start, which is the churn §5.7 refuses. Whether the file needs
+                // correcting is a separate question, answered by `normalisedAny` below.
+                GateLog.Reload(pair.Key, gate.Snapshot());
+            }
 
             Volatile.Write(ref _loaded, true);
 
@@ -316,8 +326,16 @@ internal static class ProviderGates
     /// (<c>LastKind</c>), the strikes and the <c>blockedUntil</c>. That is exactly E2.S6's
     /// <c>OnTransition(from, to, kind, strikes, blockedUntil)</c> and exactly what E2.S4 needs to
     /// decide whether a transition is one of the four §5.2 edges worth a write.</para>
+    /// <para><b>E2.S6 fills it in, here</b> — as a field initialiser and not from any startup path.
+    /// The registry is the only thing that knows an id, so the log line has to hang off the registry;
+    /// installing it from <c>MainWindow</c> would put this type on a startup path and fail
+    /// TP-START-02's scan (I10), and installing it lazily would lose the transitions that happen
+    /// before whatever triggers the installation. A field initialiser costs one delegate and touches
+    /// no disk: <see cref="GateLog"/>'s own initialiser allocates a suppressor and nothing else.
+    /// <see cref="ResetForTests"/> puts this default back rather than nulling it, so a case that
+    /// stubs the hook cannot leave the app silent for the rest of the run.</para>
     /// </summary>
-    internal static Action<string, GateState, GateSnapshot>? TransitionHook;
+    internal static Action<string, GateState, GateSnapshot>? TransitionHook = GateLog.Note;
 
     /// <summary>Announce a transition to whatever E2.S4/E2.S6 installed. Exception-free by contract:
     /// a save or a log line must never be able to fail a translation.</summary>
@@ -379,7 +397,8 @@ internal static class ProviderGates
         Registry.Clear();
         _clock = () => DateTimeOffset.UtcNow;
         PathOverride = null;                        // belt to TempGateState's braces (IS-1/IS-3)
-        TransitionHook = null;
+        TransitionHook = GateLog.Note;              // the production default, not null (E2.S6)
+        GateLog.ResetSuppression();                 // the storm valve's run is process-wide too
         SaveDebounceMs = 1000;
         // the next case reloads
         lock (Sync) { Volatile.Write(ref _loaded, false); _unknown = null; _keepFile = false; }

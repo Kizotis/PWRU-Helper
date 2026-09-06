@@ -475,17 +475,25 @@ public class ProviderGateTests
         // I3, as a test. A genuine user cancel is not a provider failure; a timeout is (an OCE whose
         // token is NOT cancelled maps to Timeout, and the mapper draws that line — the gate must not
         // redraw it). This file may name the kind; no production source may (TP-MAP-17).
-        var (gate, clock) = NewGate();
+        var clock = new FakeClock();
+        var edges = 0;
+        var gate = new ProviderGate(clock.Read, onTransition: (_, _) => edges++);
         gate.ReportFailure(TranslationErrorKind.RateLimited);
         gate.ReportSuccess(TakeProbe(gate, clock));
         clock.AdvanceMinutes(1);
         gate.ReportSuccess();                                   // a clean run is under way
 
         var before = gate.Snapshot();
+        var announced = edges;
         gate.ReportFailure(TranslationErrorKind.Cancelled);
         gate.ReportFailure(TranslationErrorKind.Cancelled, clock.Now + TimeSpan.FromHours(1));
 
         Assert.Equal(before, gate.Snapshot());                  // whole-state equality, not field by field
+
+        // …and since E2.S6 that has to mean the LOG too. A row that announces no transition can
+        // produce no line by construction, which is a stronger statement than counting lines:
+        // GateLoggingTests.TP_GATE_12_a_cancel_writes_no_line asserts the other end of the same wire.
+        Assert.Equal(announced, edges);
 
         // cleanSince is not in the snapshot (ruling R-2 fixes its four fields), so it is asserted
         // where it is observable: the clean run must still complete on its original schedule.
