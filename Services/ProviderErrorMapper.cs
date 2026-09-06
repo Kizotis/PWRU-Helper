@@ -1,4 +1,5 @@
 using System.Net.Http;
+using System.Text;
 
 namespace PWRUHelper.Services;
 
@@ -14,8 +15,10 @@ namespace PWRUHelper.Services;
 /// <b>total</b>: an outcome no rule matches is <c>Unknown</c>, never a guess. <c>Unknown</c> in a
 /// field log is a bug report about this file.
 ///
-/// Pure and headless (I2): no <c>Logging</c>, no I/O, no UI type. It <i>reads</i> a body head and
-/// never stores or forwards one (I11) — E1.S5 is the only story that writes anything to the log.
+/// Pure and headless (I2): no <c>Logging</c>, no I/O, no UI type. It <i>reads</i> a body and stores
+/// nothing (I11); the single thing it hands back is row 11's de-tagged 120-character head of the
+/// <b>server's</b> page — never the user's text — and E1.S5 is still the only story that writes
+/// anything to the log.
 /// </summary>
 internal static class ProviderErrorMapper
 {
@@ -40,11 +43,40 @@ internal static class ProviderErrorMapper
     // [ASSUMED] architecture-cible.md §4.2 row 6 — never seen from a real Azure key by this project.
     internal static readonly string[] QuotaMarkers = { "quota", "out of credit", "limit exceeded" };
 
+    /// <summary>§4.3 step 2 — how much of the body the '&lt;' sniff may look at.</summary>
+    private const int SniffPrefixChars = 200;
+
+    /// <summary>§4.3 step 3 — how much DE-TAGGED text the markers are matched against.</summary>
+    private const int MarkerHeadChars = 400;
+
+    /// <summary>§10.1 — how much of that head may travel to the log line (I11).</summary>
+    private const int LogHeadChars = 120;
+
+    /// <summary>The de-tagger's input bound. It is NOT 400: the measured §3.1 page spends its first
+    /// ~700 characters on a &lt;style&gt; block and a six-tag logo, so a 400-character *input* scan
+    /// would stop before "automated queries" and classify the one body this story exists for as an
+    /// unrecognised page. What is bounded is both ends — at most this many characters read, at most
+    /// <see cref="MarkerHeadChars"/> produced — which is what "no catastrophic backtracking" asks
+    /// for; a full abuse page is ~1.1 KB, so this is ~8× the real shape.</summary>
+    private const int MaxScanChars = 8192;
+
     // Returns Cancelled ONLY when ct.IsCancellationRequested. The caller's contract is:
     //   if (kind == Cancelled) throw;   // rethrow the original OCE, never wrap it
     internal static TranslationErrorKind Classify(HttpResponseMessage? resp, string? bodyHead,
         Exception? transport, bool keyWasSent, CancellationToken ct)
+        => Classify(resp, bodyHead, transport, keyWasSent, ct, out _);
+
+    /// <summary>The same rules, plus row 11's by-product: when the body took the §4.3 HTML path,
+    /// <paramref name="htmlHead"/> is its de-tagged, whitespace-collapsed first
+    /// <see cref="LogHeadChars"/> characters — the only thing from a body that is allowed to travel
+    /// anywhere (I11), and the field E1.S5 writes as <c>body=</c>. <c>null</c> whenever the HTML
+    /// path was not taken, so a caller cannot log a head for a body that was never sniffed. The
+    /// five-argument overload above keeps every existing call site compiling unchanged.</summary>
+    internal static TranslationErrorKind Classify(HttpResponseMessage? resp, string? bodyHead,
+        Exception? transport, bool keyWasSent, CancellationToken ct, out string? htmlHead)
     {
+        htmlHead = null;
+
         // 1 — a genuine cancel. Nothing below may see it: an OCE bound to a cancelled token is the
         // user pressing Stop, and the caller rethrows it untouched.
         if (ct.IsCancellationRequested) return UserCancelled;
@@ -81,9 +113,38 @@ internal static class ProviderErrorMapper
             if (code == 456) return TranslationErrorKind.QuotaExhausted;   // 9 — DeepL's own code
             if (code >= 500) return TranslationErrorKind.Unavailable;      // 10
 
-            // 11 — E1.S4: HTML sniff goes here, BEFORE the success path. It applies to ANY status,
+            // 11 — the HTML abuse page (§4.3), BEFORE the success path. It applies to ANY status,
             // 2xx included, which is why its place in the order is this one and not inside the
             // branch below. Do not move the success path above it.
+            //
+            // The rule is an ORDERING, not a heuristic: the body is classified before it is parsed,
+            // never after. benchmark-fournisseurs.md §11.4 item 1 names "parse-then-guess" as the
+            // single most common bug across every project surveyed, and this app has it today — a
+            // block page served with a 200 reaches JsonDocument.Parse and comes back as "an
+            // unexpected response" by accident. The caller's part of the rule is §4.3 step 4: it
+            // asks LooksLikeHtml FIRST and hands the body to its parser only if the answer is no.
+            if (LooksLikeHtml(resp, bodyHead))
+            {
+                var head = DeTaggedHead(bodyHead);
+                htmlHead = head.Length <= LogHeadChars ? head : head[..LogHeadChars];
+                var lower = head.ToLowerInvariant();   // the markers are lower-case by contract
+
+                // RateLimitMarkers FIRST: the measured page says "we're sorry" as well as
+                // "automated queries", and it is a throttle, not a permanent refusal.
+                if (Matches(lower, TranslationPolicy.RateLimitMarkers))
+                    return TranslationErrorKind.RateLimited;
+
+                // The two remaining §4.3 outcomes share a Kind but not a meaning, so they are
+                // written as the table writes them (rows 6/7/8 above set the same precedent): a
+                // captcha or interstitial we recognise…
+                if (Matches(lower, TranslationPolicy.BlockMarkers))
+                    return TranslationErrorKind.Blocked;
+
+                // …and a page nobody has a phrase for yet. Still Blocked — HTML where a provider's
+                // JSON belongs is a refusal — and htmlHead above is what makes the next phrasing a
+                // one-line edit in TranslationPolicy instead of a guess.
+                return TranslationErrorKind.Blocked;
+            }
 
             // 12 — a success whose body does not parse into the provider's shape. The provider's
             // parser is what DETECTS that; the mapper only names it — which is also the row's
@@ -104,6 +165,135 @@ internal static class ProviderErrorMapper
     internal static bool NamesAQuota(string? bodyHead) =>
         bodyHead != null &&
         QuotaMarkers.Any(m => bodyHead.Contains(m, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// §4.3 steps 1–2 — is this body an HTML page rather than the provider's JSON? Two signals, in
+    /// the document's order.
+    /// <para><b>Step 1, the content-type.</b> A DECLARED media type that is not a JSON one takes
+    /// the HTML path, even when the body would have parsed: "never parse-then-guess" means the
+    /// body's parseability is not allowed to be the tie-breaker. An <b>absent</b> content-type is
+    /// the one case §4.3 does not name, and it is read the other way — nothing was declared, so
+    /// step 2 answers alone. Reading "no JSON media type" as "including none at all" would turn an
+    /// unlabelled healthy 200 into a Blocked with an empty log head, which is exactly the wrong
+    /// guess row 13 exists to avoid, and it would cost nothing in return: an HTML page with no
+    /// content-type still starts with '&lt;' and step 2 still catches it.</para>
+    /// <para><b>Step 2, the body.</b> The first non-whitespace character of the first
+    /// <see cref="SniffPrefixChars"/> characters being '&lt;'. This wins over a content-type that
+    /// claims JSON (TP-MAP-14) — a mislabelled block page is the shape the rule is for.</para>
+    /// </summary>
+    internal static bool LooksLikeHtml(HttpResponseMessage? resp, string? body)
+    {
+        var media = resp?.Content?.Headers?.ContentType?.MediaType;
+        if (!string.IsNullOrWhiteSpace(media) && !IsJsonMedia(media!)) return true;
+
+        if (body == null) return false;
+        int limit = Math.Min(body.Length, SniffPrefixChars);
+        for (int i = 0; i < limit; i++)
+        {
+            if (char.IsWhiteSpace(body[i])) continue;
+            return body[i] == '<';
+        }
+        return false;   // nothing but whitespace where a body should be: not an HTML page
+    }
+
+    /// <summary>The JSON family, including the <c>+json</c> structured suffix (RFC 6839) so a
+    /// provider answering <c>application/problem+json</c> stays on the parser's road.</summary>
+    private static bool IsJsonMedia(string media) =>
+        media.Equals("application/json", StringComparison.OrdinalIgnoreCase) ||
+        media.Equals("text/json", StringComparison.OrdinalIgnoreCase) ||
+        media.EndsWith("+json", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// §4.3 step 3's de-tagger: the page's visible text, whitespace-collapsed, at most
+    /// <paramref name="maxChars"/> characters, in the page's own casing (§10.1's log line shows the
+    /// server's wording as the server wrote it; only the marker MATCHING is lower-cased).
+    /// <para>A hand-written single pass, not a regex — there is nothing here for a backtracking
+    /// engine to blow up on, and both ends are bounded (<see cref="MaxScanChars"/> read,
+    /// <paramref name="maxChars"/> produced). Tag boundaries become one space, so
+    /// <c>&lt;div&gt;We're&lt;/div&gt;&lt;div&gt;sorry&lt;/div&gt;</c> still reads as two words.
+    /// The CONTENT of &lt;script&gt; and &lt;style&gt; is dropped: it sits between tags rather than
+    /// inside one, so a naive de-tagger keeps it, and the measured §3.1 page opens with a CSS block
+    /// that would otherwise fill the head before a single marker appeared.</para>
+    /// </summary>
+    internal static string DeTaggedHead(string? body, int maxChars = MarkerHeadChars)
+    {
+        if (string.IsNullOrEmpty(body)) return string.Empty;
+
+        var text = new StringBuilder(Math.Min(maxChars, 512));
+        int limit = Math.Min(body!.Length, MaxScanChars);
+        bool pendingSpace = false;
+        int i = 0;
+
+        while (i < limit && text.Length < maxChars)
+        {
+            char c = body[i];
+
+            if (c == '<')
+            {
+                bool closing = i + 1 < limit && body[i + 1] == '/';
+                string name = TagName(body, closing ? i + 2 : i + 1, limit);
+                i = SkipToTagEnd(body, i, limit);
+                if (!closing && (name == "script" || name == "style"))
+                    i = SkipElementContent(body, i, limit, name);
+                pendingSpace = true;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(c)) { pendingSpace = true; i++; continue; }
+
+            if (pendingSpace && text.Length > 0) text.Append(' ');
+            pendingSpace = false;
+            text.Append(c);
+            i++;
+        }
+
+        return text.ToString();
+    }
+
+    /// <summary>The lower-cased element name starting at <paramref name="from"/>, at most eight
+    /// characters — long enough for "script" and "noscript", short enough to stay a fixed cost.</summary>
+    private static string TagName(string body, int from, int limit)
+    {
+        var name = new StringBuilder(8);
+        for (int i = from; i < limit && name.Length < 8; i++)
+        {
+            char c = body[i];
+            if (!char.IsLetter(c)) break;
+            name.Append(char.ToLowerInvariant(c));
+        }
+        return name.ToString();
+    }
+
+    /// <summary>Past the next '&gt;'. An unterminated tag runs to the scan limit, which ends the
+    /// de-tagging — a truncated body is not a reason to look further than the bound.</summary>
+    private static int SkipToTagEnd(string body, int from, int limit)
+    {
+        for (int i = from; i < limit; i++)
+            if (body[i] == '>') return i + 1;
+        return limit;
+    }
+
+    /// <summary>Past the matching <c>&lt;/name</c>, or to the scan limit if it never comes.</summary>
+    private static int SkipElementContent(string body, int from, int limit, string name)
+    {
+        for (int i = from; i + 1 < limit; i++)
+        {
+            if (body[i] != '<' || body[i + 1] != '/') continue;
+            if (TagName(body, i + 2, limit) != name) continue;
+            return SkipToTagEnd(body, i, limit);
+        }
+        return limit;
+    }
+
+    /// <summary>Substring test over already-lower-cased text; the marker lists are lower-case by
+    /// their own contract (<see cref="TranslationPolicy"/>), which the policy tests enforce. The
+    /// arrays are read, never sorted or rewritten in place — they are shared, mutable state.</summary>
+    private static bool Matches(string lowerText, string[] markers)
+    {
+        foreach (var m in markers)
+            if (lowerText.Contains(m, StringComparison.Ordinal)) return true;
+        return false;
+    }
 
     /// <summary>The server's own "come back at" hint, when it sent one — <c>Retry-After</c> as
     /// delta-seconds or as an HTTP date. §5.5: on a 429 it overrides the window the gate would

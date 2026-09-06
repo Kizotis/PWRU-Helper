@@ -19,4 +19,15 @@
     <ProjectReference Include="..\..\PWRUHelper.csproj" />
   </ItemGroup>
 
+  <!-- IS-9 — recorded HTTP bodies, checked in as source because they are evidence (CI-6: <= 64 KB
+       total, nothing binary, nothing generated at test time). `Update`, not `Include`: the SDK's
+       default None glob already picks these files up, and a second Include is a duplicate-item
+       build error. Copied next to the test assembly so a test reads them with
+       Path.Combine(AppContext.BaseDirectory, "Fixtures", ...) and a human can still open, diff and
+       re-capture the file. Chosen over EmbeddedResource for exactly that reason — E3/E6 add their
+       fixtures to this same group. -->
+  <ItemGroup>
+    <None Update="Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

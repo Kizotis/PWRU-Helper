@@ -164,6 +164,29 @@ public class TranslationService : ITranslator
                 if (resp.IsSuccessStatusCode)
                 {
                     json = await resp.Content.ReadAsStringAsync(ct);
+
+                    // §4.3 step 4 — the body is classified BEFORE it is parsed, never after. This
+                    // is the story: Google answers a throttled network with an HTML "Sorry..." page
+                    // (benchmark-fournisseurs.md §3.1), and served with a 200 that page used to
+                    // sail into JsonDocument.Parse below and come back as "an unexpected response"
+                    // — the right sentence for the wrong reason, and a Kind no gate could act on.
+                    // The body is the one already read on this line (the stream is consumed once).
+                    // Same contract as the status branch below: the token can be cancelled between
+                    // the response arriving and this line, and row 1 would then answer with the
+                    // cancel Kind — the one value a TranslationException may never carry.
+                    ct.ThrowIfCancellationRequested();
+                    if (ProviderErrorMapper.LooksLikeHtml(resp, json))
+                    {
+                        // Not retried, exactly as an unparseable 200 was not retried before: the
+                        // retry DECISION is unchanged (E2.S5 owns it). The sentence is the one the
+                        // parser's catch renders today, so nothing the user reads changes here —
+                        // only the Kind, which is what E1.S6 will reword against.
+                        throw new TranslationException(
+                            ProviderErrorMapper.Classify(resp, json, transport: null,
+                                keyWasSent: false, ct),
+                            "The translation service returned an unexpected response (it may be temporarily blocked). Try again shortly.",
+                            ProviderErrorMapper.RetryAfter(resp, DateTimeOffset.UtcNow));
+                    }
                     break;
                 }
 
@@ -250,9 +273,11 @@ public class TranslationService : ITranslator
         }
         catch (JsonException)
         {
-            // Usually an HTML captcha / throttle page instead of JSON. BadResponse is what reaching
-            // the parser means; E1.S4 sniffs the body BEFORE it gets here, so a real block page
-            // becomes RateLimited/Blocked instead of arriving as a JsonException.
+            // BadResponse is what reaching the parser means (§4.2 row 12). It is no longer how a
+            // block page is discovered: the §4.3 sniff above classifies an HTML body before it can
+            // get here, so what lands in this catch is a body that claimed to be JSON, did not
+            // start with '<', and still is not the provider's shape — a genuinely unreadable
+            // answer, which is exactly what this Kind and this sentence are for.
             throw new TranslationException(TranslationErrorKind.BadResponse,
                 "The translation service returned an unexpected response (it may be temporarily blocked). Try again shortly.");
         }
