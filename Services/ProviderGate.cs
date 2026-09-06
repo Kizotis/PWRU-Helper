@@ -745,7 +745,12 @@ internal sealed class ProviderGate
     /// the file a few hundred bytes.
     ///
     /// <para><b>What is deliberately not exported.</b> The token bucket and the probe latch (§5.7,
-    /// I9 — see the field comments). And <c>AuthFailed</c>, both halves of it: ruling <b>E2-a</b> says
+    /// I9 — see the field comments). <c>_badResponses</c> too, and for the same reason as the
+    /// bucket: three consecutive malformed bodies are evidence about one conversation, not about
+    /// the provider tomorrow, and §5.7 has no field for it — so a gate sitting at two of three
+    /// starts over next session. It is still counted by <see cref="ExportedStateExists"/>, because
+    /// "may a file overwrite this gate?" is a different question from "is this worth writing?".
+    /// And <c>AuthFailed</c>, both halves of it: ruling <b>E2-a</b> says
     /// it is never persisted in A.1 — in-memory only, a restart resets it. The key is re-read from
     /// settings at every start anyway, the user may well have fixed it while the app was closed, and
     /// a <i>file</i> that pauses a provider until the user notices is exactly the lockout R-01 is
@@ -762,8 +767,16 @@ internal sealed class ProviderGate
             var key = _keyBlockedUntil == DateTimeOffset.MaxValue ? null : _keyBlockedUntil;
             var kind = _lastKind == TranslationErrorKind.AuthFailed ? null : _lastKind;
 
-            if (_ipBlockedUntil is null && key is null && _strikes == 0
-                && kind is null && _cleanSince is null) return null;
+            // A lone `cleanSince` is deliberately NOT worth a line. It exists only to decay
+            // strikes, so with none to decay it restores nothing a fresh gate does not already
+            // have — and it is precisely what a 401 and the key save that lifts it leave behind,
+            // since E2-a drops both halves of AuthFailed on the way out. Counting it would make
+            // that pair the one way a session with nothing to remember still creates
+            // provider-state.json beside the user's settings.json.
+            // This is NOT the question <see cref="ExportedStateExists"/> answers — that one asks
+            // whether this gate has seen anything in THIS process and so may not be seeded over by
+            // a file, and a clean run very much counts as evidence there.
+            if (_ipBlockedUntil is null && key is null && _strikes == 0 && kind is null) return null;
 
             return new ProviderStateRecord(
                 _ipBlockedUntil, key, _strikes, kind?.ToString(), _lastAt, _cleanSince);
@@ -785,8 +798,9 @@ internal sealed class ProviderGate
     /// <c>TryEnter</c> half-opens it, which is the correct recovery and the reason the entry is not
     /// "helpfully" dropped.</para>
     /// </summary>
-    internal bool TrySeedState(ProviderStateRecord record)
+    internal bool TrySeedState(ProviderStateRecord record, out bool normalised)
     {
+        normalised = false;
         lock (_lock)
         {
             if (ExportedStateExists()) return false;
@@ -796,12 +810,39 @@ internal sealed class ProviderGate
             _keyBlockedUntil = Clamp(record.KeyBlockedUntil, now, TimeSpan.FromMinutes(_policy.QuotaOpenMinutes));
             _strikes = Math.Max(0, record.Strikes);
             _lastAt = record.LastAt;
-            _cleanSince = record.CleanSince;
+
+            // A clean run is time we WATCHED the provider behave, and we watched nothing while the
+            // app was closed. Restored verbatim, `cleanSince` credits downtime as good behaviour:
+            // CleanResetMinutes is 10, so a file carrying both strikes and a clean run would let
+            // ten minutes of being CLOSED work the ladder off — quitting becoming the way to buy a
+            // fresh 60-second window out of a provider that has already said stop four times,
+            // which is exactly what persisting the strikes is meant to stop.
+            // **This build cannot write that pair itself** — every path that sets `cleanSince`
+            // first tests `BlockedUntil is null`, and a non-zero strike count always leaves an IP
+            // timeline standing — so what this closes is the hand-edited or foreign-written file,
+            // plus the case the app CAN produce: a `cleanSince` in the FUTURE (a PC whose clock was
+            // ahead when the run started, then corrected) makes `now - since` negative, so nothing
+            // ages out ever again. The run therefore restarts at the instant we load —
+            // conservative in the only direction that matters, since it can lengthen a pause and
+            // never shorten one, and it is re-applied on every load rather than written back.
+            _cleanSince = record.CleanSince is null ? null : now;
 
             // E2-a from the reading side, so the invariant is total: this app never writes
             // AuthFailed, and a hand-edited or downgraded file that does cannot bring it back either.
             var kind = ProviderStateStore.ParseKind(record.LastKind);
             _lastKind = kind == TranslationErrorKind.AuthFailed ? null : kind;
+
+            // Did reading it change it? If so the FILE still says the dangerous thing, and nothing
+            // else will ever correct it: a gate that is merely refusing callers takes no transition,
+            // so it queues no write, so the next launch reads the same value and clamps it again.
+            // A clock that jumped forward once would then re-impose a 30-minute pause at EVERY
+            // start, for ever — R-01 by the back door, and the exact lockout ruling E2-a says no
+            // state may cause "without a way back". `cleanSince` is deliberately NOT counted: it is
+            // re-normalised on every load, so writing it back would buy a write and nothing else.
+            normalised = _ipBlockedUntil != record.BlockedUntil
+                      || _keyBlockedUntil != record.KeyBlockedUntil
+                      || _strikes != record.Strikes
+                      || _lastKind?.ToString() != record.LastKind;
 
             return true;
         }
@@ -811,7 +852,8 @@ internal sealed class ProviderGate
     /// <see cref="ExportState"/> answers, without building the record. Called under <c>_lock</c>.</summary>
     private bool ExportedStateExists() =>
         _ipBlockedUntil is not null || _keyBlockedUntil is not null
-        || _strikes != 0 || _lastKind is not null || _cleanSince is not null;
+        || _strikes != 0 || _lastKind is not null || _cleanSince is not null
+        || _badResponses != 0;      // not persisted, but still evidence a file may not overwrite
 
     private static DateTimeOffset? Clamp(DateTimeOffset? value, DateTimeOffset now, TimeSpan cap) =>
         value is not { } v ? null : v > now + cap ? now + cap : v;

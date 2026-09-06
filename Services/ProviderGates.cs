@@ -137,6 +137,7 @@ internal static class ProviderGates
     private static bool _savePending;            // a transition is waiting for the debounce to flush
     private static System.Threading.Timer? _saveTimer;
     private static IReadOnlyDictionary<string, System.Text.Json.JsonElement>? _unknown;
+    private static bool _keepFile;               // the file could not be read, or a newer build wrote it
 
     /// <summary>The §5.7 debounce, as a settable number rather than a constant so a test can prove
     /// coalescing without waiting a real second (CI-3: no <c>Task.Delay</c> anywhere). Production
@@ -171,15 +172,27 @@ internal static class ProviderGates
 
             var state = ProviderStateStore.Load(StatePath);   // never throws; empty on any failure
             _unknown = state.Unknown;                         // re-emitted verbatim on the next write
+            _keepFile = state.KeepFile;                       // unreadable, or a newer build's
 
+            var normalisedAny = false;
             foreach (var pair in state.Providers)
                 // For(id), not a fresh gate: MainWindow's field initializer may already have handed
                 // this id's gate to a chain, and seeding a different instance would restore the pause
                 // into an object nobody consults. TrySeedState declines a gate that has already
                 // recorded something in this process — live evidence beats a file.
-                For(pair.Key).TrySeedState(pair.Value);
+                if (For(pair.Key).TrySeedState(pair.Value, out var normalised) && normalised)
+                    normalisedAny = true;
 
             Volatile.Write(ref _loaded, true);
+
+            // Reading the file changed something in it — a window clamped back from a clock jump, a
+            // nonsense strike count, an AuthFailed this build may not keep. Write the corrected
+            // state back, because NOTHING ELSE WILL: a gate that is merely refusing callers takes
+            // no transition and so queues no save, and the next launch would read the same
+            // dangerous value and clamp it again. A clock set forward once would otherwise re-impose
+            // a full 30-minute pause at every single start, for ever — R-01 arrived at through the
+            // file, and the lockout "without a way back" that ruling E2-a forbids.
+            if (normalisedAny) QueueSave();
         }
     }
 
@@ -228,9 +241,27 @@ internal static class ProviderGates
                 // A no-op after the first request, which is when the load normally happens.
                 EnsureLoaded();
 
+                // The file is not ours to replace: we could not read it (an AV or a sync agent had
+                // it open for the 50 ms of the session's first request), or a newer build wrote a
+                // version this one does not understand. Writing from an empty registry would erase
+                // a standing pause and every preserved unknown id — the AC 5 case — to save state
+                // worth one request. Not persisting this session is the cheaper failure by far.
+                if (_keepFile) return;
+
                 var providers = new Dictionary<string, ProviderStateRecord>(StringComparer.Ordinal);
                 foreach (var pair in Registry)
                     if (pair.Value.ExportState() is { } record) providers[pair.Key] = record;
+
+                // Nothing to persist and no file yet ⇒ do not create one. Not every transition
+                // changes a persisted byte: an AuthFailed is a real §5.2 edge that E2.S6 must log,
+                // yet E2-a keeps it off the disk entirely, and the ClearAuthBlock that lifts it is
+                // another. Without this line those two write `"providers": {}` into a fresh
+                // %AppData%\provider-state.json for a session with nothing whatever to remember —
+                // the same disk churn this method already refuses when nothing is pending.
+                // An EXISTING file is still rewritten: it may hold state that has since expired,
+                // and "the gates now say nothing" is exactly what has to reach it.
+                if (providers.Count == 0 && (_unknown is null || _unknown.Count == 0)
+                    && !System.IO.File.Exists(StatePath)) return;
 
                 ProviderStateStore.Save(StatePath, providers, _unknown);
             }
@@ -295,12 +326,46 @@ internal static class ProviderGates
         // The save is queued by the registry ITSELF and not by a subscriber (ruling R-2/OQ-c):
         // hanging it off TransitionHook would mean E2.S6's log line replaces persistence the day it
         // installs one, and a test that stubs the hook would silently stop the app saving.
-        QueueSave();
+        //
+        // In a try, because this method's contract is that it is exception-free: QueueSave touches
+        // a Timer, and Timer.Change throws on a negative period. A save may never fail a request.
+        try { if (WorthAWrite(from, to)) QueueSave(); }
+        catch { /* persistence must never be able to fail a translation */ }
 
         var hook = TransitionHook;                  // read once: it can be replaced concurrently
         if (hook == null) return;
         try { hook(providerId, from, to); } catch { /* observability must not break the request */ }
     }
+
+    /// <summary>
+    /// Whether a transition can have changed a byte of §5.7's record that is worth the disk.
+    /// <b>Worth a write is not the same question as worth a log line</b>, and this is where the two
+    /// part: the gate announces every §5.2 edge, E2.S6 filters that stream for ruling E2-b, and the
+    /// write is filtered here. Two edges buy the file nothing.
+    ///
+    /// <para><b>Open → HalfOpen.</b> The probe latch is deliberately <i>not</i> persisted (§5.7,
+    /// I9), and a probe grant moves nothing else — not the window, not the strikes, not the kind.
+    /// The record is byte-for-byte identical either side of it, so the write was pure churn on a
+    /// path that is otherwise pure arithmetic.</para>
+    ///
+    /// <para><b>Anything landing on a soft window</b> (§5.3's <c>Unavailable</c>/<c>Timeout</c>/
+    /// <c>Network</c>/<c>Unknown</c>). The gate already suppresses the first soft cooldown; this is
+    /// the one that came back through the cycle the cooldown itself creates — five seconds later a
+    /// caller is granted a probe, the probe times out, five seconds later again — which rewrites
+    /// the file every few seconds for as long as a provider is unreachable, while §5.7 budgets "a
+    /// handful per session" and the footprint rule forbids the rest. A five-second window is worth
+    /// nothing at all after a restart.</para>
+    ///
+    /// <para>Landing on <b>Closed</b> is always written, whatever the kind: that edge is the pause
+    /// <i>ending</i>, and a file that keeps a block the provider has already answered out of is
+    /// R-01. The one thing this rule can drop is a strike reset that happens to coincide with a
+    /// failed soft probe; it costs the ladder one rung and the next clean run restores it.</para>
+    /// </summary>
+    private static bool WorthAWrite(GateState from, GateSnapshot to) =>
+        !(from == GateState.Open && to.State == GateState.HalfOpen)
+        && !(to.State == GateState.Open
+             && to.LastKind is TranslationErrorKind.Unavailable or TranslationErrorKind.Timeout
+                            or TranslationErrorKind.Network or TranslationErrorKind.Unknown);
 
     /// <summary>
     /// IS-4. Puts the process back where it started: no gates, the wall clock, the real state file
@@ -316,7 +381,8 @@ internal static class ProviderGates
         PathOverride = null;                        // belt to TempGateState's braces (IS-1/IS-3)
         TransitionHook = null;
         SaveDebounceMs = 1000;
-        lock (Sync) { Volatile.Write(ref _loaded, false); _unknown = null; }   // the next case reloads
+        // the next case reloads
+        lock (Sync) { Volatile.Write(ref _loaded, false); _unknown = null; _keepFile = false; }
     }
 
     /// <summary>

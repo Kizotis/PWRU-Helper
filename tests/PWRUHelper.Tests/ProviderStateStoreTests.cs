@@ -199,6 +199,144 @@ public class ProviderStateStoreTests : GatesTestBase
         Assert.Null(snap.BlockedUntil);                        // not a date ⇒ no block
         Assert.Equal(0, snap.Strikes);                         // negative strikes ⇒ none
         Assert.Equal(TranslationErrorKind.Unknown, snap.LastKind);   // an unknown name ⇒ Unknown
+
+        // The TOP end bites harder than the bottom, and is read straight from the store so the
+        // registry's one-load-per-process rule does not get in the way: seeded at int.MaxValue the
+        // next `_strikes++` overflows, and the ladder then reports a negative count to E7's status
+        // list and writes it back to the file.
+        File.WriteAllText(temp.Path, OneProvider(ProviderIds.Edge, "null", strikes: int.MaxValue));
+        Assert.InRange(ProviderStateStore.Load(temp.Path).Providers[ProviderIds.Edge].Strikes, 0, 64);
+    }
+
+    [Fact]
+    public void An_absurdly_large_file_is_refused_unread()
+    {
+        // The read runs UNDER the registry's lock, which OnClosing's flush and every concurrent
+        // first request wait on. A hand-edited or corrupted file must therefore be bounded before
+        // it is opened: refusing costs one extra request to a provider, paging a huge one in costs
+        // the window close. 64 KB is ~60× the largest file this build can write.
+        using var temp = new TempGateState();
+        ProviderGates.Clock = new FakeClock().Read;
+
+        // Valid JSON, so nothing but the size can be what refuses it.
+        var padding = new string('x', 70 * 1024);
+        File.WriteAllText(temp.Path, $$"""
+            { "version": 1, "providers": { "google-dict": {
+                "blockedUntil": "2099-01-01T00:00:00+00:00", "strikes": 3,
+                "padding": "{{padding}}" } } }
+            """);
+        Assert.True(new FileInfo(temp.Path).Length > 64 * 1024);
+
+        Assert.Empty(ProviderStateStore.Load(temp.Path).Providers);
+        Assert.Equal(GateOutcome.Allow,
+            ProviderGates.For(ProviderIds.GoogleDict).TryEnter(RequestPriority.Interactive).Outcome);
+    }
+
+    [Fact]
+    public void A_file_another_process_holds_open_loads_as_no_state_without_waiting()
+    {
+        // A sharing violation is one of the "every one of them" AC 3 covers, and the one that could
+        // block rather than throw. It must come back immediately as "no state": this read is on the
+        // first translation request of the session, under the lock the window close waits on.
+        using var temp = new TempGateState();
+        ProviderGates.Clock = new FakeClock().Read;
+        File.WriteAllText(temp.Path, OneProvider(ProviderIds.GoogleDict, "\"2099-01-01T00:00:00+00:00\""));
+
+        using (new FileStream(temp.Path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.Empty(ProviderStateStore.Load(temp.Path).Providers);
+            Assert.Equal(GateOutcome.Allow,
+                ProviderGates.For(ProviderIds.GoogleDict).TryEnter(RequestPriority.Interactive).Outcome);
+        }
+    }
+
+    [Fact]
+    public void A_save_that_cannot_swap_the_file_in_leaves_the_previous_one_intact()
+    {
+        // Atomicity, from the only side a test can reach without a seam in the store: the swap is
+        // the last thing that happens, so a failure at it leaves the PREVIOUS file — never a
+        // truncated one. A truncated provider-state.json reads back as "no state", i.e. an app that
+        // starts up hammering the provider it was told to leave alone.
+        using var temp = new TempGateState();
+        ProviderStateStore.Save(temp.Path, new Dictionary<string, ProviderStateRecord>
+        {
+            [ProviderIds.Azure] = new(new DateTimeOffset(2001, 1, 1, 12, 1, 0, TimeSpan.Zero),
+                                      null, 1, "RateLimited", null, null),
+        }, null);
+        var before = File.ReadAllText(temp.Path);
+
+        var wreck = new Dictionary<string, ProviderStateRecord>
+        {
+            [ProviderIds.Azure] = new(null, null, 99, "Blocked", null, null),
+        };
+
+        // Phase 1 — the TEMP file cannot be written. This is the assertion that a direct
+        // File.WriteAllText(path, …) could not pass: holding `path + ".tmp"` open exclusively only
+        // stops a save that goes through it, which is what makes the atomic pattern observable from
+        // outside without a seam in the store. The whole method is inside one try/catch, like
+        // SettingsService.Save, so it costs nothing.
+        using (new FileStream(temp.Path + ".tmp", FileMode.Create, FileAccess.ReadWrite, FileShare.None))
+            ProviderStateStore.Save(temp.Path, wreck, null);
+
+        Assert.Equal(before, File.ReadAllText(temp.Path));
+
+        // Phase 2 — the temp file is written but the swap cannot happen. The previous file is still
+        // the previous file: a crash or a failure at any point leaves the last good state, never a
+        // truncated one, which would read back as "no state".
+        File.Delete(temp.Path + ".tmp");
+        using (new FileStream(temp.Path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            ProviderStateStore.Save(temp.Path, wreck, null);
+
+        Assert.Equal(before, File.ReadAllText(temp.Path));
+        Assert.Equal(1, ProviderStateStore.Load(temp.Path).Providers[ProviderIds.Azure].Strikes);
+    }
+
+    [Fact]
+    public void Time_spent_closed_is_not_a_clean_run()
+    {
+        // A file carrying strikes AND a clean run would let being CLOSED work the ladder off:
+        // CleanResetMinutes is 10, so quitting for ten minutes would buy a fresh 60-second window
+        // out of a provider that has already said stop three times. This build cannot write that
+        // pair (a non-zero strike count always leaves an IP timeline standing, and every path that
+        // sets cleanSince first tests for none) — a hand-edited or foreign-written file can.
+        using var temp = new TempGateState();
+        var clock = new FakeClock();
+        ProviderGates.Clock = clock.Read;
+        File.WriteAllText(temp.Path, $$"""
+            { "version": 1, "providers": { "google-dict": {
+                "blockedUntil": {{Iso(clock.Now - TimeSpan.FromHours(1))}},
+                "strikes": 3, "lastKind": "RateLimited", "lastAt": null,
+                "cleanSince": {{Iso(clock.Now - TimeSpan.FromHours(1))}} } } }
+            """);
+
+        var gate = ProviderGates.For(ProviderIds.GoogleDict);
+        var probe = gate.TryEnter(RequestPriority.Interactive);          // loads; the window expired
+        Assert.Equal(3, gate.Snapshot().Strikes);
+
+        // An hour of "clean" that was really an hour of being shut down buys nothing: the failed
+        // probe is strike 4, not strike 1.
+        gate.ReportFailure(TranslationErrorKind.RateLimited, probeToken: probe.ProbeToken);
+        Assert.Equal(4, gate.Snapshot().Strikes);
+    }
+
+    [Fact]
+    public void A_lastKind_that_is_an_ordinal_or_a_list_is_not_trusted()
+    {
+        // Enum.TryParse accepts far more than a member name: the ORDINAL form, which makes the file
+        // depend on an enum ORDER only today's build pins, and a comma list, which it OR-combines
+        // even with no [Flags] — producing a value that is not equal to AuthFailed and so walks
+        // straight past ruling E2-a's drop.
+        Assert.Equal(TranslationErrorKind.RateLimited, ProviderStateStore.ParseKind("RateLimited"));
+        Assert.Equal(TranslationErrorKind.RateLimited, ProviderStateStore.ParseKind("ratelimited"));
+        Assert.Null(ProviderStateStore.ParseKind(null));
+
+        foreach (var hostile in new[] { "0", "7", "999", "-1", "AuthFailed, Unknown", "Unknown, AuthFailed" })
+            Assert.Equal(TranslationErrorKind.Unknown, ProviderStateStore.ParseKind(hostile));
+
+        // …and whatever comes back is a kind this build actually defines, so nothing undefined can
+        // reach _lastKind, a switch over §5.3, or E7's status line.
+        foreach (var name in new[] { "MadeUpKind", "", "7", "AuthFailed, Unknown" })
+            Assert.True(Enum.IsDefined(ProviderStateStore.ParseKind(name)!.Value));
     }
 
     // ---- TP-GATE-21: the clock-skew clamp ------------------------------------------------------
@@ -259,6 +397,13 @@ public class ProviderStateStoreTests : GatesTestBase
         Assert.NotEqual(DateTimeOffset.MaxValue, snap.BlockedUntil);
         Assert.True(snap.BlockedUntil <= clock.Now + TimeSpan.FromMinutes(TranslationPolicy.QuotaOpenMinutes),
             "no persisted window may outlive the longest window the policy itself can set");
+        // …and the two bounds differ on purpose. The IP-scoped timeline is clamped to the 30-minute
+        // cap, the account-scoped one to its OWN longest window (§15 R9, 60 min) — so what the gate
+        // enforces here is the account one. Clamping both to the cap would silently halve every
+        // legitimate QuotaExhausted block across a restart, and ruling E2-a's literal "clamped to
+        // the cap" is exactly the line a future reader would "correct" it to.
+        Assert.Equal(clock.Now + TimeSpan.FromMinutes(TranslationPolicy.QuotaOpenMinutes),
+                     snap.BlockedUntil);
         Assert.NotEqual(TranslationErrorKind.AuthFailed, snap.LastKind);   // E2-a: never read back
     }
 
@@ -292,10 +437,18 @@ public class ProviderStateStoreTests : GatesTestBase
         ProviderGates.Flush();
 
         // …and on disk there is nothing to restore it with (E2-a: in-memory only, a restart resets
-        // it; the key is re-read from settings at startup anyway).
-        var json = File.Exists(temp.Path) ? File.ReadAllText(temp.Path) : "";
-        Assert.DoesNotContain("AuthFailed", json);
+        // it; the key is re-read from settings at startup anyway). A 401 alone leaves no file, so
+        // force one to exist with a second, persistable failure on ANOTHER provider — otherwise the
+        // two DoesNotContain assertions below would be running against the empty string and could
+        // not fail.
+        ProviderGates.For(ProviderIds.Azure).ReportFailure(TranslationErrorKind.RateLimited);
+        ProviderGates.Flush();
+
+        var json = File.ReadAllText(temp.Path);
+        Assert.Contains("RateLimited", json);                  // the file is real…
+        Assert.DoesNotContain("AuthFailed", json);             // …and DeepL's 401 is not in it
         Assert.DoesNotContain("9999", json);
+        Assert.DoesNotContain(ProviderIds.DeepL, json);
 
         ProviderGates.ResetForTests();
         ProviderGates.PathOverride = temp.Path;
@@ -303,6 +456,43 @@ public class ProviderStateStoreTests : GatesTestBase
 
         Assert.Equal(GateOutcome.Allow,
             ProviderGates.For(ProviderIds.DeepL).TryEnter(RequestPriority.Interactive).Outcome);
+    }
+
+    [Fact]
+    public void An_auth_failure_and_the_key_save_that_lifts_it_create_no_file_at_all()
+    {
+        // Both are real §5.2 edges that E2.S6 must log, and neither changes one persisted byte —
+        // E2-a keeps AuthFailed off the disk in both directions. A transition that queues a write
+        // of nothing must not be what CREATES provider-state.json beside the user's settings.json
+        // for a session with nothing whatever to remember.
+        using var temp = new TempGateState();
+        var clock = new FakeClock();
+        ProviderGates.Clock = clock.Read;
+
+        ProviderGates.For(ProviderIds.DeepL).ReportFailure(TranslationErrorKind.AuthFailed);
+        ProviderGates.Flush();
+        Assert.False(File.Exists(temp.Path), "a 401 alone has nothing to persist");
+
+        ProviderGates.ClearAuthBlock(ProviderIds.DeepL);              // the user re-saves the key
+        ProviderGates.Flush();
+        Assert.False(File.Exists(temp.Path), "…and neither has the key save that lifted it");
+
+        // The other half of the rule: an existing file IS still rewritten when the gates fall
+        // silent, because it may hold state that has since expired.
+        ProviderGates.For(ProviderIds.DeepL).ReportFailure(TranslationErrorKind.RateLimited);
+        ProviderGates.Flush();
+        Assert.True(File.Exists(temp.Path));
+
+        clock.Advance(TimeSpan.FromMinutes(2));
+        var probe = ProviderGates.For(ProviderIds.DeepL).TryEnter(RequestPriority.Interactive);
+        ProviderGates.For(ProviderIds.DeepL).ReportSuccess(probe.ProbeToken);   // closed, clean run
+        ProviderGates.Flush();
+        Assert.True(File.Exists(temp.Path));
+        // Not Contains("cleanSince"): the field is emitted unconditionally, so that would pass on
+        // `"cleanSince": null` and prove nothing about the clean run it is meant to check.
+        using var doc = JsonDocument.Parse(File.ReadAllText(temp.Path));
+        Assert.NotEqual(JsonValueKind.Null, doc.RootElement.GetProperty("providers")
+            .GetProperty(ProviderIds.DeepL).GetProperty("cleanSince").ValueKind);
     }
 
     [Fact]
@@ -334,6 +524,165 @@ public class ProviderStateStoreTests : GatesTestBase
         // The quota is gone; the 429 window it covered is still standing (E2-i), which is only
         // possible because both timelines came back from the file.
         Assert.Equal(clock.Now + Base, restored.Snapshot().BlockedUntil);
+    }
+
+    [Fact]
+    public void A_clamped_window_is_written_back_so_it_cannot_be_re_imposed_at_every_start()
+    {
+        // R-01 through the file. The clamp fixes the pause in MEMORY; if the corrected value never
+        // reaches the disk, the next launch reads the same 2099 and clamps it again — and a gate
+        // that is merely refusing callers takes no transition, so nothing else would ever rewrite
+        // it. A clock set forward once would pause the provider for 30 minutes at EVERY start, for
+        // ever, with no way back (ruling E2-a). Three launches, because two cannot tell the
+        // difference.
+        using var temp = new TempGateState();
+        var clock = new FakeClock();
+        ProviderGates.Clock = clock.Read;
+        File.WriteAllText(temp.Path,
+            OneProvider(ProviderIds.GoogleDict, Iso(clock.Now + TimeSpan.FromDays(7)), strikes: 3));
+
+        // Launch 1: load, clamp, and nothing else at all — no transition of any kind.
+        ProviderGates.For(ProviderIds.GoogleDict).TryEnter(RequestPriority.Interactive);
+        ProviderGates.Flush();
+
+        var onDisk = ProviderStateStore.Load(temp.Path).Providers[ProviderIds.GoogleDict];
+        Assert.Equal(clock.Now + Cap, onDisk.BlockedUntil);     // the file itself is corrected
+
+        // Launch 2, well past the clamped window: the pause is over, not re-imposed.
+        ProviderGates.ResetForTests();
+        ProviderGates.PathOverride = temp.Path;
+        clock.Advance(Cap + TimeSpan.FromMinutes(1));
+        ProviderGates.Clock = clock.Read;
+
+        var decision = ProviderGates.For(ProviderIds.GoogleDict).TryEnter(RequestPriority.Interactive);
+        Assert.Equal(GateOutcome.Probe, decision.Outcome);      // expired, so the first caller probes
+    }
+
+    [Fact]
+    public void A_file_that_could_not_be_read_is_never_overwritten()
+    {
+        // The loss happens at the READ end, where none of the atomic-write machinery helps. A
+        // sharing violation lasting the 50 ms of the session's first request would otherwise cost
+        // the standing pause AND every preserved unknown id — AC 5 — because the next transition
+        // rewrites the file from an empty registry. Not persisting this session is far cheaper.
+        using var temp = new TempGateState();
+        var clock = new FakeClock();
+        ProviderGates.Clock = clock.Read;
+        var original = OneProvider(ProviderIds.GoogleDict, Iso(clock.Now + TimeSpan.FromMinutes(5)));
+        File.WriteAllText(temp.Path, original);
+
+        // The lock lasts only as long as the read. Flushing while it is still held would prove
+        // nothing — the OS would refuse the write on its own, whatever this code did.
+        using (new FileStream(temp.Path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            ProviderGates.For(ProviderIds.Edge).TryEnter(RequestPriority.Interactive);   // load fails
+
+        // The file is perfectly writable again. The ONLY thing standing between it and an
+        // overwrite from an empty registry is that this process never managed to read it.
+        ProviderGates.For(ProviderIds.Edge).ReportFailure(TranslationErrorKind.RateLimited);
+        ProviderGates.Flush();
+
+        Assert.Equal(original, File.ReadAllText(temp.Path));
+    }
+
+    [Fact]
+    public void A_newer_builds_file_is_left_alone_rather_than_downgraded_over()
+    {
+        // The forward guard already yields an empty registry for a version this build cannot read
+        // (TP-GATE-20). It must not also DELETE it: AC 5 preserves a newer build's unknown ids one
+        // by one, and a schema bump is the very downgrade that makes preservation matter — losing
+        // the whole file wholesale would defeat it exactly when it counts.
+        using var temp = new TempGateState();
+        ProviderGates.Clock = new FakeClock().Read;
+        var newer = """{ "version": 2, "providers": { "google-dict": { "somethingElseEntirely": 1 } } }""";
+        File.WriteAllText(temp.Path, newer);
+
+        var gate = ProviderGates.For(ProviderIds.GoogleDict);
+        Assert.Equal(GateOutcome.Allow, gate.TryEnter(RequestPriority.Interactive).Outcome);
+        gate.ReportFailure(TranslationErrorKind.RateLimited);
+        ProviderGates.Flush();
+
+        Assert.Equal(newer, File.ReadAllText(temp.Path));
+    }
+
+    [Fact]
+    public void An_unreachable_provider_does_not_rewrite_the_file_every_few_seconds()
+    {
+        // The churn the SoftCooldown exclusion was written to prevent, arriving through the cycle
+        // the cooldown itself creates: the 5 s window elapses, a caller is granted a probe, the
+        // probe times out, five seconds later again. §5.7 budgets "a handful per session".
+        using var temp = new TempGateState();
+        var clock = new FakeClock();
+        ProviderGates.Clock = clock.Read;
+        var soft = TimeSpan.FromSeconds(TranslationPolicy.SoftCooldownSecs);
+
+        var gate = ProviderGates.For(ProviderIds.GoogleGtx);
+        gate.ReportFailure(TranslationErrorKind.Timeout);          // a provider that is simply down
+
+        for (var i = 0; i < 20; i++)
+        {
+            clock.Advance(soft + TimeSpan.FromSeconds(1));
+            var probe = gate.TryEnter(RequestPriority.Interactive);
+            Assert.Equal(GateOutcome.Probe, probe.Outcome);        // the cycle really does run
+            gate.ReportFailure(TranslationErrorKind.Timeout, probeToken: probe.ProbeToken);
+        }
+
+        ProviderGates.Flush();
+        Assert.False(File.Exists(temp.Path), "an outage is not state worth a single write");
+
+        // …and the moment it comes back, that IS worth one: the edge onto Closed is always written.
+        clock.Advance(soft + TimeSpan.FromSeconds(1));
+        var last = gate.TryEnter(RequestPriority.Interactive);
+        gate.ReportSuccess(last.ProbeToken);
+        ProviderGates.Flush();
+        Assert.True(File.Exists(temp.Path));
+    }
+
+    [Fact]
+    public void A_probe_grant_alone_writes_nothing_because_it_changes_nothing()
+    {
+        // Open -> HalfOpen moves no field ProviderStateRecord carries: the probe latch is not
+        // persisted (§5.7), so the record is identical either side of a grant. Winston's ruling 3,
+        // "no save on a no-op" — the write was pure churn on the request path.
+        using var temp = new TempGateState();
+        var clock = new FakeClock();
+        ProviderGates.Clock = clock.Read;
+
+        var gate = ProviderGates.For(ProviderIds.Azure);
+        gate.ReportFailure(TranslationErrorKind.RateLimited);
+        ProviderGates.Flush();
+        var afterOpen = File.ReadAllText(temp.Path);
+        File.Delete(temp.Path);
+
+        clock.Advance(Base + TimeSpan.FromSeconds(1));
+        Assert.Equal(GateOutcome.Probe, gate.TryEnter(RequestPriority.Interactive).Outcome);
+        ProviderGates.Flush();
+
+        Assert.False(File.Exists(temp.Path));
+        // …and had it written, it would have written exactly what was already there.
+        ProviderStateStore.Save(temp.Path, new Dictionary<string, ProviderStateRecord>
+        {
+            [ProviderIds.Azure] = gate.ExportState()!,
+        }, null);
+        Assert.Equal(afterOpen, File.ReadAllText(temp.Path));
+    }
+
+    [Fact]
+    public void The_debounce_timer_writes_without_anybody_calling_Flush()
+    {
+        // Every other case drives persistence through Flush(), so deleting the timer from
+        // QueueSave leaves them all green — and the timer is the ONLY thing that persists state
+        // while the app is running (OnClosing catches at most the last second). Bounded by a
+        // deadline rather than a sleep: the assertion is "it happened", never "it took this long".
+        using var temp = new TempGateState();
+        ProviderGates.Clock = new FakeClock().Read;
+        ProviderGates.SaveDebounceMs = 0;
+
+        ProviderGates.For(ProviderIds.GoogleDict).ReportFailure(TranslationErrorKind.RateLimited);
+
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!File.Exists(temp.Path) && DateTime.UtcNow < deadline) Thread.Sleep(5);
+
+        Assert.True(File.Exists(temp.Path), "the debounce timer never fired: nothing persists mid-session");
     }
 
     // ---- TP-GATE-22: unknown ids -------------------------------------------------------------

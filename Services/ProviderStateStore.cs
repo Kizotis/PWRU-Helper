@@ -64,10 +64,39 @@ internal static class ProviderStateStore
     internal const int SchemaVersion = 1;
 
     /// <summary>What a load produced: the entries this build understands, typed, and the ones it
-    /// does not, verbatim. Both are empty on every failure path.</summary>
+    /// does not, verbatim. Both are empty on every failure path.
+    ///
+    /// <para><see cref="KeepFile"/> separates the two reasons a load can come back empty, because
+    /// they call for opposite things on the way out. <b>Empty because the file said nothing this
+    /// build can use</b> — absent, truncated, wrong-rooted, absurdly large — means the file is ours
+    /// to replace. <b>Empty because we could not read it</b> (a sharing violation from an AV or a
+    /// sync agent, an ACL hiccup) <b>or because a NEWER build wrote it</b> (<c>version</c> we do
+    /// not understand) means it must be left alone: overwriting it would erase a standing pause and
+    /// every preserved unknown id — AC 5's whole purpose — over a 50 ms lock or a downgrade, which
+    /// is a far worse outcome than not persisting this session.</para></summary>
     internal sealed record LoadResult(
         IReadOnlyDictionary<string, ProviderStateRecord> Providers,
-        IReadOnlyDictionary<string, JsonElement> Unknown);
+        IReadOnlyDictionary<string, JsonElement> Unknown,
+        bool KeepFile = false);
+
+    /// <summary>
+    /// The most this file may be before it is refused <b>unread</b>. A real one is a few hundred
+    /// bytes — six ids, six short objects — and even a file carrying a dozen unknown ids from a
+    /// newer build does not reach a kilobyte. Anything past 64 KB is a hand edit, a corruption, or
+    /// something hostile, and it is not worth a byte of what it would cost: this read happens
+    /// <b>under the registry's lock</b> (<c>ProviderGates.EnsureLoaded</c>), which
+    /// <c>MainWindow.OnClosing</c>'s flush and every concurrent first request wait on. Paging a
+    /// multi-megabyte file into a string and through <c>JsonDocument.Parse</c> there is a window
+    /// that will not close and a request that will not start; refusing it costs one extra request
+    /// to a provider. Bounded before it is opened, so the size is never the thing that is read.
+    /// </summary>
+    private const long MaxBytes = 64 * 1024;
+
+    /// <summary>The highest strike count worth reading back. The ladder saturates at
+    /// <c>OpenCapMinutes</c> within a handful of rungs, so anything past this is a hand edit or
+    /// bit-rot — and left unclamped at the top it is actively harmful: seeded at
+    /// <c>int.MaxValue</c>, the next <c>_strikes++</c> overflows.</summary>
+    private const int MaxStrikes = 64;
 
     private static readonly LoadResult Empty = new(
         new Dictionary<string, ProviderStateRecord>(StringComparer.Ordinal),
@@ -92,15 +121,29 @@ internal static class ProviderStateStore
     {
         try
         {
-            if (!File.Exists(path)) return Empty;
+            // FileInfo rather than File.Exists so the size is known before anything is read: a
+            // directory, a missing file and an absurd one all leave here without an allocation.
+            var info = new FileInfo(path);
+            if (!info.Exists || info.Length > MaxBytes) return Empty;   // see MaxBytes
 
+            // ReadAllText, so a file another process holds open for writing throws a sharing
+            // violation into the catch below and yields "no state" immediately — this read may
+            // never wait on a lock somebody else owns (R-01: nothing here may pause the app).
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Object) return Empty;
 
             if (!root.TryGetProperty("version", out var version)
                 || version.ValueKind != JsonValueKind.Number
-                || !version.TryGetInt32(out var v) || v != SchemaVersion) return Empty;
+                || !version.TryGetInt32(out var v)) return Empty;
+
+            // A version we do not understand is a file a NEWER build wrote. Empty registry, as the
+            // forward guard says — but do NOT let the next transition rewrite it: AC 5 preserves a
+            // newer build's unknown ids one by one and would be defeated wholesale here, because a
+            // schema bump is exactly the downgrade that makes preservation matter. The cost, taken
+            // knowingly: a `version` corrupted to something else costs persistence until the user
+            // deletes a file the app already documents as disposable.
+            if (v != SchemaVersion) return Empty with { KeepFile = true };
 
             if (!root.TryGetProperty("providers", out var providers)
                 || providers.ValueKind != JsonValueKind.Object) return Empty;
@@ -123,7 +166,11 @@ internal static class ProviderStateStore
                 known[entry.Name] = new ProviderStateRecord(
                     Date(entry.Value, "blockedUntil"),
                     Date(entry.Value, "keyBlockedUntil"),
-                    Math.Max(0, Int(entry.Value, "strikes")),   // a negative strike count is nonsense
+                    // Clamped at BOTH ends. A negative strike count is nonsense; so is a huge one,
+                    // and that end bites harder — seeded at int.MaxValue, the next `_strikes++`
+                    // overflows and the ladder reports a negative count to E7 and writes it back.
+                    // 64 is already far past the rung at which EscalatedWindow saturates.
+                    Math.Clamp(Int(entry.Value, "strikes"), 0, MaxStrikes),
                     Text(entry.Value, "lastKind"),
                     Date(entry.Value, "lastAt"),
                     Date(entry.Value, "cleanSince"));
@@ -131,11 +178,20 @@ internal static class ProviderStateStore
 
             return new LoadResult(known, unknown);
         }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // We could not read the BYTES — the file is held open by an AV or a sync agent, or the
+            // ACL says no. The state is unavailable, not absent, and the difference matters on the
+            // way out: rewriting it from an empty registry would destroy a standing pause and every
+            // preserved unknown id over a transient lock. Leave it exactly where it is.
+            return Empty with { KeepFile = true };
+        }
         catch (Exception)
         {
-            // Deliberately every exception, like GatePolicy.Parse and SettingsService.Load: an
-            // unreadable file, a locked one, invalid UTF-16 from a hand edit. There is no failure
-            // of this read that should be louder than "no state".
+            // Everything else is a file whose CONTENT this build cannot use — truncated JSON,
+            // invalid UTF-16 from a hand edit — like GatePolicy.Parse and SettingsService.Load.
+            // That file is ours to replace: refusing to would wedge persistence for good on a
+            // corruption the next write would have healed.
             return Empty;
         }
     }
@@ -158,16 +214,27 @@ internal static class ProviderStateStore
             var all = new Dictionary<string, object>(StringComparer.Ordinal);
             foreach (var pair in providers) all[pair.Key] = pair.Value;
             if (unknown != null)
-                foreach (var pair in unknown) all[pair.Key] = pair.Value;
+                // TryAdd, not an assignment: a LIVE gate always beats a preserved blob. The
+                // collision cannot happen through Load, which classifies by ProviderIds.All — but
+                // For(string) takes any id and validates none, so E3.S6's google-gtx rename is one
+                // call site away from a gate that is in the registry and "unknown" to the file at
+                // the same time, and the wrong order would replace its real block with stale JSON.
+                foreach (var pair in unknown) all.TryAdd(pair.Key, pair.Value);
 
             var json = JsonSerializer.Serialize(
                 new StateFile(SchemaVersion, all), Options);
 
-            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
+            // Empty for a bare filename, null for a volume root — CreateDirectory throws on both,
+            // and the throw would land in the catch below and kill every save for good, silently.
+            var dir = System.IO.Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             // Temp file first, then swap it in, exactly as SettingsService.Save does: a crash
             // mid-write can never leave a truncated file — and a truncated one would be read as
             // "no state", i.e. an app that starts up hammering the provider it was told to leave
-            // alone.
+            // alone. "Crash" means the process dying, not the machine: WriteAllText does not
+            // fsync, so a power cut can still commit the rename ahead of the bytes. That is the
+            // same guarantee settings.json has had for eleven releases, and the worst it costs
+            // here is the one thing this file is already allowed to cost — one extra request.
             var tmp = path + ".tmp";
             File.WriteAllText(tmp, json);
             if (File.Exists(path)) File.Replace(tmp, path, null);
@@ -202,6 +269,16 @@ internal static class ProviderStateStore
     /// still read here (T1). <c>null</c> stays null — "no failure yet" is not "Unknown".</summary>
     internal static TranslationErrorKind? ParseKind(string? name) =>
         name is null ? null
-        : Enum.TryParse<TranslationErrorKind>(name, ignoreCase: true, out var kind) ? kind
+        // Enum.TryParse alone is not "the member name": it also accepts the ORDINAL form ("7"),
+        // and a comma-separated list ("AuthFailed, Unknown"), which it OR-combines even for an
+        // enum with no [Flags]. Both are exactly what storing the name exists to avoid — the
+        // ordinal makes the file depend on the enum's ORDER, which TranslationErrorsTests pins
+        // only for today's build, and the list form produces a value that is not equal to
+        // AuthFailed and so walks straight past ruling E2-a's drop, into _lastKind and back out to
+        // disk. A name starts with a letter, carries no comma, and has to be one this build
+        // defines; anything else is a kind from a newer §5.3 and reads as Unknown, never throws.
+        : name.Length > 0 && char.IsLetter(name[0]) && !name.Contains(',')
+          && Enum.TryParse<TranslationErrorKind>(name, ignoreCase: true, out var kind)
+          && Enum.IsDefined(kind) ? kind
         : TranslationErrorKind.Unknown;
 }

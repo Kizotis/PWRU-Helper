@@ -234,8 +234,10 @@ public partial class MainWindow : Window
         // user is waiting out survives the restart instead of being re-earned on the first request
         // (E2.S4, architecture §5.7). The ONE ProviderGates reference outside Services/ (ruling
         // E2-e) and the one piece of UI wiring in the whole of Epic 2: no control, no binding, so
-        // _restoringSettings is not engaged. Best-effort and non-blocking by contract — and outside
-        // the settings try/catch below, because neither save may be skipped because the other threw.
+        // _restoringSettings is not engaged. Best-effort and BOUNDED — not asynchronous: like the
+        // SettingsService.Save immediately below it, this is one sub-kilobyte write to a directory
+        // that is already being written on this very path. Outside the settings try/catch, because
+        // neither save may be skipped because the other threw.
         ProviderGates.Flush();
 
         try
