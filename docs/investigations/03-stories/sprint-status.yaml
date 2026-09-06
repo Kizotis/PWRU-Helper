@@ -80,7 +80,7 @@ development_status:
   e2-s2-provider-gates-registry: done
   e2-s3-rate-ceiling-interactive-reserve: done
   e2-s4-persist-gate-state: done
-  e2-s5-http-provider-core: ready-for-dev
+  e2-s5-http-provider-core: review
   e2-s6-log-gate-transitions: done
   e2-s7-tune-gate-windows-spike-u9: backlog      # spike; scheduled AFTER the A.1 release ships
   epic-2-retrospective: optional

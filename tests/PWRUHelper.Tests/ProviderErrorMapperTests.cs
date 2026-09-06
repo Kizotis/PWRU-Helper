@@ -17,7 +17,8 @@ namespace PWRUHelper.Tests;
 /// Row 11's HTML sniffing (§4.3, TP-MAP-11…14) is the last section of the file, added by E1.S4
 /// together with the recorded bodies under <c>Fixtures/</c>.
 /// </summary>
-public class ProviderErrorMapperTests
+[Collection("Gates")]
+public class ProviderErrorMapperTests : GatesTestBase
 {
     private static HttpResponseMessage Resp(int status, string body = "", string contentType = "application/json")
         => new((HttpStatusCode)status) { Content = new StringContent(body, System.Text.Encoding.UTF8, contentType) };
@@ -275,13 +276,14 @@ public class ProviderErrorMapperTests
     }
 
     /// <summary>
-    /// The E1.S1 deferred item: a transport failure on the LAST attempt used to escape
-    /// <c>RequestAsync</c> raw, which also made the friendly "couldn't reach" line below the loop
-    /// unreachable (E1.S2's deferred item). It is now the mapper's Network, carrying that same
-    /// sentence — and the retry count is unchanged at three.
+    /// The E1.S1 deferred item: a transport failure used to escape <c>RequestAsync</c> raw, which
+    /// also made the friendly "couldn't reach" line below the loop unreachable (E1.S2's deferred
+    /// item). It is the mapper's Network, carrying that same sentence — and since E2.S5 it is
+    /// <b>TP-RET-05</b> as well: a Network failure costs ONE request, not three. The retry that
+    /// used to cover for a dead connection is E3.S3's chain now.
     /// </summary>
     [Fact]
-    public async Task Googles_last_attempt_transport_failure_is_Network_and_keeps_its_sentence()
+    public async Task TP_RET_05_a_transport_failure_is_Network_keeps_its_sentence_and_costs_one_request()
     {
         var fake = new FakeHandler().Throws(new HttpRequestException("no route to host"));
 
@@ -290,15 +292,16 @@ public class ProviderErrorMapperTests
 
         Assert.Equal(TranslationErrorKind.Network, ex.Kind);
         Assert.Equal("Couldn't reach the translation service. Check your Internet connection.", ex.Message);
-        Assert.Equal(3, fake.Requests);
+        Assert.Equal(1, fake.Requests);
     }
 
     /// <summary>A Google timeout is a Timeout, and it carries the sentence it has always carried.
     /// Since E1.S6 that sentence is the LOG's account only: what the player reads is the Timeout
     /// Kind's copy-deck sentence from <c>UserMessages</c>, pinned in <c>UserMessagesTests</c>. This
-    /// case pins the Kind and the no-retry decision. A timeout is not retried, exactly as before.</summary>
+    /// case pins the Kind and, since E2.S5, <b>TP-RET-04</b>: a <c>TaskCanceledException</c> whose
+    /// token is NOT cancelled costs two requests and comes back a Timeout — never a cancel.</summary>
     [Fact]
-    public async Task A_Google_timeout_is_a_Timeout_with_todays_wording()
+    public async Task TP_RET_04_a_Google_timeout_is_a_Timeout_retried_once_and_never_a_cancel()
     {
         var fake = new FakeHandler().TimesOut();
 
@@ -307,7 +310,7 @@ public class ProviderErrorMapperTests
 
         Assert.Equal(TranslationErrorKind.Timeout, ex.Kind);
         Assert.Equal("the request timed out", ex.Message);
-        Assert.Equal(1, fake.Requests);
+        Assert.Equal(2, fake.Requests);
     }
 
     /// <summary>
@@ -381,7 +384,10 @@ public class ProviderErrorMapperTests
 
         Assert.Equal(TranslationErrorKind.Timeout, ex.Kind);
         Assert.Equal("the request timed out", ex.Message);
-        Assert.Equal(1, fake.Requests);   // the batch, and nothing else
+        // The batch and its one retry, and nothing else: no per-line fan-out. The count is 2 rather
+        // than 1 since E2.S5 gave a Timeout the second attempt — 2 requests, not 2 × the line count,
+        // which is the property this case exists for.
+        Assert.Equal(2, fake.Requests);
     }
 
     /// <summary>
@@ -816,21 +822,32 @@ public class ProviderErrorMapperTests
     /// and the success path throws in between.
     /// </summary>
     [Fact]
-    public void The_sniff_is_written_above_the_parser_in_TranslationService()
+    public void The_sniff_is_written_above_the_parser_in_the_shared_core()
     {
         // Comments stripped first, and not for tidiness: the sniff's own comment explains what used
         // to "sail into JsonDocument.Parse below", so a plain substring scan finds the parser three
         // lines ABOVE the guard and fails on prose. E1.S3's TP-MAP-17 red was the same shape — a
         // source scan that cannot tell code from commentary is measuring the wrong thing.
-        var src = string.Join("\n", File.ReadAllLines(SourceOf("TranslationService.cs"))
+        //
+        // The file moved with the ordering: since E2.S5 the provider hands its parser to
+        // HttpProviderCore and the core decides when to call it, which is exactly what makes the
+        // rule structural — a provider can no longer parse before the sniff even if it wants to.
+        var src = string.Join("\n", File.ReadAllLines(SourceOf("HttpProviderCore.cs"))
                                         .Where(l => !l.TrimStart().StartsWith("//")));
 
         int sniff = src.IndexOf("LooksLikeHtml", StringComparison.Ordinal);
-        int parse = src.IndexOf("JsonDocument.Parse", StringComparison.Ordinal);
+        int parse = src.IndexOf("value = parse(body)", StringComparison.Ordinal);
 
-        Assert.True(sniff >= 0, "TranslationService no longer sniffs the body — §4.3 step 4 is gone");
-        Assert.True(parse >= 0, "TranslationService no longer parses — this guard is looking at the wrong file");
-        Assert.True(sniff < parse, "the HTML sniff must be written BEFORE JsonDocument.Parse (§4.3, never parse-then-guess)");
+        Assert.True(sniff >= 0, "HttpProviderCore no longer sniffs the body — §4.3 step 4 is gone");
+        Assert.True(parse >= 0, "HttpProviderCore no longer calls the provider's parser — this guard moved");
+        Assert.True(sniff < parse, "the HTML sniff must be written BEFORE the parser runs (§4.3, never parse-then-guess)");
+
+        // …and the provider really has stopped parsing on its own: its JsonDocument.Parse is inside
+        // the callback the core invokes, and nothing else in the file sends a request.
+        var provider = File.ReadAllText(SourceOf("TranslationService.cs"));
+        Assert.Contains("JsonDocument.Parse", provider);
+        Assert.DoesNotContain("_http.GetAsync", provider);
+        Assert.DoesNotContain("_http.SendAsync", provider);
     }
 
     /// <summary>An app source file, found by walking up from the test output — the same walk

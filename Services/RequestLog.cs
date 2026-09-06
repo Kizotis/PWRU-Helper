@@ -47,9 +47,10 @@ internal static class RequestLog
     /// prefix, so a dual-stack machine silently switching families looks like a block that "cleared
     /// itself"). <b>Not obtainable on this path today</b> — <see cref="HttpClient"/> does not expose
     /// the socket, and the only cheap way in is a <c>ConnectCallback</c> on the production handler,
-    /// which is a hot-path change this story is not allowed to make. §10.1's own instruction for
-    /// that case is to log <c>?</c> rather than to guess. <b>E2.S5</b>'s <c>HttpProviderCore</c>
-    /// owns the handler and is where the real value arrives.
+    /// which E2.S5's <c>HttpProviderCore</c> now owns: the production handler records the connected
+    /// family and hands it to <see cref="Line"/>. This value is what a caller that CANNOT know one
+    /// still says — a test handler has no connect callback — because §10.1's instruction for that
+    /// case is to log <c>?</c> rather than to guess.
     /// </summary>
     internal const string UnknownAddressFamily = "?";
 
@@ -309,22 +310,28 @@ internal static class RequestLog
 
     // ---- emission ------------------------------------------------------------------------------
 
+    // The three doors, all three carrying the address family since E2.S5: HttpProviderCore owns the
+    // production handler's ConnectCallback and is the only caller that can know which family a
+    // connection really used. It defaults to `?` so a caller that cannot know one — a test handler
+    // has no connect callback — says so rather than guessing (§10.1).
+
     /// <summary>One line for an attempt that ended on a real response.</summary>
     internal static void Emit(Call call, int attempt, TimeSpan elapsed, int burst60,
-        HttpResponseMessage resp, string? body) =>
+        HttpResponseMessage resp, string? body, string addressFamily = UnknownAddressFamily) =>
         Write(call, StatusOf(resp),
-            () => Line(call, attempt, ResponseFacts.Of(resp, body), elapsed, burst60));
+            () => Line(call, attempt, ResponseFacts.Of(resp, body), elapsed, burst60, addressFamily));
 
     /// <summary>One line for an attempt that ended in a transport exception.</summary>
-    internal static void Emit(Call call, int attempt, TimeSpan elapsed, int burst60, Exception transport) =>
+    internal static void Emit(Call call, int attempt, TimeSpan elapsed, int burst60,
+        Exception transport, string addressFamily = UnknownAddressFamily) =>
         Write(call, transport == null ? Nothing : transport.GetType().Name,
-            () => Line(call, attempt, ResponseFacts.OfTransport(transport), elapsed, burst60));
+            () => Line(call, attempt, ResponseFacts.OfTransport(transport), elapsed, burst60, addressFamily));
 
     /// <summary>One line for an attempt whose response is already gone — the parse failure.</summary>
     internal static void EmitStatus(Call call, int attempt, TimeSpan elapsed, int burst60,
-        int status, string? body) =>
+        int status, string? body, string addressFamily = UnknownAddressFamily) =>
         Write(call, status <= 0 ? Nothing : status.ToString(),
-            () => Line(call, attempt, ResponseFacts.OfStatus(status, body), elapsed, burst60));
+            () => Line(call, attempt, ResponseFacts.OfStatus(status, body), elapsed, burst60, addressFamily));
 
     /// <summary>The status the suppressor keys on, read without building the rest of the line —
     /// a suppressed attempt must not pay for the line it is not going to write.</summary>

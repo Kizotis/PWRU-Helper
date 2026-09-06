@@ -16,34 +16,23 @@ namespace PWRUHelper.Services;
 /// A table and nothing else: no methods, no state, no I/O, and no dependency — not even on
 /// <c>Logging</c> (I2). It holds today's values plus the §5.6 target numbers whose code has
 /// landed — the six breaker numbers arrived with <c>ProviderGate</c> (E2.S1), the four rate-ceiling
-/// numbers with its token bucket (E2.S3). The rest (<c>MaxAttempts = 2</c>, <c>PerLineCap</c>,
-/// <c>CacheCapacity = 2000</c> …) still arrive with the code that reads them — E2.S5 for the retry,
-/// E3.S8 for the batch cap, E4 for the cache, E5 for LIVE — because an unused constant is a
-/// constant nobody grades.
+/// numbers with its token bucket (E2.S3), and the two retry numbers with <c>HttpProviderCore</c>
+/// (E2.S5), which is also where the two "…Today" retry constants stopped describing today and were
+/// retired. The rest (<c>PerLineCap</c>, <c>CacheCapacity = 2000</c> …) still arrive with the code
+/// that reads them — E3.S8 for the batch cap, E4 for the cache, E5 for LIVE — because an unused
+/// constant is a constant nobody grades.
 /// Source: <c>docs/investigations/02-traduction/architecture-cible.md</c> §5.6 (the target table),
 /// §4.3 (the HTML markers).
 /// </summary>
 internal static class TranslationPolicy
 {
     // ---- what the providers do today ---------------------------------------------------------
-    // These five are behaviour-neutral by construction: each one is the literal that was already
-    // in the code, moved here and referenced from the same place. If one of them changes value,
-    // the change belongs to the story that changes the behaviour with it.
+    // Behaviour-neutral by construction: each one is the literal that was already in the code,
+    // moved here and referenced from the same place. If one of them changes value, the change
+    // belongs to the story that changes the behaviour with it.
 
     /// <summary>HttpClient timeout for every provider request, Google and DeepL alike.</summary>
-    public const int RequestTimeoutSeconds = 12;    // [CONFIRMED] now read at TranslationService.cs:57 and DeepLTranslator.cs:48
-
-    /// <summary>Requests per translated line today: one try plus two retries. Named "…Today" so it
-    /// cannot be confused with §5.6's target <c>MaxAttempts = 2</c>, which E2.S5 introduces —
-    /// benchmark-fournisseurs.md §11.4 item 3: three attempts into a hard block triple the abuse
-    /// signal for no benefit.</summary>
-    // E1.S5 replaced the literal with this constant, because §10.1's line renders `attempt=n/m` and
-    // an `m` that could drift from the loop's own bound is a log that lies. Same value, same shape.
-    public const int MaxAttemptsToday = 3;          // [CONFIRMED] now the retry loop's bound at TranslationService.cs:179
-
-    /// <summary>Base of the linear back-off between those attempts: <c>300 * (attempt + 1)</c>, so
-    /// 300 ms then 600 ms. §5.6's target replaces it with exponential + full jitter.</summary>
-    public const int RetrySpacingBaseMs = 300;      // [CONFIRMED] TranslationService.cs:229, still a literal there
+    public const int RequestTimeoutSeconds = 12;    // [CONFIRMED] now read once, at HttpProviderCore.CreateClient
 
     /// <summary>Entries kept by the in-memory LRU translation cache. §5.6 raises it to 2000 and
     /// persists it (E4); today it is memory-only and dies with the process.</summary>
@@ -51,7 +40,24 @@ internal static class TranslationPolicy
 
     /// <summary>The text travels in a GET query string, so it is chunked to stay well under
     /// typical URL limits.</summary>
-    public const int MaxQueryBytes = 1500;          // [CONFIRMED] now read at TranslationService.cs:76, :81, :100
+    public const int MaxQueryBytes = 1500;          // [CONFIRMED] now read at TranslationService.cs:83, :88, :107
+
+    // ---- the retry policy (§5.6) ---------------------------------------------------------------
+    // Read by Services/HttpProviderCore.cs (E2.S5), which replaced the three-attempt / 300 ms-linear
+    // loop these two numbers describe the successor of. Both are [ASSUMED] and both are revisited
+    // from field logs after the A.1 release (U9 / E2.S7).
+
+    /// <summary>Requests per logical call: one try plus at most one retry, and only for a failure a
+    /// second attempt could survive (<c>Unavailable</c>, <c>Timeout</c>). benchmark-fournisseurs.md
+    /// §11.4 item 3: three attempts into a hard block triple the abuse signal for no benefit — and
+    /// §10.1's line renders <c>attempt=n/m</c>, so the bound is read from here rather than written
+    /// twice.</summary>
+    public const int MaxAttempts = 2;               // [ASSUMED] architecture-cible.md §5.6; benchmark-fournisseurs.md §11.4 item 3
+
+    /// <summary>Base of the exponential back-off, drawn with <b>full jitter</b>:
+    /// <c>Random(0, BackoffBaseMs &lt;&lt; attempt)</c>. Jittered rather than fixed because two
+    /// instances behind one NAT retrying in lockstep is what a fixed spacing guarantees.</summary>
+    public const int BackoffBaseMs = 500;           // [ASSUMED] architecture-cible.md §5.6
 
     // ---- circuit breaker (§5.6) --------------------------------------------------------------
     // Read by Services/ProviderGate.cs (E2.S1). Every one of the six is [ASSUMED]: they are

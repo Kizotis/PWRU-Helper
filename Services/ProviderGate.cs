@@ -303,6 +303,15 @@ internal sealed class ProviderGate
     }
 
     /// <summary>
+    /// This gate's own "now" (IS-6). <c>HttpProviderCore</c> reads it to resolve a delta-form
+    /// <c>Retry-After</c>: the header says "in 300 seconds", the gate stores an instant, and the two
+    /// must be measured against the same clock or a value the server sent gets compared to a
+    /// different now and clamped as if it were something else. Read-only, and reading a clock is
+    /// not a side effect — R-2's rule is that a snapshot may not <i>advance</i> one.
+    /// </summary>
+    internal DateTimeOffset Now() => _clock();
+
+    /// <summary>
     /// Asked once before every request — <b>before</b>, never after (§5.4 AC 1), and it never
     /// blocks: no <c>Task</c>, no <c>CancellationToken</c>, no sleep. A gate that waits for you is
     /// the scheduler §5.4 explicitly refuses to build; the caller decides what to do with a

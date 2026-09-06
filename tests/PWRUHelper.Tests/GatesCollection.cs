@@ -33,6 +33,13 @@ public abstract class GatesTestBase : IDisposable
 {
     protected GatesTestBase() => Reset();
 
+    /// <summary>The same reset, mid-case, for a case that drives TWO provider failures and needs
+    /// the second one to meet a gate that has not just been closed by the first. Exposed as a
+    /// method rather than as a call to <c>ProviderGates.ResetForTests</c> at the call site because
+    /// the scan in <c>ProviderGatesTests</c> asks every file that names the registry to join the
+    /// non-parallel collection, and a case in the log-file collection cannot.</summary>
+    protected static void ResetGates() => Reset();
+
     /// <summary>Derived teardown. Override this rather than <c>Dispose</c>: re-declaring
     /// <c>IDisposable</c> on a derived class would re-map the interface and xUnit would then call
     /// the derived method <i>instead</i> of this one, silently skipping the reset — a leaked fake
@@ -58,5 +65,12 @@ public abstract class GatesTestBase : IDisposable
     {
         ProviderGates.ResetForTests();
         ProviderGates.PathOverride = TestGateStateRedirect.Path;
+        // Same reasoning as the path, for the clock IS-7 needs: `ResetForTests` restores the WALL
+        // clock (the production contract), and a wall clock cannot be advanced — so a case that
+        // drives a provider through the §5.4 ceiling would have to sleep for the bucket to refill.
+        // Re-applying the run-wide virtual clock here keeps the bucket real and the suite silent.
+        // A case that wants its own fake clock still sets one, exactly as before.
+        ProviderGates.Clock = TestVirtualTime.Now;
+        TestBackoffRedirect.Reset();
     }
 }

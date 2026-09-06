@@ -79,12 +79,15 @@ public class TranslationPolicyTests
     [Fact]
     public void The_numbers_are_the_ones_the_code_uses_today()
     {
-        // If a single one of these changes value, this story was wrong: increment 0 is
-        // behaviour-neutral by definition. The §5.6 targets (MaxAttempts 2, 500 ms spacing,
-        // cache 2000 …) are deliberately absent until the code that reads them exists.
+        // The numbers the code really runs on. The remaining §5.6 targets (cache 2000, PerLineCap
+        // …) are deliberately absent until the code that reads them exists.
         Assert.Equal(12, TranslationPolicy.RequestTimeoutSeconds);
-        Assert.Equal(3, TranslationPolicy.MaxAttemptsToday);
-        Assert.Equal(300, TranslationPolicy.RetrySpacingBaseMs);
+        // E2.S5 replaced MaxAttemptsToday = 3 / RetrySpacingBaseMs = 300 with §5.6's targets, in
+        // the same commit that changed the loop — E1.S1 said it would. The literals are the point
+        // HERE and only here: everywhere else the assertions are on relationships (one request on
+        // a 429, two on a 503), so E2.S7's tuning commit touches this line and no other.
+        Assert.Equal(2, TranslationPolicy.MaxAttempts);
+        Assert.Equal(500, TranslationPolicy.BackoffBaseMs);
         Assert.Equal(500, TranslationPolicy.CacheCapacityToday);
         Assert.Equal(1500, TranslationPolicy.MaxQueryBytes);
     }

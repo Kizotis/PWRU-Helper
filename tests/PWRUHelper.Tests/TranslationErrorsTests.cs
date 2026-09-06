@@ -13,7 +13,8 @@ namespace PWRUHelper.Tests;
 /// carry only a sentence now carries a machine-readable <see cref="TranslationErrorKind"/> in front
 /// of it, so the mapper, the breaker and the user-facing message stop being derived from a string.
 /// </summary>
-public class TranslationErrorsTests
+[Collection("Gates")]
+public class TranslationErrorsTests : GatesTestBase
 {
     // architecture-cible.md §4.1, verbatim and in order. Pinned as text because three later pieces
     // are written against this exact vocabulary: the mapper's classification table, the breaker's

@@ -11,11 +11,12 @@ namespace PWRUHelper.Tests;
 /// test handler, or its retry policy and its response parsing stay unreachable — and a test that
 /// forgets one turns CI into a client of a rented endpoint.
 ///
-/// It also PINS today's retry behaviour before anything changes it. Those two pins are deliberately
-/// "3 requests"; the story that re-points the policy (429 ⇒ one request, 503 ⇒ two) rewrites them in
-/// the same commit that changes the loop.
+/// It also PINS the retry behaviour. E1.S1 wrote those two pins as "3 requests" and said in its own
+/// tasks that E2.S5 would re-point them to TP-RET-01 / TP-RET-03 in the same commit that changed the
+/// loop; this is that commit, so they now read one request for a 429 and two for a 503.
 /// </summary>
-public class HttpSeamGuardTests
+[Collection("Gates")]
+public class HttpSeamGuardTests : GatesTestBase
 {
     // The Google endpoint's shape: [[["translated","original",…], …], …]
     private const string GoogleOk = """[[["hello","привет",null,null,10]],null,"ru"]""";
@@ -122,12 +123,16 @@ public class HttpSeamGuardTests
         // connection that has gone stale (or on a DNS answer that has moved) and never replace it.
         // Asserted on the factory each shared client is built from: digging the handler back out of
         // an HttpClient means reading a private runtime field, which breaks on a .NET servicing
-        // update for a reason that has nothing to do with this app.
-        using var google = TranslationService.CreatePooledHandler();
-        using var deepl = DeepLTranslator.CreatePooledHandler();
+        // update for a reason that has nothing to do with this app. Since E2.S5 there is ONE
+        // factory — the two were byte-identical — so this asserts the shape both providers get, and
+        // the ipv= callback the production path adds on top of it.
+        using var bare = HttpProviderCore.CreatePooledHandler();
+        using var recording = HttpProviderCore.CreatePooledHandler(ProviderIds.GoogleGtx);
 
-        Assert.Equal(TimeSpan.FromMinutes(2), google.PooledConnectionLifetime);
-        Assert.Equal(TimeSpan.FromMinutes(2), deepl.PooledConnectionLifetime);
+        Assert.Equal(TimeSpan.FromMinutes(2), bare.PooledConnectionLifetime);
+        Assert.Equal(TimeSpan.FromMinutes(2), recording.PooledConnectionLifetime);
+        Assert.Null(bare.ConnectCallback);
+        Assert.NotNull(recording.ConnectCallback);
     }
 
     // ---------- IS-11: the double really drives the providers ----------
@@ -160,14 +165,22 @@ public class HttpSeamGuardTests
         Assert.Equal("api-free.deepl.com", call.Uri.Host);
         Assert.Equal("DeepL-Auth-Key k:fx", call.Headers["Authorization"]);
         Assert.Contains("target_lang=EN-US", call.Body);
+        // The other half of the User-Agent pin above: E2.S5 moved the client factory into
+        // HttpProviderCore, and the UA is a provider OPTION rather than a shared default precisely
+        // so this stays true. DeepL has never sent one; a shared factory that added Google's Chrome
+        // string here would be a behaviour change on a keyed vendor path, smuggled in by a refactor.
+        Assert.False(call.Headers.ContainsKey("User-Agent"),
+            "DeepL must not start sending a User-Agent it has never sent");
     }
 
     [Fact]
     public async Task A_scripted_sequence_lets_a_retry_succeed()
     {
-        // 429 first, then the real answer — proving the script advances and the loop retries.
+        // 503 first, then the real answer — proving the script advances and the loop retries. It
+        // used to be a 429; since E2.S5 that is the one thing a retry may NOT be tried on (the gate
+        // owns the wait), and Unavailable is what a second attempt is for.
         var fake = new FakeHandler()
-            .Respond(HttpStatusCode.TooManyRequests, "<html>blocked</html>", "text/html")
+            .Respond(HttpStatusCode.ServiceUnavailable)
             .RespondJson(GoogleOk);
 
         Assert.Equal("hello", await new TranslationService(fake).TranslateAsync("привет", "ru", "en"));
@@ -210,29 +223,36 @@ public class HttpSeamGuardTests
         Assert.True(sw.ElapsedMilliseconds >= 30, $"the delay was not honoured ({sw.ElapsedMilliseconds} ms)");
     }
 
-    // ---------- Pre-change pins of today's retry policy ----------
+    // ---------- The retry policy (§5.6), pinned where E1.S1 pinned its predecessor ----------
 
+    /// <summary>TP-RET-01 — the sentence the whole epic is about: a refusal costs <b>one</b>
+    /// request. It cost three, and the two extra ones bought nothing but a tripled abuse signal
+    /// (benchmark-fournisseurs.md §11.4 item 3).</summary>
     [Fact]
-    public async Task Today_a_429_costs_three_requests()
+    public async Task TP_RET_01_a_429_costs_exactly_one_request()
     {
         var fake = new FakeHandler().Respond(HttpStatusCode.TooManyRequests, "<html>blocked</html>", "text/html");
 
         var ex = await Assert.ThrowsAsync<TranslationException>(
             () => new TranslationService(fake).TranslateAsync("привет", "ru", "en"));
 
-        Assert.Equal(3, fake.Requests);
+        Assert.Equal(1, fake.Requests);
+        Assert.Equal(TranslationErrorKind.RateLimited, ex.Kind);
         Assert.Contains("limiting translations", ex.Message);
     }
 
+    /// <summary>TP-RET-03 — a 5xx is the failure a second attempt could plausibly survive, so it is
+    /// the one that gets it: exactly two requests, then <c>Unavailable</c>.</summary>
     [Fact]
-    public async Task Today_a_503_costs_three_requests()
+    public async Task TP_RET_03_a_503_costs_exactly_two_requests()
     {
         var fake = new FakeHandler().Respond(HttpStatusCode.ServiceUnavailable);
 
         var ex = await Assert.ThrowsAsync<TranslationException>(
             () => new TranslationService(fake).TranslateAsync("привет", "ru", "en"));
 
-        Assert.Equal(3, fake.Requests);
+        Assert.Equal(2, fake.Requests);
+        Assert.Equal(TranslationErrorKind.Unavailable, ex.Kind);
         Assert.Contains("unavailable", ex.Message);
     }
 }

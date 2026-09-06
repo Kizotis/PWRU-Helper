@@ -28,7 +28,7 @@ namespace PWRUHelper.Tests;
 /// else uses (<c>dir=zz-&gt;qq</c> and friends) and filters on it, instead of counting lines.</para>
 /// </summary>
 [Collection(LogFileCollection.Name)]
-public class RequestLogTests
+public class RequestLogTests : GatesTestBase
 {
     // The Google endpoint's healthy shape, same literal HttpSeamGuardTests pins.
     private const string GoogleOk = """[[["hello","привет",null,null,10]],null,"ru"]""";
@@ -68,7 +68,7 @@ public class RequestLogTests
     {
         var call = RequestLog.ForRequest("google-gtx",
             new Uri("https://translate.googleapis.com/translate_a/single?client=gtx&q=secret"),
-            "ru", "en", "one\ntwo", TranslationPolicy.MaxAttemptsToday);
+            "ru", "en", "one\ntwo", TranslationPolicy.MaxAttempts);
 
         using var resp = Resp(429, "<html><body>We're sorry...</body></html>", "text/html");
         resp.Headers.TryAddWithoutValidation("Retry-After", "30");
@@ -81,12 +81,12 @@ public class RequestLogTests
 
         // The shape §10.1 prints, field for field:
         // tr provider=google-gtx ep=translate.googleapis.com/translate_a/single dir=ru->en
-        // attempt=2/3 cid=0054 status=429 elapsed=142ms retry-after=30 ct=text/html len=40
+        // attempt=2/2 cid=0054 status=429 elapsed=142ms retry-after=30 ct=text/html len=40
         // hdrs=[via:"1.1 google" srv:"HTTP server (unknown)" xrl:- set-cookie:yes]
         // bytes=7 lines=2 burst60=37 ipv=? body="We're sorry..."
         Assert.Matches(
             @"^tr provider=google-gtx ep=translate\.googleapis\.com/translate_a/single dir=ru->en " +
-            @"attempt=2/3 cid=[0-9a-f]{4} status=429 elapsed=142ms retry-after=30 ct=text/html " +
+            @"attempt=2/2 cid=[0-9a-f]{4} status=429 elapsed=142ms retry-after=30 ct=text/html " +
             @"len=\d+ hdrs=\[via:""1\.1 google"" srv:""HTTP server \(unknown\)"" xrl:- set-cookie:yes\] " +
             @"bytes=7 lines=2 burst60=37 ipv=\? body="".+""$",
             line);
@@ -419,34 +419,39 @@ public class RequestLogTests
         Assert.True(valve.Note("deepl", "429", t0.AddSeconds(11)).Write);
     }
 
-    /// <summary>The three attempts of one logical call are well under the threshold, which is the
-    /// property TP-LOG-04 depends on: the valve must not eat an ordinary retried failure.</summary>
+    /// <summary>The attempts of one logical call are well under the threshold, which is the property
+    /// TP-LOG-04 depends on: the valve must not eat an ordinary retried failure. E2.S5 re-checked
+    /// the valve's cases against the new storm shape — two attempts instead of three makes it
+    /// shallower, never deeper — and changed the fixture's spacing, not the numbers.</summary>
     [Fact]
     public void One_retried_call_is_never_suppressed()
     {
         var t0 = new DateTimeOffset(2026, 9, 6, 13, 29, 0, TimeSpan.Zero);
         var valve = new LogSuppressor();
 
-        Assert.All(new[] { 0, 300, 900 },
-            ms => Assert.True(valve.Note("google-gtx", "429", t0.AddMilliseconds(ms)).Write));
+        // The widest spacing E2.S5's full jitter can put between the two attempts: [0, 500).
+        Assert.All(new[] { 0, 499 },
+            ms => Assert.True(valve.Note("google-gtx", "503", t0.AddMilliseconds(ms)).Write));
     }
 
     // ---------------------------------------------------------------------------------------
     //  End to end, through E1.S1's fake handler
     // ---------------------------------------------------------------------------------------
 
-    /// <summary>TP-LOG-04 — the field set is complete for a real 429 taken through the real retry
-    /// loop, and TP-RET-08's shape is already visible: three attempts, one cid, 1/3 2/3 3/3.</summary>
+    /// <summary>TP-LOG-04 — the field set is complete for a real 429 taken through the real request
+    /// path. Since E2.S5 a 429 is <b>not retried</b> (the gate owns the wait), so the whole episode
+    /// is one line; TP-RET-08's "one cid across both attempts" is asserted on a 503, which is what
+    /// a retry is now for, in <c>HttpProviderCoreTests</c>.</summary>
     [Fact]
     public async Task TP_LOG_04_a_429_logs_one_line_per_attempt_under_a_single_correlation_id()
     {
         var lines = await FailingCall("zz", "qa", h => h.Respond(HttpStatusCode.TooManyRequests,
             "{\"error\":\"rate limited\"}", "application/json"));
 
-        Assert.Equal(3, lines.Count);
+        Assert.Single(lines);
         var cids = lines.Select(l => Field(l, "cid")).Distinct().ToList();
         Assert.Single(cids);
-        Assert.Equal(new[] { "1/3", "2/3", "3/3" }, lines.Select(l => Field(l, "attempt")).ToArray());
+        Assert.Equal(new[] { "1/2" }, lines.Select(l => Field(l, "attempt")).ToArray());
 
         foreach (var line in lines)
         {
@@ -526,14 +531,21 @@ public class RequestLogTests
     [Fact]
     public async Task A_network_failure_and_a_timeout_each_log_their_own_status()
     {
+        // The two Kinds E2.S5 swapped round: a Network failure is no longer retried (E3.S3's chain
+        // is the redundancy the retry used to fake) and a Timeout now is.
         var network = await FailingCall("zz", "qf", h => h.Throws(new HttpRequestException("no route")));
-        Assert.Equal(3, network.Count);
+        Assert.Single(network);
         Assert.All(network, l => Assert.Equal("HttpRequestException", Field(l, "status")));
         Assert.All(network, l => Assert.Equal("-", Field(l, "ct")));
 
+        // The first failure paused the provider (§5.3's soft cooldown), and a paused provider sends
+        // nothing — which is E2's whole point and would make the second half of this case measure
+        // an empty log. Two failures a minute apart in the field; one reset here.
+        ResetGates();
+
         var timeout = await FailingCall("zz", "qg", h => h.TimesOut());
-        Assert.Single(timeout);                     // a timeout is not retried
-        Assert.Equal("TaskCanceledException", Field(timeout[0], "status"));
+        Assert.Equal(2, timeout.Count);
+        Assert.All(timeout, l => Assert.Equal("TaskCanceledException", Field(l, "status")));
     }
 
     /// <summary>A body that claimed to be JSON, is not markup and still does not parse: the one
@@ -611,9 +623,8 @@ public class RequestLogTests
 
     /// <summary>
     /// TP-LOG-03 — a recognisable API key is set and really sent, and it appears neither in the log
-    /// nor in "Copy error report". DeepL does not emit a §10.1 line in this story (E2.S5 moves both
-    /// providers onto the shared core), but it DOES log through <c>FallbackTranslator</c> today, and
-    /// that is exactly the path a keyed user's report is built from — so the assertion is made
+    /// nor in "Copy error report". Since E2.S5 DeepL emits §10.1 lines of its own — which is what
+    /// turned key redaction from a hypothetical into an obligation — so the assertion is made
     /// against the whole produced file, not against one line's shape.
     /// </summary>
     [Fact]
@@ -723,7 +734,7 @@ public class RequestLogTests
 
     private static RequestLog.Call Call(string source, string target, string text) =>
         RequestLog.ForRequest("google-gtx", new Uri("https://translate.googleapis.com/translate_a/single?q=x"),
-            source, target, text, TranslationPolicy.MaxAttemptsToday);
+            source, target, text, TranslationPolicy.MaxAttempts);
 
     private static HttpResponseMessage Resp(int status, string body, string contentType = "application/json")
         => new((HttpStatusCode)status)

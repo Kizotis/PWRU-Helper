@@ -20,7 +20,8 @@ namespace PWRUHelper.Tests;
 /// that changes it, and the next edit to any of these sentences must be a deliberate one that
 /// fails here first.
 /// </summary>
-public class UserMessagesTests
+[Collection("Gates")]
+public class UserMessagesTests : GatesTestBase
 {
     // The one Kind that must never reach a surface. TP-MAP-17's scan excludes tests/
     // (TranslationErrorsTests.ProductionSources), so a test file MAY name the token and

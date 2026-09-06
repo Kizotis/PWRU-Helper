@@ -333,7 +333,8 @@ public class ProviderGatesTests : GatesTestBase
         {
             var name = Path.GetFileName(file);
             // The two files that ARE the seam, plus anything under bin/obj.
-            if (name is "GatesCollection.cs" or "TempGateState.cs" or "TestGateStateRedirect.cs") continue;
+            if (name is "GatesCollection.cs" or "TempGateState.cs" or "TestGateStateRedirect.cs"
+                     or "TestBackoffRedirect.cs") continue;
             if (file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}") ||
                 file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")) continue;
 
