@@ -18,7 +18,7 @@ namespace PWRUHelper.Services;
 /// prove it about the code that was already shipping.</para>
 ///
 /// <para>The limit itself does not live here: it is <c>TranslationPolicy.MaxQueryBytes</c>, passed
-/// in as <paramref name="maxBytes"/>, so a provider with a different query budget can use the same
+/// in as the <c>maxBytes</c> argument, so a provider with a different query budget can use the
 /// splitter.</para>
 /// </summary>
 internal static class TextChunker
@@ -47,7 +47,10 @@ internal static class TextChunker
         if (current.Length > 0) yield return current.ToString();
     }
 
-    internal static IEnumerable<string> HardSplit(string s, int maxBytes)
+    // private, as it was before the move: the only entry point is ChunkText, and a caller that
+    // reached HardSplit directly would be splitting mid-sentence for no reason. Nothing outside
+    // this class ever called it (E3.S6 review).
+    private static IEnumerable<string> HardSplit(string s, int maxBytes)
     {
         // Split by characters so each chunk stays under the byte limit.
         var current = new StringBuilder();

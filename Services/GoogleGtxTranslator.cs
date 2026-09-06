@@ -170,8 +170,15 @@ public class GoogleGtxTranslator : ITranslator
             // reason that holds for RateLimited and Blocked and for nothing else. Unfiltered, it
             // also fired on a BadResponse or a Timeout on line 3 of 14 and turned lines 4-14 into
             // "(skipped — rate-limited…)", a sentence that was simply false: nobody was rate-
-            // limiting anything, and eleven translatable lines were thrown away to say so. The
-            // latch itself is kept (I16), and a latched line still reads exactly as it did.
+            // limiting anything. The latch itself is kept (I16), and a latched line still reads
+            // exactly as it did.
+            //
+            // Be exact about what this buys, because the gate does half of it anyway (E3.S6 review):
+            // a Timeout/Network/Unavailable/Unknown is a §5.3 SoftCooldown, so the gate blocks this
+            // provider for 5 s the moment line 3 fails and lines 4-14 are refused at admission — no
+            // request, but no translation either. What changes for them is only that they stop
+            // claiming a rate limit. The lines genuinely saved are the BadResponse ones, which set
+            // no window until the third in a row; and every failing line now names its own failure.
             catch (TranslationException tex) when (tex.Kind is TranslationErrorKind.RateLimited
                                                             or TranslationErrorKind.Blocked)
             { rateLimited = true; result.Add("(rate-limited — try again shortly)"); }

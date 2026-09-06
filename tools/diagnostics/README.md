@@ -128,7 +128,7 @@ Defender's `ExclusionPath` / `ExclusionProcess` / `ExclusionExtension`.
 > `-Smoke` carries none of this risk and is what you should run unless asked otherwise.
 
 The probe reproduces the app's request exactly: same URL and query parameters, the same hard-coded
-Chrome 120 User-Agent from `Services/TranslationService.cs`, no `Accept`, no `Accept-Language`, no
+Chrome 120 User-Agent from `Services/GoogleGtxTranslator.cs`, no `Accept`, no `Accept-Language`, no
 cookies, the Windows system proxy, HTTP/1.1, a 12 s timeout.
 
 **Known limitation.** PowerShell 5.1 runs on .NET Framework, so its TLS handshake is not

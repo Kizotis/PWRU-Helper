@@ -675,20 +675,38 @@ public class HttpProviderCoreTests : GatesTestBase
     {
         // ChainTranslator.cs joined the list with E3.S3: it is the OUTERMOST await on the request
         // path now — every translation the app makes goes through its one `await call(tier…)` — and
-        // it is awaited from the same UI-thread methods, so it has the same obligation as the four
-        // files below and none of the reasons to be exempt.
-        foreach (var file in new[] { "HttpProviderCore.cs", "GoogleGtxTranslator.cs",
-                                     "DeepLTranslator.cs", "RequestLog.cs", "ChainTranslator.cs" })
+        // it is awaited from the same UI-thread methods, so it has the same obligation as the other
+        // files here and none of the reasons to be exempt.
+        //
+        // The set is DERIVED, not typed out (E3.S6's review): a file in Services/ that consults
+        // HttpProviderCore and awaits IS on the request path, so E3.S4's new provider joins this
+        // scan by existing. A hand-written list would have gone blind to it in exactly the way a
+        // list of file names goes stale — which is what E3.S6's rename cost this test in the first
+        // place. The filter reproduces today's five files and nothing else.
+        var onTheRequestPath = Directory.EnumerateFiles(ServicesDir(), "*.cs")
+            .Where(f => File.ReadAllText(f).Contains("HttpProviderCore", StringComparison.Ordinal))
+            .Where(f => Statements(f).Any(s => Regex.IsMatch(s, @"(^|[^\w.])await\s")))
+            .OrderBy(Path.GetFileName, StringComparer.Ordinal)
+            .ToList();
+
+        // Non-vacuity, first half: the five files this scan has always covered must all be in the
+        // derived set. A filter that quietly matched nothing would pass every assertion below.
+        var names = onTheRequestPath.Select(Path.GetFileName).ToList();
+        foreach (var known in new[] { "HttpProviderCore.cs", "GoogleGtxTranslator.cs",
+                                      "DeepLTranslator.cs", "RequestLog.cs", "ChainTranslator.cs" })
+            Assert.Contains(known, names);
+
+        foreach (var file in onTheRequestPath)
         {
-            var offenders = Statements(SourceOf(file))
+            var offenders = Statements(file)
                 .Where(s => Regex.IsMatch(s, @"(^|[^\w.])await\s") && !s.Contains(".ConfigureAwait(false)"))
                 .ToList();
 
             Assert.True(offenders.Count == 0,
-                $"{file} awaits without ConfigureAwait(false): {string.Join(" | ", offenders)}");
+                $"{Path.GetFileName(file)} awaits without ConfigureAwait(false): {string.Join(" | ", offenders)}");
         }
 
-        // Non-vacuity: the scan must have found the awaits it is looking at.
+        // Non-vacuity, second half: the scan must have found the awaits it is looking at.
         Assert.Contains(Statements(SourceOf("HttpProviderCore.cs")),
             s => s.Contains("await") && s.Contains("SendAsync"));
     }
