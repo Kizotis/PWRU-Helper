@@ -114,8 +114,14 @@ internal sealed record GatePolicy(
                 Read(doc, nameof(SoftCooldownSecs), Default.SoftCooldownSecs),
                 Read(doc, nameof(BadResponseStrikesToOpen), Default.BadResponseStrikesToOpen));
         }
-        catch (JsonException)
+        catch (Exception)
         {
+            // Deliberately every exception, not just JsonException: JsonDocument.Parse(string)
+            // transcodes to UTF-8 first and throws ArgumentException — not JsonException — on
+            // invalid UTF-16 (a lone surrogate that survived a hand-edited settings file). The
+            // contract here is "never throws" (IS-12, the L1 half of TP-SET-11), and a diagnostic
+            // hatch that crashes the app on a typo would be worse than no hatch; there is no
+            // failure of a pure string parse that should be louder than "nothing said".
             return Default;   // unparseable ⇒ the graded defaults, silently
         }
     }
@@ -242,7 +248,13 @@ internal sealed class ProviderGate
                 return;
             }
 
-            _cleanSince ??= now;                // the clean run starts at the first success after a failure
+            // A clean run cannot start inside a block. The success is real, but it belongs to a
+            // request that was already in flight when the gate closed behind it (the two chains
+            // share one gate, I9), and it is not evidence that the provider is well now — only a
+            // probe is. Without the guard, one such late 200 sets `cleanSince` at the start of a
+            // 30-minute window; CleanResetMinutes later the probe's own failure runs DecayStrikes
+            // first and re-opens at strike 1 for 60 s, erasing the whole escalation ladder.
+            if (_blockedUntil is null) _cleanSince ??= now;
             DecayStrikes(now);
         }
     }
@@ -268,6 +280,7 @@ internal sealed class ProviderGate
             // A probe failure is an ordinary failure that happens to end half-open: the machine
             // needs no branch on it, only the latch released so the window it is about to set is
             // the state everyone sees (§5.2, HalfOpen → Open).
+            var wasProbe = _probeOutstanding;
             _probeOutstanding = false;
             DecayStrikes(now);                  // a failure after a long clean run starts from strike 1
 
@@ -275,7 +288,15 @@ internal sealed class ProviderGate
             {
                 case GateReaction.Escalate:     // RateLimited, Blocked — and a failed probe re-opens here
                     _strikes++;
-                    _blockedUntil = now + Honour(retryAt, EscalatedWindow(_strikes), now);
+                    var window = now + Honour(retryAt, EscalatedWindow(_strikes), now);
+                    // An explicit Retry-After assigns — §5.5 gives the server the last word. With
+                    // no hint, the same "extend, never shorten" rule as the rows below applies:
+                    // doubling always extends this row's own window, so the guard only bites where
+                    // a LONGER block already stands and a stale in-flight 429 would otherwise lift
+                    // it — an AuthFailed MaxValue (AC 4: only ClearAuthBlock lifts it) or a
+                    // 60-minute QuotaExhausted window (§15 R9: one request an hour, not one a
+                    // minute). The strike is still counted either way.
+                    if (retryAt is not null) _blockedUntil = window; else BlockUntil(window);
                     break;
 
                 case GateReaction.Quota:        // open for an hour, no strike escalation (§15 R9)
@@ -301,6 +322,16 @@ internal sealed class ProviderGate
                     }
                     break;
             }
+
+            // §5.2 has exactly one arrow out of HalfOpen on a failure, and it lands on Open. The
+            // SoftStrike row can leave the window untouched (one BadResponse is not three), which
+            // would leave `blockedUntil` where it was — already elapsed, because that is how the
+            // probe was granted. The gate would then read Open to the UI while handing a fresh
+            // probe to every caller in turn, with no cooldown between them: the breaker off in the
+            // one state it was entered to manage. A failed probe therefore always leaves a future
+            // block; the shortest one the policy has is the right floor.
+            if (wasProbe && _blockedUntil is { } b && b <= now)
+                BlockUntil(now + TimeSpan.FromSeconds(_policy.SoftCooldownSecs));
 
             _lastKind = kind;
             _lastAt = now;
@@ -334,7 +365,13 @@ internal sealed class ProviderGate
     {
         lock (_lock)
         {
-            var state = _probeOutstanding ? GateState.HalfOpen
+            // HalfOpen only while a probe could still be running — the same test TryEnter applies
+            // before it re-arms one. Reading `_probeOutstanding` alone would leave the 1 Hz status
+            // chip on "checking…" for the life of the process after a probe was abandoned (LIVE
+            // switched off mid-probe, or a crash), because the re-arm needs a TryEnter that a
+            // paused app never makes. Reading the clock is not a side effect: no probe is taken,
+            // no state is written.
+            var state = _probeOutstanding && _clock() - _probeStartedAt < ProbeTimeout ? GateState.HalfOpen
                       : _blockedUntil is null ? GateState.Closed
                       : GateState.Open;         // still Open once the window elapses — until a caller
                                                 // takes the probe, which is what makes it exactly one

@@ -473,6 +473,99 @@ public class ProviderGateTests
                      gate.Snapshot().BlockedUntil);
     }
 
+    [Fact]
+    public void An_escalating_failure_in_flight_cannot_lift_the_two_blocks_only_the_user_can()
+    {
+        // The other half of the same race, and the one that matters most: an escalating row used
+        // to ASSIGN its window, so a stale 429 arriving a second after the block landed replaced
+        // "until the key changes" with 60 seconds, and a 60-minute quota window with 60 seconds.
+        // AC 4 says only ClearAuthBlock lifts the first; §15 R9 says the second is an hour.
+        var (auth, _) = NewGate();
+        auth.ReportFailure(TranslationErrorKind.AuthFailed);
+        auth.ReportFailure(TranslationErrorKind.RateLimited);       // the stale request lands
+
+        Assert.Equal(DateTimeOffset.MaxValue, auth.Snapshot().BlockedUntil);
+        Assert.Equal(1, auth.Snapshot().Strikes);                   // counted, just not obeyed yet
+        auth.ClearAuthBlock();                                      // still the only way out
+        Assert.Equal(GateState.Closed, auth.Snapshot().State);
+
+        var (quota, clockQ) = NewGate();
+        quota.ReportFailure(TranslationErrorKind.QuotaExhausted);
+        var hour = clockQ.Now + TimeSpan.FromMinutes(TranslationPolicy.QuotaOpenMinutes);
+        clockQ.AdvanceSeconds(1);
+        quota.ReportFailure(TranslationErrorKind.Blocked);
+
+        Assert.Equal(hour, quota.Snapshot().BlockedUntil);
+    }
+
+    [Fact]
+    public void An_escalating_failure_still_obeys_an_explicit_hint_over_a_standing_block()
+    {
+        // The guard above must not swallow §5.5: a server that says "come back at X" gets the last
+        // word on its own window, standing block or not. Without this the previous case would be
+        // indistinguishable from "escalate can never shorten anything".
+        var (gate, clock) = NewGate();
+        gate.ReportFailure(TranslationErrorKind.RateLimited);
+        gate.ReportFailure(TranslationErrorKind.RateLimited);        // strikes 2 ⇒ 2 × Base standing
+
+        var said = clock.Now + TimeSpan.FromSeconds(90);             // literal: a header value
+        Assert.True(said < gate.Snapshot().BlockedUntil);
+        gate.ReportFailure(TranslationErrorKind.RateLimited, said);
+
+        Assert.Equal(said, gate.Snapshot().BlockedUntil);
+    }
+
+    [Fact]
+    public void A_probe_that_fails_without_setting_a_window_still_re_opens_the_gate()
+    {
+        // §5.2 has one arrow out of HalfOpen on a failure and it lands on Open. BadResponse is the
+        // row that can fail a probe without opening anything (one is not three); the gate would
+        // then keep an already-elapsed blockedUntil — reading Open to the UI while handing every
+        // caller in turn a fresh probe, at full request rate, against a provider that just failed.
+        var (gate, clock) = NewGate();
+        gate.ReportFailure(TranslationErrorKind.RateLimited);
+        TakeProbe(gate, clock);
+
+        gate.ReportFailure(TranslationErrorKind.BadResponse);        // 1 of 3: no window of its own
+
+        Assert.Equal(GateState.Open, gate.Snapshot().State);
+        Assert.Equal(clock.Now + TimeSpan.FromSeconds(TranslationPolicy.SoftCooldownSecs),
+                     gate.Snapshot().BlockedUntil);
+        Assert.Equal(GateOutcome.Open, gate.TryEnter(RequestPriority.Interactive).Outcome);
+    }
+
+    [Fact]
+    public void A_success_from_a_request_that_predates_the_block_does_not_forgive_the_ladder()
+    {
+        // Both chains share one gate (I9), so a request dispatched before the gate closed can
+        // report a 200 a second after it opened. That success is real but it is not evidence the
+        // provider is well — only a probe is. It used to start the clean run, and CleanResetMinutes
+        // later the probe's own failure ran DecayStrikes first and re-opened at strike 1: one late
+        // 200 erased the whole escalation ladder.
+        // Five strikes, so the standing window (16 min) outlasts CleanResetMinutes (10) — that is
+        // what makes the forgiveness reachable at all.
+        var (gate, clock) = NewGate();
+        for (var i = 0; i < 5; i++)
+        {
+            if (i > 0) TakeProbe(gate, clock);
+            gate.ReportFailure(TranslationErrorKind.RateLimited);
+        }
+        Assert.Equal(5, gate.Snapshot().Strikes);
+        var standing = gate.Snapshot().BlockedUntil;
+        Assert.True(standing - clock.Now > TimeSpan.FromMinutes(TranslationPolicy.CleanResetMinutes));
+
+        clock.AdvanceSeconds(1);
+        gate.ReportSuccess();                                        // the stale 200
+        Assert.Equal(standing, gate.Snapshot().BlockedUntil);        // it lifts nothing, either
+
+        TakeProbe(gate, clock);
+        var at = clock.Now;
+        gate.ReportFailure(TranslationErrorKind.RateLimited);
+
+        Assert.Equal(6, gate.Snapshot().Strikes);                    // not 1
+        Assert.Equal(at + Cap, gate.Snapshot().BlockedUntil);        // not the 60-second floor
+    }
+
     // ---- the DoD: every row of §5.3 has a case -----------------------------------------------
 
     /// <summary>
@@ -597,6 +690,25 @@ public class ProviderGateTests
     }
 
     [Fact]
+    public void An_abandoned_probe_stops_reading_HalfOpen_even_if_nobody_calls_TryEnter_again()
+    {
+        // The re-arm above needs a TryEnter, and a paused app makes none: LIVE is off, the user has
+        // walked away, and the only thing still running is the 1 Hz status poll (R-2). Reading the
+        // latch alone left that chip on "checking…" for the life of the process. Snapshot answers
+        // the question TryEnter would answer, without taking anything.
+        var (gate, clock) = NewGate();
+        gate.ReportFailure(TranslationErrorKind.RateLimited);
+        TakeProbe(gate, clock);
+
+        clock.Advance(ProbeTimeout - TimeSpan.FromSeconds(1));
+        Assert.Equal(GateState.HalfOpen, gate.Snapshot().State);
+
+        clock.AdvanceSeconds(1);
+        Assert.Equal(GateState.Open, gate.Snapshot().State);
+        Assert.Equal(GateOutcome.Probe, gate.TryEnter(RequestPriority.Interactive).Outcome);
+    }
+
+    [Fact]
     public void Priority_does_not_change_the_breakers_answer_yet()
     {
         // The enum lands here (OQ-a: read-once is Interactive) but nothing reads it until the token
@@ -648,6 +760,7 @@ public class ProviderGateTests
     [InlineData("{ \"OpenBaseSeconds\": -5 }")]
     [InlineData("{ \"OpenBaseSeconds\": 1.5 }")]
     [InlineData("{ \"Unrelated\": 7 }")]
+    [InlineData("﻿{ \"OpenBaseSeconds\": 60 }")]              // a BOM that survived a hand edit
     public void GatePolicy_Parse_never_throws_and_falls_back_to_the_graded_defaults(string? json)
     {
         // A diagnostic hatch that can crash the app on a typo is worse than no hatch (TP-SET-11 L1).
@@ -655,6 +768,19 @@ public class ProviderGateTests
 
         Assert.Equal(GatePolicy.Default, policy);
         Assert.Equal(TranslationPolicy.OpenBaseSeconds, policy.OpenBaseSeconds);
+    }
+
+    [Fact]
+    public void GatePolicy_Parse_does_not_throw_on_a_string_that_is_not_valid_UTF_16()
+    {
+        // The one "never throws" hole that is not a JsonException: JsonDocument.Parse(string)
+        // transcodes to UTF-8 first and raises ArgumentException on a lone surrogate. Built here
+        // rather than as InlineData, because xUnit's data serializer rewrites the character and the
+        // case would silently stop testing anything.
+        var lone = "{ \"OpenBaseSeconds\": 60 }" + (char)0xD800;
+
+        Assert.Equal(GatePolicy.Default, GatePolicy.Parse(lone));
+        Assert.Equal(GatePolicy.Default, GatePolicy.Parse((char)0xDC00 + "{}"));
     }
 
     [Fact]
