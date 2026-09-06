@@ -79,7 +79,7 @@ public class DeepLTranslator : ITranslator
 
     // One factory for both paths, so a test client differs from the production one by its handler
     // and nothing else. The factory itself is the core's since E2.S5: it was byte-identical here
-    // and in TranslationService apart from that provider's User-Agent.
+    // and in GoogleGtxTranslator apart from that provider's User-Agent.
     private static HttpClient CreateClient(HttpMessageHandler? handler = null) =>
         HttpProviderCore.CreateClient(handler, userAgent: null);
 

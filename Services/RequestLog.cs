@@ -7,7 +7,7 @@ namespace PWRUHelper.Services;
 /// The per-request diagnostic line of <c>architecture-cible.md</c> §10.1, built here and written
 /// through <see cref="Logging"/>.
 ///
-/// It exists because <c>TranslationService</c> logs <b>nothing</b> today, so the About tab's "Copy
+/// It exists because <c>GoogleGtxTranslator</c> logs <b>nothing</b> today, so the About tab's "Copy
 /// error report" (<c>MainWindow.xaml.cs:312-322</c>) is empty for exactly the failure players
 /// report. One line per <b>non-success or exceptional</b> attempt turns the next incident into a
 /// measurement instead of an argument; successes are counted into <c>burst60</c> and never logged,

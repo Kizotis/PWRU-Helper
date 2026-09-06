@@ -45,7 +45,7 @@ public class HttpProviderCoreTests : GatesTestBase
         var fake = new FakeHandler().Respond(HttpStatusCode.Forbidden, "nope");
 
         var ex = await Assert.ThrowsAsync<TranslationException>(
-            () => new TranslationService(fake).TranslateAsync("привет", "ru", "en"));
+            () => new GoogleGtxTranslator(fake).TranslateAsync("привет", "ru", "en"));
 
         Assert.Equal(1, fake.Requests);
         Assert.Equal(TranslationErrorKind.Blocked, ex.Kind);
@@ -81,7 +81,7 @@ public class HttpProviderCoreTests : GatesTestBase
         var fake = new FakeHandler().Throws(new IOException("the connection was reset"));
 
         var ex = await Assert.ThrowsAsync<TranslationException>(
-            () => new TranslationService(fake).TranslateAsync("привет", "ru", "en"));
+            () => new GoogleGtxTranslator(fake).TranslateAsync("привет", "ru", "en"));
 
         Assert.Equal(TranslationErrorKind.Network, ex.Kind);
         Assert.Equal("Couldn't reach the translation service. Check your Internet connection.", ex.Message);
@@ -95,7 +95,7 @@ public class HttpProviderCoreTests : GatesTestBase
     {
         var fake = new FakeHandler().Respond(HttpStatusCode.ServiceUnavailable).RespondJson(GoogleOk);
 
-        Assert.Equal("hello", await new TranslationService(fake).TranslateAsync("привет", "ru", "en"));
+        Assert.Equal("hello", await new GoogleGtxTranslator(fake).TranslateAsync("привет", "ru", "en"));
         Assert.Equal(2, fake.Requests);
     }
 
@@ -167,7 +167,7 @@ public class HttpProviderCoreTests : GatesTestBase
         try
         {
             HttpProviderCore.JitterOverride = _ => 137;      // not a value the token bucket can ask for
-            await new TranslationService(fake).TranslateAsync("привет", "ru", "en");
+            await new GoogleGtxTranslator(fake).TranslateAsync("привет", "ru", "en");
         }
         finally { HttpProviderCore.JitterOverride = null; }
 
@@ -194,7 +194,7 @@ public class HttpProviderCoreTests : GatesTestBase
         Assert.Null(gate.Snapshot().BlockedUntil);           // nothing reported yet
 
         await Assert.ThrowsAsync<TranslationException>(
-            () => new TranslationService(fake, gate).TranslateAsync("привет", "ru", "en"));
+            () => new GoogleGtxTranslator(fake, gate).TranslateAsync("привет", "ru", "en"));
 
         Assert.Equal(1, fake.Requests);
         Assert.Equal(TranslationErrorKind.RateLimited, gate.Snapshot().LastKind);
@@ -217,7 +217,7 @@ public class HttpProviderCoreTests : GatesTestBase
         clock.Advance(TimeSpan.FromSeconds(TranslationPolicy.OpenBaseSeconds + 1));
 
         var fake = new FakeHandler().RespondJson(GoogleOk);
-        Assert.Equal("hello", await new TranslationService(fake, gate).TranslateAsync("привет", "ru", "en"));
+        Assert.Equal("hello", await new GoogleGtxTranslator(fake, gate).TranslateAsync("привет", "ru", "en"));
 
         Assert.Equal(1, fake.Requests);                      // the probe, and exactly one of them
         Assert.Equal(GateState.Closed, gate.Snapshot().State);
@@ -277,7 +277,7 @@ public class HttpProviderCoreTests : GatesTestBase
         var fake = new FakeHandler().RespondJson("not the provider's shape");
 
         await Assert.ThrowsAsync<TranslationException>(
-            () => new TranslationService(fake, gate).TranslateAsync("привет", "ru", "en"));
+            () => new GoogleGtxTranslator(fake, gate).TranslateAsync("привет", "ru", "en"));
 
         Assert.Equal(TranslationErrorKind.BadResponse, gate.Snapshot().LastKind);
     }
@@ -298,7 +298,7 @@ public class HttpProviderCoreTests : GatesTestBase
         var clock = new FakeClock();
         var gate = new ProviderGate(clock.Read);
         var fake = new FakeHandler().Respond(HttpStatusCode.TooManyRequests, "{}");
-        var google = new TranslationService(fake, gate);
+        var google = new GoogleGtxTranslator(fake, gate);
 
         await Assert.ThrowsAsync<TranslationException>(() => google.TranslateAsync("привет", "ru", "en"));
         Assert.Equal(1, fake.Requests);
@@ -319,11 +319,11 @@ public class HttpProviderCoreTests : GatesTestBase
     {
         var first = new FakeHandler().Respond(HttpStatusCode.TooManyRequests, "{}");
         await Assert.ThrowsAsync<TranslationException>(
-            () => new TranslationService(first).TranslateAsync("привет", "ru", "en"));
+            () => new GoogleGtxTranslator(first).TranslateAsync("привет", "ru", "en"));
 
         var second = new FakeHandler().RespondJson(GoogleOk);
         await Assert.ThrowsAsync<TranslationException>(
-            () => new TranslationService(second).TranslateAsync("пока", "ru", "en"));
+            () => new GoogleGtxTranslator(second).TranslateAsync("пока", "ru", "en"));
 
         Assert.Equal(0, second.Requests);
         Assert.Equal(GateState.Open, ProviderGates.Snapshot(ProviderIds.GoogleGtx)!.State);
@@ -339,7 +339,7 @@ public class HttpProviderCoreTests : GatesTestBase
             () => new DeepLTranslator("k:fx", deepl).TranslateAsync("привет", "ru", "en"));
 
         var google = new FakeHandler().RespondJson(GoogleOk);
-        Assert.Equal("hello", await new TranslationService(google).TranslateAsync("привет", "ru", "en"));
+        Assert.Equal("hello", await new GoogleGtxTranslator(google).TranslateAsync("привет", "ru", "en"));
         Assert.Equal(1, google.Requests);
     }
 
@@ -359,7 +359,7 @@ public class HttpProviderCoreTests : GatesTestBase
     {
         TestBackoffRedirect.Reset();
         var fake = new FakeHandler().RespondJson(GoogleOk);
-        var google = new TranslationService(fake);
+        var google = new GoogleGtxTranslator(fake);
 
         for (int i = 0; i < 3; i++) await google.TranslateAsync("привет", "ru", "en");
 
@@ -389,7 +389,7 @@ public class HttpProviderCoreTests : GatesTestBase
             .WithHeader("Retry-After", delta ? "300" : when.UtcDateTime.ToString("R"));
 
         var ex = await Assert.ThrowsAsync<TranslationException>(
-            () => new TranslationService(fake, gate).TranslateAsync("привет", "ru", "en"));
+            () => new GoogleGtxTranslator(fake, gate).TranslateAsync("привет", "ru", "en"));
 
         // Longer than the 60 s first-strike window, which is what "it overrides" means.
         Assert.Equal(when, gate.Snapshot().BlockedUntil);
@@ -555,7 +555,7 @@ public class HttpProviderCoreTests : GatesTestBase
         var fake = new FakeHandler().RespondJson(GoogleOk);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => new TranslationService(fake, gate).TranslateAsync("привет", "ru", "en", cts.Token));
+            () => new GoogleGtxTranslator(fake, gate).TranslateAsync("привет", "ru", "en", cts.Token));
 
         Assert.Equal(0, fake.Requests);
         Assert.Null(gate.Snapshot().LastKind);
@@ -594,7 +594,7 @@ public class HttpProviderCoreTests : GatesTestBase
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => core.SendAsync(
             new Uri("https://translate.googleapis.com/translate_a/single"), Build,
-            TranslationService.Parse, "ru", "en", "привет", RequestPriority.Interactive, cts.Token));
+            GoogleGtxTranslator.Parse, "ru", "en", "привет", RequestPriority.Interactive, cts.Token));
 
         Assert.Equal(1, fake.Requests);                      // the 503, and nothing after it
         Assert.Null(gate.Snapshot().LastKind);               // a cancel is not an outcome
@@ -677,7 +677,7 @@ public class HttpProviderCoreTests : GatesTestBase
         // path now — every translation the app makes goes through its one `await call(tier…)` — and
         // it is awaited from the same UI-thread methods, so it has the same obligation as the four
         // files below and none of the reasons to be exempt.
-        foreach (var file in new[] { "HttpProviderCore.cs", "TranslationService.cs",
+        foreach (var file in new[] { "HttpProviderCore.cs", "GoogleGtxTranslator.cs",
                                      "DeepLTranslator.cs", "RequestLog.cs", "ChainTranslator.cs" })
         {
             var offenders = Statements(SourceOf(file))
@@ -760,7 +760,7 @@ public class HttpProviderCoreTests : GatesTestBase
 
             var handler = new FakeHandler();
             script(handler);
-            try { await new TranslationService(handler).TranslateAsync("привет", "ru", target); }
+            try { await new GoogleGtxTranslator(handler).TranslateAsync("привет", "ru", target); }
             catch (TranslationException) { /* the failure is the point */ }
 
             return LinesFor(dir, $"ru->{target}");

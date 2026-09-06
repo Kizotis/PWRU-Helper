@@ -234,8 +234,8 @@ public partial class MainWindow
         var key = (_settings.DeepLApiKey ?? "").Trim();
         ITranslator backend = key.Length > 0
             ? ChainTranslator.Of((ProviderIds.DeepL, new DeepLTranslator(key)),
-                                 (ProviderIds.GoogleGtx, new TranslationService()))
-            : ChainTranslator.Of((ProviderIds.GoogleGtx, new TranslationService()));
+                                 (ProviderIds.GoogleGtx, new GoogleGtxTranslator()))
+            : ChainTranslator.Of((ProviderIds.GoogleGtx, new GoogleGtxTranslator()));
         return new CachingTranslator(backend);
     }
 

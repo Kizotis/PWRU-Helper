@@ -629,9 +629,13 @@ projects reporting the same break from ~2026-08-22. It is kept rather than delet
 keep, it is the only tier proven against this app's real traffic for two years, and the block is keyed on the
 `client=` id — an id can come back.
 
-Mechanical consequences of the rename, listed so no story is surprised: `ChunkText`/`HardSplit` move to
-`Services/TextChunker.cs` (two test references, `ServicesTests.cs:80,91`), and `project-context.md`'s "Translation
-Pipeline Rules" section names `TranslationService` and must be updated in the same PR.
+Mechanical consequences of the rename — **all landed in E3.S6 (2026-09-07); nothing here is left to do**:
+`ChunkText`/`HardSplit` moved to `Services/TextChunker.cs` (the two cases at `ServicesTests.cs:80,91` were
+re-pointed to `TextChunkerTests`), and `project-context.md`'s "Translation Pipeline Rules" section — which named
+`TranslationService` — was updated in the same PR. `ITranslator` stayed in the renamed file (I1). One behaviour
+change went with the rename, and only one: §6.3's `rateLimited` latch now fires on a `RateLimited`/`Blocked`
+Kind instead of on any `TranslationException`, so a timeout or an unparseable body no longer turns every
+remaining line into "(skipped — rate-limited…)".
 
 ### 7.4 `DeepLTranslator` — unchanged behaviour, typed errors
 
@@ -1221,10 +1225,10 @@ a very different support cost.
 | `TranslationCacheStore` | `Services/TranslationCacheStore.cs` | The shared LRU plus lazy load and debounced atomic save of `translation-cache.json`. |
 | `GoogleDictTranslator` | `Services/GoogleDictTranslator.cs` | `clients5.google.com/translate_a/t?client=dict-chrome-ex` — the new default. |
 | `EdgeTranslator` | `Services/EdgeTranslator.cs` | `edge.microsoft.com/translate/translatetext`, keyless — the independent vendor. |
-| `GoogleGtxTranslator` | `Services/GoogleGtxTranslator.cs` | Today's `TranslationService`, renamed and demoted to the last free tier. |
+| `GoogleGtxTranslator` | `Services/GoogleGtxTranslator.cs` | The old `TranslationService`, renamed and demoted to the last free tier. **Landed E3.S6.** |
 | `AzureTranslator` | `Services/AzureTranslator.cs` | Azure AI Translator over raw `HttpClient`, native array batching. |
 | `BergamotTranslator` | `Services/BergamotTranslator.cs` | **Prototype only.** Offline terminal fallback; per amendment A-1 (§7.6): one-click install, loaded on first fallback use and kept loaded while LIVE runs, unloaded after LIVE stops + idle timeout. |
-| `TextChunker` | `Services/TextChunker.cs` | `ChunkText` / `HardSplit`, moved out of the renamed provider because two providers need them. |
+| `TextChunker` | `Services/TextChunker.cs` | `ChunkText` / `HardSplit`, moved out of the renamed provider because two providers need them. **Landed E3.S6**, verbatim; the byte budget stays `TranslationPolicy.MaxQueryBytes`, passed in. |
 | `ChainTranslator.LastOutcome` | `Services/ChainTranslator.cs` (nested record) | _Added by ruling R-3._ Immutable `{ProviderId, Skipped: [(ProviderId, Reason)], RetryAt?, Kind?}` set after every call; the code-behind reads it to name the answering provider and the skip reason (UX states S2/S3). `ITranslator` unchanged (I1). |
 | `ProviderGate.Snapshot()` | `Services/ProviderGate.cs` | _Added by rulings OQ-c / R-2._ Immutable `{State, BlockedUntil, Strikes, LastKind}`; the UI polls it at 1 Hz from the countdown timer. No events leave `Services/`. |
 | `UserMessages` | `Services/UserMessages.cs` | _Added by ruling GAP-4._ UI-free static table of every user-facing sentence keyed by error kind / provider state (Sally's copy deck); tests assert on it, XAML/code-behind read it. |
@@ -1232,6 +1236,6 @@ a very different support cost.
 ---
 
 _Companion: `plan-migration.md` — the ordered, reversible increments and the story cut for Phase 3.
-Deletions this design implies: `Services/FallbackTranslator.cs` (superseded by `ChainTranslator`) and
-`Services/TranslationService.cs` (renamed). `project-context.md`'s "Translation Pipeline Rules" must be updated in
+Deletions this design implies: `Services/FallbackTranslator.cs` (superseded by `ChainTranslator`, done in E3.S3) and
+`Services/TranslationService.cs` (renamed to `Services/GoogleGtxTranslator.cs`, done in E3.S6). `project-context.md`'s "Translation Pipeline Rules" must be updated in
 the increment that lands the chain._

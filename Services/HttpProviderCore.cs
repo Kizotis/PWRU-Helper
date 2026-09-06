@@ -10,7 +10,7 @@ namespace PWRUHelper.Services;
 /// in one place: the client, the gate consult, the send, the ≤ 2 attempts with full jitter, the
 /// single classification point, <c>Retry-After</c>, the §10.1 log line and the outcome report.
 ///
-/// <para>It exists because <c>TranslationService</c> and <c>DeepLTranslator</c> were two
+/// <para>It exists because <c>GoogleGtxTranslator</c> and <c>DeepLTranslator</c> were two
 /// implementations of the same shape that disagreed: one had three attempts and a linear back-off,
 /// the other had none; one logged, the other did not; one read the error body, the other did not.
 /// E3 adds three more providers, and a provider should be a URL, a payload and a parser — not a

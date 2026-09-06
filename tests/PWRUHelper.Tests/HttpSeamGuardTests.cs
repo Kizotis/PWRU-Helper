@@ -68,7 +68,7 @@ public class HttpSeamGuardTests : GatesTestBase
         var providers = HttpProviders();
 
         // Without these two the loop below could pass on an empty list.
-        Assert.Contains(typeof(TranslationService), providers);
+        Assert.Contains(typeof(GoogleGtxTranslator), providers);
         Assert.Contains(typeof(DeepLTranslator), providers);
 
         foreach (var t in providers)
@@ -109,22 +109,22 @@ public class HttpSeamGuardTests : GatesTestBase
         // the only way to prove "null means the shared client" (IS-8).
         // Both NotNull guards matter: without them a renamed field would make this Assert.Same
         // compare null to null and pass while checking nothing.
-        Assert.NotNull(SharedClientOf(typeof(TranslationService)));
+        Assert.NotNull(SharedClientOf(typeof(GoogleGtxTranslator)));
         Assert.NotNull(SharedClientOf(typeof(DeepLTranslator)));
 
-        Assert.Same(SharedClientOf(typeof(TranslationService)), ClientOf(new TranslationService()));
+        Assert.Same(SharedClientOf(typeof(GoogleGtxTranslator)), ClientOf(new GoogleGtxTranslator()));
         Assert.Same(SharedClientOf(typeof(DeepLTranslator)), ClientOf(new DeepLTranslator("k:fx")));
     }
 
     [Fact]
     public void A_handler_gets_its_own_client()
     {
-        var google = new TranslationService(new FakeHandler());
+        var google = new GoogleGtxTranslator(new FakeHandler());
         var deepl = new DeepLTranslator("k:fx", new FakeHandler());
 
         Assert.NotNull(ClientOf(google));
         Assert.NotNull(ClientOf(deepl));
-        Assert.NotSame(SharedClientOf(typeof(TranslationService)), ClientOf(google));
+        Assert.NotSame(SharedClientOf(typeof(GoogleGtxTranslator)), ClientOf(google));
         Assert.NotSame(SharedClientOf(typeof(DeepLTranslator)), ClientOf(deepl));
     }
 
@@ -158,7 +158,7 @@ public class HttpSeamGuardTests : GatesTestBase
     {
         var fake = new FakeHandler().RespondJson(GoogleOk);
 
-        Assert.Equal("hello", await new TranslationService(fake).TranslateAsync("привет", "ru", "en"));
+        Assert.Equal("hello", await new GoogleGtxTranslator(fake).TranslateAsync("привет", "ru", "en"));
 
         var call = Assert.Single(fake.Calls);
         Assert.Equal(HttpMethod.Get, call.Method);
@@ -199,7 +199,7 @@ public class HttpSeamGuardTests : GatesTestBase
             .Respond(HttpStatusCode.ServiceUnavailable)
             .RespondJson(GoogleOk);
 
-        Assert.Equal("hello", await new TranslationService(fake).TranslateAsync("привет", "ru", "en"));
+        Assert.Equal("hello", await new GoogleGtxTranslator(fake).TranslateAsync("привет", "ru", "en"));
         Assert.Equal(2, fake.Requests);
     }
 
@@ -234,7 +234,7 @@ public class HttpSeamGuardTests : GatesTestBase
         var fake = new FakeHandler { Delay = TimeSpan.FromMilliseconds(40) }.RespondJson(GoogleOk);
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        await new TranslationService(fake).TranslateAsync("привет", "ru", "en");
+        await new GoogleGtxTranslator(fake).TranslateAsync("привет", "ru", "en");
 
         Assert.True(sw.ElapsedMilliseconds >= 30, $"the delay was not honoured ({sw.ElapsedMilliseconds} ms)");
     }
@@ -250,7 +250,7 @@ public class HttpSeamGuardTests : GatesTestBase
         var fake = new FakeHandler().Respond(HttpStatusCode.TooManyRequests, "<html>blocked</html>", "text/html");
 
         var ex = await Assert.ThrowsAsync<TranslationException>(
-            () => new TranslationService(fake).TranslateAsync("привет", "ru", "en"));
+            () => new GoogleGtxTranslator(fake).TranslateAsync("привет", "ru", "en"));
 
         Assert.Equal(1, fake.Requests);
         Assert.Equal(TranslationErrorKind.RateLimited, ex.Kind);
@@ -265,7 +265,7 @@ public class HttpSeamGuardTests : GatesTestBase
         var fake = new FakeHandler().Respond(HttpStatusCode.ServiceUnavailable);
 
         var ex = await Assert.ThrowsAsync<TranslationException>(
-            () => new TranslationService(fake).TranslateAsync("привет", "ru", "en"));
+            () => new GoogleGtxTranslator(fake).TranslateAsync("привет", "ru", "en"));
 
         Assert.Equal(2, fake.Requests);
         Assert.Equal(TranslationErrorKind.Unavailable, ex.Kind);

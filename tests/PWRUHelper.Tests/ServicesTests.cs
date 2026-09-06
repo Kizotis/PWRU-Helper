@@ -72,12 +72,21 @@ public class UpdateServiceTests
         => Assert.False(UpdateService.TryParseVersion(tag, out _));
 }
 
-public class TranslationServiceChunkingTests
+/// <summary>
+/// TP-PRV-13. The two cases below are the ones that shipped with the gtx provider, re-pointed by
+/// E3.S6 when <c>ChunkText</c>/<c>HardSplit</c> moved to <see cref="TextChunker"/> — <b>not
+/// re-written</b>: they are the only proof the moved code is right, and a moved test that changed
+/// its assertions proves nothing about the move. The cases after them are new, and they exist
+/// because the splitter now has a second caller (<c>GoogleDictTranslator</c>, E3.S4) and its two
+/// real hazards — the budget is in UTF-8 BYTES, and a single sentence can be longer than the whole
+/// budget — were each covered by exactly one assertion inside one case.
+/// </summary>
+public class TextChunkerTests
 {
     [Fact]
     public void ChunkText_ShortText_IsSingleChunk()
     {
-        var chunks = TranslationService.ChunkText("Just a short sentence.", 1500).ToList();
+        var chunks = TextChunker.ChunkText("Just a short sentence.", 1500).ToList();
         Assert.Single(chunks);
     }
 
@@ -88,10 +97,82 @@ public class TranslationServiceChunkingTests
         var text = string.Concat(Enumerable.Repeat(sentence, 80));   // well over 1500 bytes
         const int limit = 1500;
 
-        var chunks = TranslationService.ChunkText(text, limit).ToList();
+        var chunks = TextChunker.ChunkText(text, limit).ToList();
 
         Assert.True(chunks.Count > 1);
         Assert.All(chunks, c => Assert.True(Encoding.UTF8.GetByteCount(c) <= limit));
         Assert.Equal(text, string.Concat(chunks));   // nothing lost or duplicated
+    }
+
+    /// <summary>Nothing in, nothing out — and, above all, no chunk. An empty chunk becomes an empty
+    /// <c>q=</c> and a request that asks a provider to translate nothing.</summary>
+    [Fact]
+    public void ChunkText_EmptyInput_YieldsNoChunks()
+        => Assert.Empty(TextChunker.ChunkText("", 1500));
+
+    /// <summary>The boundary is counted in BYTES, so the interesting input is the one that is
+    /// exactly at the budget: 750 Cyrillic characters are 1500 UTF-8 bytes and must still travel as
+    /// one chunk. A character-counting splitter passes every other case in this class and fails
+    /// this one — which is why it is written in Cyrillic and asserted at equality, not below it.</summary>
+    [Fact]
+    public void ChunkText_ExactlyAtTheByteLimit_IsStillOneChunk()
+    {
+        var text = new string('я', 750);            // 2 bytes each
+        Assert.Equal(1500, Encoding.UTF8.GetByteCount(text));
+
+        var chunks = TextChunker.ChunkText(text, 1500).ToList();
+
+        Assert.Single(chunks);
+        Assert.Equal(text, chunks[0]);
+    }
+
+    /// <summary>One byte over the same budget is two chunks, and the split lands on the BYTE count,
+    /// not on the character count — the other half of the boundary above.</summary>
+    [Fact]
+    public void ChunkText_OneByteOverTheLimit_Splits()
+    {
+        var text = new string('я', 751);            // 1502 bytes, one sentence, no boundary to split on
+
+        var chunks = TextChunker.ChunkText(text, 1500).ToList();
+
+        Assert.Equal(2, chunks.Count);
+        Assert.All(chunks, c => Assert.True(Encoding.UTF8.GetByteCount(c) <= 1500));
+        Assert.Equal(text, string.Concat(chunks));
+    }
+
+    /// <summary>The hard split: a single 3000-byte "sentence" carries no boundary to break on, so
+    /// the sentence-wise pass cannot help and the character-wise one has to. ASCII here on purpose
+    /// — the Cyrillic cases above cover the multi-byte arithmetic, and this one is about the path
+    /// being taken at all.</summary>
+    [Fact]
+    public void ChunkText_LineLongerThanTheWholeBudget_IsHardSplit()
+    {
+        var text = new string('a', 3000);           // 3000 bytes, no '.', '!', '?', '…' or newline
+        const int limit = 1500;
+
+        var chunks = TextChunker.ChunkText(text, limit).ToList();
+
+        Assert.Equal(2, chunks.Count);
+        Assert.All(chunks, c => Assert.True(Encoding.UTF8.GetByteCount(c) <= limit));
+        Assert.All(chunks, c => Assert.NotEqual("", c));
+        Assert.Equal(text, string.Concat(chunks));
+    }
+
+    /// <summary>Order is content: the chunks are stitched back together in the order they came out,
+    /// so a splitter that returned them out of order would silently scramble a translation. Asserted
+    /// on distinguishable sentences, which <c>string.Concat</c> equality alone cannot do when every
+    /// sentence is the same one.</summary>
+    [Fact]
+    public void ChunkText_PreservesOrderAcrossChunks()
+    {
+        var text = string.Concat(Enumerable.Range(0, 60)
+            .Select(i => $"Sentence number {i} padded out to make the chunker split somewhere. "));
+
+        var chunks = TextChunker.ChunkText(text, 300).ToList();
+
+        Assert.True(chunks.Count > 1);
+        Assert.Equal(text, string.Concat(chunks));
+        Assert.StartsWith("Sentence number 0 ", chunks[0]);
+        Assert.EndsWith("split somewhere. ", chunks[^1]);
     }
 }

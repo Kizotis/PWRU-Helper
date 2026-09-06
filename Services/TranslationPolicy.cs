@@ -40,7 +40,8 @@ internal static class TranslationPolicy
 
     /// <summary>The text travels in a GET query string, so it is chunked to stay well under
     /// typical URL limits.</summary>
-    public const int MaxQueryBytes = 1500;          // [CONFIRMED] now read at TranslationService.cs:83, :88, :107
+    public const int MaxQueryBytes = 1500;          // [CONFIRMED] now read at GoogleGtxTranslator.cs:111, :116, :135
+                                                    // (:116 passes it on to Services/TextChunker.cs, E3.S6)
 
     // ---- the retry policy (§5.6) ---------------------------------------------------------------
     // Read by Services/HttpProviderCore.cs (E2.S5), which replaced the three-attempt / 300 ms-linear

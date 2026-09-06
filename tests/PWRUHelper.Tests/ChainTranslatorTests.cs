@@ -80,7 +80,7 @@ public class ChainTranslatorTests : GatesTestBase
         var google = new FakeHandler().RespondJson(GoogleOk).RespondJson(GoogleOk);
         var chain = ChainTranslator.Of(
             (ProviderIds.DeepL, new DeepLTranslator("k:fx", deepl)),
-            (ProviderIds.GoogleGtx, new TranslationService(google)));
+            (ProviderIds.GoogleGtx, new GoogleGtxTranslator(google)));
 
         // Call 1 — DeepL is tried, refuses, and Google answers.
         Assert.Equal("hello", await chain.TranslateAsync("привет", "ru", "en"));
@@ -148,7 +148,7 @@ public class ChainTranslatorTests : GatesTestBase
 
         var chain = ChainTranslator.Of(
             (ProviderIds.DeepL, new DeepLTranslator("k:fx", deepl)),
-            (ProviderIds.GoogleGtx, new TranslationService(google)),
+            (ProviderIds.GoogleGtx, new GoogleGtxTranslator(google)),
             (ProviderIds.GoogleDict, dict));
 
         var ex = await Assert.ThrowsAsync<TranslationException>(
@@ -178,7 +178,7 @@ public class ChainTranslatorTests : GatesTestBase
         var google = new FakeHandler().Respond(HttpStatusCode.Forbidden, "nope");
         var chain = ChainTranslator.Of(
             (ProviderIds.DeepL, new DeepLTranslator("k:fx", new FakeHandler().RespondJson("{}"))),
-            (ProviderIds.GoogleGtx, new TranslationService(google)));
+            (ProviderIds.GoogleGtx, new GoogleGtxTranslator(google)));
 
         var ex = await Assert.ThrowsAsync<TranslationException>(
             () => chain.TranslateAsync("привет", "ru", "en"));
@@ -201,7 +201,7 @@ public class ChainTranslatorTests : GatesTestBase
         var google = new FakeHandler().RespondJson(GoogleOk);
         var below = new Fake(() => "G");
         var chain = ChainTranslator.Of(
-            (ProviderIds.GoogleGtx, new TranslationService(google)),
+            (ProviderIds.GoogleGtx, new GoogleGtxTranslator(google)),
             (ProviderIds.DeepL, below));
 
         Assert.Equal("hello", await chain.TranslateAsync("привет", "ru", "en"));
@@ -271,7 +271,7 @@ public class ChainTranslatorTests : GatesTestBase
         var google = new FakeHandler().RespondJson(GoogleOk);
         var chain = new ChainTranslator(new[]
         {
-            new ChainTier(ProviderIds.GoogleGtx, gate, new TranslationService(google, gate)),
+            new ChainTier(ProviderIds.GoogleGtx, gate, new GoogleGtxTranslator(google, gate)),
         });
 
         // Inside the window: skipped, nothing sent.

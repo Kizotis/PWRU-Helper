@@ -1,7 +1,6 @@
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Web;
 
 namespace PWRUHelper.Services;
@@ -10,7 +9,13 @@ namespace PWRUHelper.Services;
 
 /// <summary>Anything that can translate text. Kept as an interface so the app depends on
 /// the capability, not on Google specifically — a different backend (or a test double) can
-/// be dropped in without touching the UI.</summary>
+/// be dropped in without touching the UI.
+///
+/// <para><b>It stays in this file on purpose (E3.S6, invariant I1).</b> E3.S6 renamed the file
+/// and the provider class around it, and the obvious tidy-up — "give the interface its own file"
+/// — is exactly what must not happen: I1 says the interface is untouched, E1.S1's identity check
+/// is on this declaration, and moving it would turn a rename nobody has to read into a diff
+/// everybody does. Move it only in a story that says so.</para></summary>
 public interface ITranslator
 {
     Task<string> TranslateAsync(string text, string source, string target, CancellationToken ct = default);
@@ -23,7 +28,7 @@ public interface ITranslator
 /// one translate.google.com uses. No API key, no cost. All work happens on Google's
 /// servers, so this uses no local CPU/GPU.
 /// </summary>
-public class TranslationService : ITranslator
+public class GoogleGtxTranslator : ITranslator
 {
     /// <summary>How this endpoint names itself in the diagnostic log — and, from E2.S5, which gate
     /// it consults. Deliberately `google-gtx` and not `google`: it is the id this provider KEEPS
@@ -45,10 +50,12 @@ public class TranslationService : ITranslator
 
     /// <summary>§7.0's shared pipeline: gate admission, the ≤ 2 attempts with full jitter, one body
     /// read, classification, <c>Retry-After</c>, the §10.1 line and the outcome report. What is left
-    /// in this file is what is Google's: the URL, the chunker, the batch join/split and the parser.</summary>
+    /// in this file is what is Google's: the URL, the batch join/split and the parser — the chunker
+    /// left with E3.S6, to <see cref="TextChunker"/>, because a second query-string provider needs
+    /// it too.</summary>
     private readonly HttpProviderCore _core;
 
-    public TranslationService() : this((HttpMessageHandler?)null) { }
+    public GoogleGtxTranslator() : this((HttpMessageHandler?)null) { }
 
     /// <summary>Test seam: a handler builds a private client — configured exactly like the shared
     /// one, so a test sees the same timeout and the same User-Agent — and the retry policy and the
@@ -56,7 +63,7 @@ public class TranslationService : ITranslator
     /// static client. Nothing disposes the private client: production never takes this path, and a
     /// test handler owns no sockets. <paramref name="gate"/> is the same idea for E2's registry: a
     /// case that wants to watch the admission hands in its own gate instead of the shared one.</summary>
-    internal TranslationService(HttpMessageHandler? handler = null, ProviderGate? gate = null)
+    internal GoogleGtxTranslator(HttpMessageHandler? handler = null, ProviderGate? gate = null)
     {
         _http = handler == null ? Http : CreateClient(handler);
         _core = new HttpProviderCore(Options, _http, gate);
@@ -106,7 +113,7 @@ public class TranslationService : ITranslator
 
         // Too long for one request: translate sentence-sized chunks and stitch back.
         var sb = new StringBuilder();
-        foreach (var chunk in ChunkText(text, TranslationPolicy.MaxQueryBytes))
+        foreach (var chunk in TextChunker.ChunkText(text, TranslationPolicy.MaxQueryBytes))
             sb.Append(await RequestAsync(chunk, source, target, ct).ConfigureAwait(false));
         return sb.ToString();
     }
@@ -155,9 +162,24 @@ public class TranslationService : ITranslator
             // HttpClient timeout (an OCE whose token is NOT cancelled) as if the user had pressed
             // Stop, which threw away every line already translated above it: exactly what the
             // comment on this loop exists to prevent. RequestAsync now hands timeouts over as a
-            // Timeout-kind TranslationException, so they latch below like any other failure (I3).
+            // Timeout-kind TranslationException, so they are caught below as the failure of the one
+            // line they happened on — since E3.S6 without latching the rest of the loop (I3).
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (TranslationException) { rateLimited = true; result.Add("(rate-limited — try again shortly)"); }
+            // AC 4 (E3.S6): ONLY a refusal latches. The latch exists because asking a provider that
+            // just said "stop" for thirteen more lines is how a soft block becomes a hard one — a
+            // reason that holds for RateLimited and Blocked and for nothing else. Unfiltered, it
+            // also fired on a BadResponse or a Timeout on line 3 of 14 and turned lines 4-14 into
+            // "(skipped — rate-limited…)", a sentence that was simply false: nobody was rate-
+            // limiting anything, and eleven translatable lines were thrown away to say so. The
+            // latch itself is kept (I16), and a latched line still reads exactly as it did.
+            catch (TranslationException tex) when (tex.Kind is TranslationErrorKind.RateLimited
+                                                            or TranslationErrorKind.Blocked)
+            { rateLimited = true; result.Add("(rate-limited — try again shortly)"); }
+            // Every other typed failure is this line's problem and no other line's. Written out
+            // rather than left to fall into the generic catch below — which would render it
+            // identically today — so that the intent survives an edit to that catch: this arm
+            // exists to NOT latch, and the string it borrows is E7.S1's to reword (ruling E2-d).
+            catch (TranslationException tex) { result.Add($"(translation failed: {tex.Message})"); }
             catch (Exception ex) { result.Add($"(translation failed: {ex.Message})"); }
         }
         return result;
@@ -217,45 +239,5 @@ public class TranslationService : ITranslator
             throw new TranslationException(TranslationErrorKind.BadResponse,
                 "The translation service returned an unexpected response (it may be temporarily blocked). Try again shortly.");
         }
-    }
-
-    /// <summary>Split long text into &lt;= maxBytes chunks on sentence boundaries.</summary>
-    internal static IEnumerable<string> ChunkText(string text, int maxBytes)
-    {
-        var pieces = Regex.Split(text, @"(?<=[\.\!\?…\n])");
-        var current = new StringBuilder();
-        foreach (var piece in pieces)
-        {
-            if (current.Length > 0 &&
-                Encoding.UTF8.GetByteCount(current.ToString() + piece) > maxBytes)
-            {
-                yield return current.ToString();
-                current.Clear();
-            }
-            // A single piece longer than the limit: hard-split it.
-            if (Encoding.UTF8.GetByteCount(piece) > maxBytes)
-            {
-                foreach (var hard in HardSplit(piece, maxBytes)) yield return hard;
-                continue;
-            }
-            current.Append(piece);
-        }
-        if (current.Length > 0) yield return current.ToString();
-    }
-
-    private static IEnumerable<string> HardSplit(string s, int maxBytes)
-    {
-        // Split by characters so each chunk stays under the byte limit.
-        var current = new StringBuilder();
-        foreach (var ch in s)
-        {
-            if (Encoding.UTF8.GetByteCount(current.ToString() + ch) > maxBytes && current.Length > 0)
-            {
-                yield return current.ToString();
-                current.Clear();
-            }
-            current.Append(ch);
-        }
-        if (current.Length > 0) yield return current.ToString();
     }
 }

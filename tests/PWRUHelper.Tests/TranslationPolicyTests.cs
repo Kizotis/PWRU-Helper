@@ -98,7 +98,7 @@ public class TranslationPolicyTests
         // The constants that replaced a literal, checked where they land rather than where they are
         // declared — a wrong reference would be invisible in the assertions above.
         var timeout = TimeSpan.FromSeconds(TranslationPolicy.RequestTimeoutSeconds);
-        Assert.Equal(timeout, ClientOf(new TranslationService(new FakeHandler())).Timeout);
+        Assert.Equal(timeout, ClientOf(new GoogleGtxTranslator(new FakeHandler())).Timeout);
         Assert.Equal(timeout, ClientOf(new DeepLTranslator("k:fx", new FakeHandler())).Timeout);
 
         var capacity = typeof(CachingTranslator).GetConstructors().Single()

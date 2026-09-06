@@ -516,7 +516,7 @@ public class RequestLogTests : GatesTestBase
             RequestLog.ResetSuppression();
             int before = RequestLog.Burst.Count(DateTimeOffset.UtcNow);
 
-            var svc = new TranslationService(new FakeHandler().RespondJson(GoogleOk));
+            var svc = new GoogleGtxTranslator(new FakeHandler().RespondJson(GoogleOk));
             for (int i = 0; i < 50; i++) await svc.TranslateAsync("hello", "zz", "qe");
 
             Assert.Empty(LinesFor(dir, "zz->qe"));
@@ -588,7 +588,7 @@ public class RequestLogTests : GatesTestBase
             // DOES carry a body= — from the server's page — while the user's sentence does not
             // appear anywhere. Both halves matter: a log that carried nothing would pass too.
             var html = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "google-429.html"));
-            var svc = new TranslationService(
+            var svc = new GoogleGtxTranslator(
                 new FakeHandler().Respond(HttpStatusCode.TooManyRequests, html, "text/html"));
 
             await Assert.ThrowsAsync<TranslationException>(
@@ -642,7 +642,7 @@ public class RequestLogTests : GatesTestBase
             var deepl = new FakeHandler().Respond(HttpStatusCode.Forbidden, "{}");
             var google = new FakeHandler().Respond(HttpStatusCode.TooManyRequests, "{}");
             var chain = ChainTranslator.Of((ProviderIds.DeepL, new DeepLTranslator(key, deepl)),
-                                           (ProviderIds.GoogleGtx, new TranslationService(google)));
+                                           (ProviderIds.GoogleGtx, new GoogleGtxTranslator(google)));
 
             await Assert.ThrowsAsync<TranslationException>(
                 () => chain.TranslateAsync(Sentinel, "ru", "zy"));
@@ -698,7 +698,7 @@ public class RequestLogTests : GatesTestBase
 
             var handler = new FakeHandler();
             script(handler);
-            var svc = new TranslationService(handler);
+            var svc = new GoogleGtxTranslator(handler);
 
             try { await svc.TranslateAsync("hello", source, target); }
             catch (TranslationException) { /* the failure is the point */ }

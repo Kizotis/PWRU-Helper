@@ -126,16 +126,16 @@ public class UserMessagesTests : GatesTestBase
         foreach (var status in new[] { HttpStatusCode.BadRequest, HttpStatusCode.NotFound,
                                        HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden })
             raised.Add(await Assert.ThrowsAsync<TranslationException>(
-                () => new TranslationService(new FakeHandler().Respond(status, body))
+                () => new GoogleGtxTranslator(new FakeHandler().Respond(status, body))
                           .TranslateAsync(sentinel, "ru", "en")));
 
         // A 200 whose body is not the provider's shape, and a transport failure: the two messages
         // that are built where the body and the exception are both in scope.
         raised.Add(await Assert.ThrowsAsync<TranslationException>(
-            () => new TranslationService(new FakeHandler().Respond(HttpStatusCode.OK, body, "text/plain"))
+            () => new GoogleGtxTranslator(new FakeHandler().Respond(HttpStatusCode.OK, body, "text/plain"))
                       .TranslateAsync(sentinel, "ru", "en")));
         raised.Add(await Assert.ThrowsAsync<TranslationException>(
-            () => new TranslationService(new FakeHandler().Throws(new HttpRequestException(sentinel)))
+            () => new GoogleGtxTranslator(new FakeHandler().Throws(new HttpRequestException(sentinel)))
                       .TranslateAsync(sentinel, "ru", "en")));
 
         // DeepL, with a key actually set — the provider whose messages are about the key.

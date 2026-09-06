@@ -40,7 +40,7 @@ public partial class MainWindow : Window
     //   _readTranslator  — the OCR feed (read-once + live). ALWAYS the free Google engine: a live
     //                      loop translates every new chat line and would drain a DeepL quota fast.
     private ITranslator _writeTranslator;
-    private readonly ITranslator _readTranslator = new CachingTranslator(new TranslationService());
+    private readonly ITranslator _readTranslator = new CachingTranslator(new GoogleGtxTranslator());
 
     // What the Translator tab is currently showing. Its output is a RichTextBox (so the 78-character
     // chat blocks can be tinted), and a FlowDocument's text can't be read back cleanly — so the

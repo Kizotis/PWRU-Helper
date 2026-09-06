@@ -111,7 +111,7 @@ public class TranslationErrorsTests : GatesTestBase
     [Fact]
     public async Task Googles_non_transient_status_is_Unknown_when_no_row_names_it()
     {
-        var google = new TranslationService(new FakeHandler().Respond(HttpStatusCode.BadRequest, "nope"));
+        var google = new GoogleGtxTranslator(new FakeHandler().Respond(HttpStatusCode.BadRequest, "nope"));
 
         var ex = await Assert.ThrowsAsync<TranslationException>(
             () => google.TranslateAsync("привет", "ru", "en"));
@@ -142,7 +142,7 @@ public class TranslationErrorsTests : GatesTestBase
         var throwers = files.Where(f => File.ReadAllText(f).Contains("throw new TranslationException("))
                             .Select(Path.GetFileName)
                             .ToList();
-        Assert.Contains("TranslationService.cs", throwers);
+        Assert.Contains("GoogleGtxTranslator.cs", throwers);
         Assert.Contains("DeepLTranslator.cs", throwers);
 
         foreach (var file in files)
