@@ -36,11 +36,11 @@ internal static class TranslationPolicy
     /// cannot be confused with §5.6's target <c>MaxAttempts = 2</c>, which E2.S5 introduces —
     /// benchmark-fournisseurs.md §11.4 item 3: three attempts into a hard block triple the abuse
     /// signal for no benefit.</summary>
-    public const int MaxAttemptsToday = 3;          // [CONFIRMED] TranslationService.cs:145 (`attempt < 3`), still a literal there
+    public const int MaxAttemptsToday = 3;          // [CONFIRMED] TranslationService.cs:158 (`attempt < 3`), still a literal there
 
     /// <summary>Base of the linear back-off between those attempts: <c>300 * (attempt + 1)</c>, so
     /// 300 ms then 600 ms. §5.6's target replaces it with exponential + full jitter.</summary>
-    public const int RetrySpacingBaseMs = 300;      // [CONFIRMED] TranslationService.cs:177, still a literal there
+    public const int RetrySpacingBaseMs = 300;      // [CONFIRMED] TranslationService.cs:229, still a literal there
 
     /// <summary>Entries kept by the in-memory LRU translation cache. §5.6 raises it to 2000 and
     /// persists it (E4); today it is memory-only and dies with the process.</summary>

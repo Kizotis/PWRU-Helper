@@ -113,8 +113,21 @@ public class DeepLTranslator : ITranslator
                 // as a bot block. No bodyHead: DeepL signals an exhausted allowance with its own
                 // 456, so row 6's envelope test has nothing to read here — Azure (E6) is the
                 // provider that will pass one. Every sentence below is unchanged.
+                // The mapper's caller contract, honoured rather than only quoted: row 1 answers
+                // with the cancel Kind whenever the token is cancelled, and the throw below would
+                // hand it to a TranslationException — the one construction TranslationErrors.cs
+                // forbids. Checking here (the token can be cancelled between the response arriving
+                // and this line) means row 1 cannot fire and a cancel can only leave as an OCE.
+                ct.ThrowIfCancellationRequested();
+
                 var kind = ProviderErrorMapper.Classify(resp, bodyHead: null, transport: null,
                     keyWasSent: true, ct);
+                // WARNING for E6: the Kind and the sentence come from two switches over the same
+                // status, and they agree only while bodyHead stays null. Pass one and a
+                // quota-bearing 403 becomes QuotaExhausted while this switch still tells the user
+                // to check the API key — the two-places-disagree bug the mapper exists to end.
+                // Whoever starts passing a bodyHead here owns making the sentence follow the Kind
+                // (E1.S6 owns the wording).
                 var message = code switch
                 {
                     401 or 403 => "DeepL rejected the API key — check it in Settings.",
@@ -135,6 +148,9 @@ public class DeepLTranslator : ITranslator
             // caller's ct NOT cancelled. The filter above takes every real cancellation, so the
             // mapper sees only the timeout — and says so, which is what makes the Google fallback
             // kick in instead of a raw OCE bubbling up past the FallbackTranslator.
+            // Same contract as the status branch: the filter above ran one statement ago, and a
+            // token cancelled since then would make Classify answer with the cancel Kind.
+            ct.ThrowIfCancellationRequested();
             throw new TranslationException(
                 ProviderErrorMapper.Classify(resp: null, bodyHead: null, transport: ex,
                     keyWasSent: true, ct),

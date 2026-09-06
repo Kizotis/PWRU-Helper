@@ -138,6 +138,11 @@ public class TranslationService : ITranslator
         {
             try { return await TranslateAsync(line, source, target, ct); }
             catch (TranslationException) { throw; }
+            // The one-line path is a third OCE catch, and I3 asks every one of them to say so: the
+            // generic catch below is what a genuine Stop lands in, and it turned the cancel into a
+            // translation-failed line instead of propagating. A timeout cannot reach here any more
+            // — RequestAsync hands those over as a Timeout-kind TranslationException.
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex) { return $"(translation failed: {ex.Message})"; }
         }
     }
@@ -168,6 +173,15 @@ public class TranslationService : ITranslator
                 // endpoint refusing this network) and not a rejected key. No body is read: E1.S4
                 // is the story that hands the mapper a bodyHead, and reading it here would consume
                 // the stream the parser needs.
+                // The mapper's caller contract, honoured rather than only quoted: row 1 returns the
+                // cancel Kind whenever the token is cancelled, and every line below hands `kind`
+                // straight to a TranslationException — the one construction TranslationErrors.cs
+                // forbids outright. Checking here (the token can be cancelled between the response
+                // arriving and this line) means row 1 cannot fire, so the only way a cancel leaves
+                // this method is as an OperationCanceledException. The source scan cannot see a
+                // phantom cancel; this can.
+                ct.ThrowIfCancellationRequested();
+
                 var kind = ProviderErrorMapper.Classify(resp, bodyHead: null, transport: null,
                     keyWasSent: false, ct);
                 var retryAt = ProviderErrorMapper.RetryAfter(resp, DateTimeOffset.UtcNow);
@@ -197,6 +211,9 @@ public class TranslationService : ITranslator
                 // TranslationException contract the caller is written against, and leaving the
                 // could-not-reach sentence below the loop unreachable. A timeout is not retried
                 // today either, and it now leaves as a Timeout instead of a bare OCE.
+                // Same contract as the status branch: the filter above ran one statement ago, and
+                // a token cancelled since then would make Classify answer with the cancel Kind.
+                ct.ThrowIfCancellationRequested();
                 if (ex is not HttpRequestException || attempt == 2)
                     throw new TranslationException(
                         ProviderErrorMapper.Classify(resp: null, bodyHead: null, transport: ex,

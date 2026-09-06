@@ -101,13 +101,14 @@ public class TranslationErrorsTests
     }
 
     /// <summary>
-    /// Google's non-transient branch, which still folds 403 in with 400/404 and therefore stays
-    /// `Unknown` until E1.S3's mapper splits it. Pinned so the provisional value is a decision on
-    /// record rather than something a later edit can drift away from unnoticed. 400 is chosen
-    /// because it throws on the first attempt — no retry delay, no sleeping test.
+    /// Google's non-transient branch. E1.S3's mapper split 403 out of this fold, but 400 stays
+    /// `Unknown` — §4.2 row 13, the honest last resort — and that is worth its own pin, because
+    /// "Unknown must never become common" only means something if something asserts what still
+    /// belongs there. 400 is chosen because it throws on the first attempt — no retry delay, no
+    /// sleeping test. (The 403 half of the pair lives in ProviderErrorMapperTests.)
     /// </summary>
     [Fact]
-    public async Task Googles_non_transient_status_is_the_Unknown_placeholder_until_E1_S3()
+    public async Task Googles_non_transient_status_is_Unknown_when_no_row_names_it()
     {
         var google = new TranslationService(new FakeHandler().Respond(HttpStatusCode.BadRequest, "nope"));
 

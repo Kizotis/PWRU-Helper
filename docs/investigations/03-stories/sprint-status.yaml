@@ -67,7 +67,7 @@ development_status:
   epic-1: in-progress
   e1-s1-http-handler-seam: done
   e1-s2-typed-translation-errors: done
-  e1-s3-provider-error-mapper: review
+  e1-s3-provider-error-mapper: done
   e1-s4-html-abuse-page-sniffing: ready-for-dev
   e1-s5-per-request-diagnostic-log: ready-for-dev
   e1-s6-friendly-kind-switch: ready-for-dev

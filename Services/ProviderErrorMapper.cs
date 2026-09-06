@@ -66,13 +66,17 @@ internal static class ProviderErrorMapper
             if (code == 429) return TranslationErrorKind.RateLimited;   // 4
             if (code == 401) return TranslationErrorKind.AuthFailed;    // 5
 
-            // 6, 7, 8 — the split this story exists for. With a key, a 403 is the key's problem
-            // (quota if the envelope says so, otherwise a rejection); with no key it is the
-            // endpoint refusing this network, which is a block and not a bug.
-            if (code == 403)
-                return !keyWasSent ? TranslationErrorKind.Blocked
-                    : NamesAQuota(bodyHead) ? TranslationErrorKind.QuotaExhausted
-                    : TranslationErrorKind.AuthFailed;
+            // 6, 7, 8 — the split this story exists for, written as three separate rules in the
+            // table's own order so the file diffs line by line against §4.2. (A single nested
+            // conditional says the same thing, but it has to test row 8 first to stay readable,
+            // and the one instruction that exists purely for reviewability is the order.) With a
+            // key, a 403 is the key's problem — quota if the envelope says so, otherwise a
+            // rejection; with no key it is the endpoint refusing this network, which is a block
+            // and not a bug.
+            if (code == 403 && keyWasSent && NamesAQuota(bodyHead))
+                return TranslationErrorKind.QuotaExhausted;                // 6
+            if (code == 403 && keyWasSent) return TranslationErrorKind.AuthFailed;   // 7
+            if (code == 403) return TranslationErrorKind.Blocked;                    // 8
 
             if (code == 456) return TranslationErrorKind.QuotaExhausted;   // 9 — DeepL's own code
             if (code >= 500) return TranslationErrorKind.Unavailable;      // 10
@@ -82,7 +86,11 @@ internal static class ProviderErrorMapper
             // branch below. Do not move the success path above it.
 
             // 12 — a success whose body does not parse into the provider's shape. The provider's
-            // parser is what detects that; the mapper only names it.
+            // parser is what DETECTS that; the mapper only names it — which is also the row's
+            // caller contract: Classify is asked what went wrong, so a caller must not hand it a
+            // healthy 200. There is no signal here that could tell the two apart, and answering
+            // "it parsed fine" is not this function's job. (E2.S5's HttpProviderCore is the next
+            // caller: classify the failure, never the success.)
             if (resp.IsSuccessStatusCode) return TranslationErrorKind.BadResponse;
         }
 

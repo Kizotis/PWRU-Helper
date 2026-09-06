@@ -205,9 +205,33 @@ public class ProviderErrorMapperTests
         Assert.Equal(now.AddMinutes(5), ProviderErrorMapper.RetryAfter(dated, now));
     }
 
+    /// <summary>
+    /// A hint the app cannot read is the same as no hint: null, never an exception and never a
+    /// guessed instant. The header is whatever a proxy or an angry endpoint chose to send, so this
+    /// walks the shapes a strict parser rejects — words, a negative delta, a delta that overflows,
+    /// an unparseable date, an empty value. It matters because E2's gate will take this value as a
+    /// "do not call again until" and a wrong instant would pause a working provider.
+    /// </summary>
+    [Theory]
+    [InlineData("soon")]
+    [InlineData("-5")]
+    [InlineData("99999999999999999999")]
+    [InlineData("Tue, 99 Xxx 2026 99:99:99 GMT")]
+    [InlineData("")]
+    [InlineData("120, 240")]
+    public void Retry_After_ignores_a_header_it_cannot_parse_and_never_throws(string raw)
+    {
+        var now = new DateTimeOffset(2026, 9, 6, 12, 0, 0, TimeSpan.Zero);
+        using var resp = Resp(429);
+        resp.Headers.TryAddWithoutValidation("Retry-After", raw);
+
+        Assert.Null(ProviderErrorMapper.RetryAfter(resp, now));
+    }
+
     // ---- The two providers really go through the mapper (AC 1, AC 2) --------------------------
 
     private const string GoogleOk = """[[["hello","привет",null,null,10]],null,"ru"]""";
+    private const string GoogleBye = """[[["bye","пока",null,null,10]],null,"ru"]""";
 
     /// <summary>
     /// AC 2 through the real provider: the keyless Google endpoint's 403 is a Blocked, its 400 is
@@ -299,6 +323,88 @@ public class ProviderErrorMapperTests
             () => new TranslationService(fake).TranslateLinesAsync(
                 new[] { "привет", "пока" }, "ru", "en", cts.Token));
         Assert.Equal(0, fake.Requests);
+    }
+
+    /// <summary>The one-line path takes neither the batch nor the per-line loop — it goes through
+    /// <c>SafeOne</c>, whose generic catch used to turn a genuine Stop into a
+    /// "(translation failed: A task was canceled.)" line. I3 asks every OCE catch in the pipeline
+    /// to filter, and this was the last one that did not.</summary>
+    [Fact]
+    public async Task A_real_cancel_propagates_from_the_one_line_path_too()
+    {
+        var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var fake = new FakeHandler().RespondJson(GoogleOk);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => new TranslationService(fake).TranslateLinesAsync(
+                new[] { "привет" }, "ru", "en", cts.Token));
+        Assert.Equal(0, fake.Requests);
+    }
+
+    // ---- The three batch exits (I5/I16 + §6.3), pinned one by one -----------------------------
+
+    /// <summary>
+    /// Exit 1 — a batch TIMEOUT propagates as ONE Timeout and must never open the per-line
+    /// fallback. Falling through would multiply the 12 s request timeout by the line count inside a
+    /// single LIVE tick; one honest failure beats N waits. This is the behaviour change the story
+    /// names, and until now nothing pinned it.
+    /// </summary>
+    [Fact]
+    public async Task A_batch_timeout_propagates_and_never_fans_out_per_line()
+    {
+        var fake = new FakeHandler().TimesOut();
+
+        var ex = await Assert.ThrowsAsync<TranslationException>(
+            () => new TranslationService(fake).TranslateLinesAsync(
+                new[] { "привет", "пока", "спасибо" }, "ru", "en"));
+
+        Assert.Equal(TranslationErrorKind.Timeout, ex.Kind);
+        Assert.Equal("the request timed out", ex.Message);
+        Assert.Equal(1, fake.Requests);   // the batch, and nothing else
+    }
+
+    /// <summary>
+    /// Exit 2 — a count mismatch DOES fall through to per-line (§6.3, the join/split family), and
+    /// the lines really are translated one by one. E2 bounds this at <c>PerLineCap</c>; today it is
+    /// unbounded and I16 keeps it that way.
+    /// </summary>
+    [Fact]
+    public async Task A_batch_count_mismatch_falls_through_to_the_per_line_loop()
+    {
+        var fake = new FakeHandler()
+            .RespondJson(GoogleOk)    // batch: one segment for two lines — mismatch
+            .RespondJson(GoogleOk)    // per-line: line 1
+            .RespondJson(GoogleBye);  // per-line: line 2
+
+        var outp = await new TranslationService(fake)
+            .TranslateLinesAsync(new[] { "привет", "пока" }, "ru", "en");
+
+        Assert.Equal(new[] { "hello", "bye" }, outp);
+        Assert.Equal(3, fake.Requests);   // batch + one per line
+    }
+
+    /// <summary>
+    /// Exit 3 — a batch whose 200 does not parse propagates as ONE BadResponse. It does NOT fan out
+    /// per-line, and that is deliberate: §6.3 gives the join/split family a per-line fallback for a
+    /// <em>count mismatch</em>, not for a body that is not the provider's shape. Retrying such a
+    /// body line by line asks the same broken endpoint N more times and ends on the
+    /// <c>rateLimited</c> latch anyway, so the user would trade one honest sentence for N
+    /// placeholders. Pre-existing behaviour (<c>catch (TranslationException) { throw; }</c> predates
+    /// this epic) and unchanged here — pinned so the choice is on record for E1.S4, which turns most
+    /// of these bodies into RateLimited/Blocked before the parser ever sees them.
+    /// </summary>
+    [Fact]
+    public async Task A_batch_body_that_does_not_parse_propagates_as_one_BadResponse()
+    {
+        var fake = new FakeHandler().RespondJson("not json");
+
+        var ex = await Assert.ThrowsAsync<TranslationException>(
+            () => new TranslationService(fake).TranslateLinesAsync(
+                new[] { "привет", "пока" }, "ru", "en"));
+
+        Assert.Equal(TranslationErrorKind.BadResponse, ex.Kind);
+        Assert.Equal(1, fake.Requests);
     }
 
     /// <summary>
