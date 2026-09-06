@@ -172,8 +172,8 @@ public class UserMessagesTests : GatesTestBase
     // ---- AC: the two raw-exception arms and the default are unchanged in shape ---------------
 
     /// <summary>
-    /// Not everything reaches the code-behind classified: `FallbackTranslator` and the OCR path can
-    /// still surface a raw transport failure. These two arms existed before this story and are kept
+    /// Not everything reaches the code-behind classified: the OCR path can still surface a raw
+    /// transport failure. These two arms existed before this story and are kept
     /// — what changed is that they now answer with the same sentence as their typed twins, so a
     /// dead network reads identically whether or not it was mapped on the way up.
     /// </summary>

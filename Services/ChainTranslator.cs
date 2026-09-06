@@ -55,9 +55,18 @@ public sealed class ChainTranslator : ITranslator
     /// Immutable and replaced wholesale after every call — success and failure both.
     ///
     /// <para><see cref="RetryAt"/> is the <b>earliest</b> instant among the tiers that were skipped,
-    /// i.e. when the chain first gets a rung back; it is the same value an
-    /// <c>AllProvidersPaused</c> carries, and it is null when nothing was skipped.
-    /// <see cref="Kind"/> is null on success and otherwise the kind the caller was thrown.</para>
+    /// i.e. when the chain first gets a rung back, and it is null when nothing was skipped. On the
+    /// all-paused exit it is exactly what the <c>AllProvidersPaused</c> carries. <b>On the failure
+    /// exit the two differ on purpose</b> and E7 must not treat them as one: the thrown exception
+    /// carries the failing provider's own <c>RetryAt</c> (a <c>Retry-After</c>, say), while this
+    /// field still answers "when does a skipped rung come back". <see cref="Kind"/> is null on
+    /// success and otherwise the kind the caller was thrown.</para>
+    ///
+    /// <para>Two instants it can hold that a countdown must not render raw, both inherited from the
+    /// gate and neither this class's to clamp (formatting is E7's, I2): an instant already in the
+    /// <b>past</b> (a ceiling refusal is <c>now + a few ms</c>, and a skip with no window at all
+    /// records <c>now</c>), and <see cref="DateTimeOffset.MaxValue"/> — the <c>AuthFailed</c>
+    /// sentinel, whose real exit is re-saving the key and not a timer.</para>
     ///
     /// <para>Nothing reads this yet — E7.S1 / E7.S3 do. It is written now so E7 does not have to
     /// reopen this file.</para>
@@ -89,7 +98,14 @@ public sealed class ChainTranslator : ITranslator
         // tells the player to wait for something that is never coming.
         if (tiers.Count == 0)
             throw new ArgumentException("A chain needs at least one tier.", nameof(tiers));
-        _tiers = tiers;
+        // Copied, not aliased: the count above is checked ONCE, and a caller that keeps its list and
+        // later clears it would walk straight past that guard into the AllProvidersPaused exit with
+        // an empty skipped set and a null retryAt — the sentence with nothing behind it this
+        // constructor exists to prevent. (E3.S7 rebuilds chains; `Of` hands in a local it still
+        // holds.) A chain is also read from a pool thread while the code-behind holds the reference,
+        // so a live list would be a mid-iteration mutation away from a raw InvalidOperationException
+        // thrown OUTSIDE the try, past every catch in RunAsync.
+        _tiers = tiers.ToArray();
     }
 
     /// <summary>
@@ -109,7 +125,23 @@ public sealed class ChainTranslator : ITranslator
         ArgumentNullException.ThrowIfNull(tiers);
         var built = new List<ChainTier>(tiers.Length);
         foreach (var (id, translator) in tiers)
+        {
+            // Composition-time, like the empty-chain guard below it and for the same reason: these
+            // are bugs in a caller's argument list, and every one of them fails as DEGRADED RUNTIME
+            // BEHAVIOUR rather than loudly if it is let through. A blank id registers a gate under
+            // "" that no E7 status list will ever show; a repeated id gives two tiers ONE gate, so
+            // the second is skipped whenever the first is, refused by the same token bucket, and
+            // counted twice in Outcome.Skipped — a fallback that structurally cannot be one.
+            if (string.IsNullOrWhiteSpace(id))
+                throw new ArgumentException("A tier needs a provider id.", nameof(tiers));
+            if (translator is null)
+                throw new ArgumentException($"Tier '{id}' has no translator.", nameof(tiers));
+            if (built.Any(t => t.ProviderId == id))
+                throw new ArgumentException($"'{id}' appears twice: two tiers would share one gate.",
+                    nameof(tiers));
+
             built.Add(new ChainTier(id, ProviderGates.For(id), translator));
+        }
         return new ChainTranslator(built);
     }
 
@@ -135,8 +167,9 @@ public sealed class ChainTranslator : ITranslator
         var skipped = new List<(string ProviderId, string Reason, DateTimeOffset RetryAt)>();
         TranslationException? lastFailure = null;
 
-        foreach (var tier in _tiers)
+        for (int i = 0; i < _tiers.Count; i++)
         {
+            var tier = _tiers[i];
             ct.ThrowIfCancellationRequested();
 
             // Ruling E3-a: BlockedUntil against the GATE's own clock, never State and never the
@@ -157,6 +190,11 @@ public sealed class ChainTranslator : ITranslator
             // I3, and it is FIRST for a reason: a genuine user cancel stops the chain here and now.
             // A timeout is an OCE too, with the caller's token NOT cancelled — it falls to the
             // catches below and becomes the next tier's turn, which is the whole point of the filter.
+            //
+            // LastOutcome is deliberately NOT published here (nor by the ThrowIfCancellationRequested
+            // above): a cancelled call produced no account of the chain, and overwriting the previous
+            // call's with a half-one would make E7 render a status for an attempt the player stopped.
+            // The rule is "the last call that ran to an answer", and it is pinned by a test.
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 throw;
@@ -170,9 +208,7 @@ public sealed class ChainTranslator : ITranslator
             }
             catch (TranslationException failed)
             {
-                // The Kind, never the message: a provider's message can quote its URL (I11), and
-                // Logging.Warn swallows its own errors, so a failed log line cannot fail a translation.
-                Logging.Warn($"chain: {tier.ProviderId} failed ({failed.Kind}) — trying the next tier");
+                LogTierFailure(tier.ProviderId, failed.Kind, i);
                 lastFailure = failed;
             }
             catch (Exception ex)
@@ -186,7 +222,7 @@ public sealed class ChainTranslator : ITranslator
                 ct.ThrowIfCancellationRequested();
                 var kind = ProviderErrorMapper.Classify(null, null, ex, false, ct);
                 ct.ThrowIfCancellationRequested();
-                Logging.Warn($"chain: {tier.ProviderId} failed ({kind}) — trying the next tier");
+                LogTierFailure(tier.ProviderId, kind, i);
                 lastFailure = new TranslationException(kind,
                     UserMessages.Sentence(kind) ?? ex.Message, null, tier.ProviderId);
             }
@@ -194,6 +230,11 @@ public sealed class ChainTranslator : ITranslator
 
         // AC 4 — a tier that really tried and failed outranks "everything is paused": the player
         // must read what the provider actually said, not a sentence about the ones that were skipped.
+        //
+        // And when SEVERAL tiers tried, it is the LAST one's failure, because `lastFailure` is
+        // overwritten: §6.2 spells that out — "the real reason the last provider that actually tried
+        // gave". Not a ranking of Kinds, which would need an order nothing in this app defines, and
+        // not the first failure, which is the tier the chain already decided not to trust. Pinned.
         if (lastFailure is not null)
         {
             Publish(null, skipped, lastFailure.Kind);
@@ -209,6 +250,18 @@ public sealed class ChainTranslator : ITranslator
         throw new TranslationException(TranslationErrorKind.AllProvidersPaused,
             UserMessages.AllProvidersPaused, retryAt);
     }
+
+    /// <summary>One line per tier that really <b>tried</b> and failed — a skipped tier logs nothing,
+    /// because the point of the chain is that it cost nothing. The <see cref="TranslationErrorKind"/>
+    /// and never the message: a provider's message can quote its URL (I11). <c>Logging.Warn</c>
+    /// swallows its own errors by design, so a failed log line can never fail a translation.
+    ///
+    /// <para>The tail states what actually follows. "Trying the next tier" on the <i>last</i> tier is
+    /// the kind of line a reader trusts and is wrong about — and reading this log is step 3 of the
+    /// story's own manual verification.</para></summary>
+    private void LogTierFailure(string providerId, TranslationErrorKind kind, int index)
+        => Logging.Warn($"chain: {providerId} failed ({kind}) — "
+            + (index + 1 < _tiers.Count ? "trying the next tier" : "no tier left after it"));
 
     /// <summary>The one assignment to <see cref="LastOutcome"/>, built from locals and published
     /// whole. Never mutated field by field mid-loop: a reader on the dispatcher would otherwise see

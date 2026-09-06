@@ -54,7 +54,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 
 ### Translation Pipeline Rules
 
-- Pipeline shape (built in `BuildTranslator()`, rebuilt live on key save): `CachingTranslator( key ? FallbackTranslator(DeepLTranslator, TranslationService) : TranslationService )`.
+- Pipeline shape (built in `BuildTranslator()`, rebuilt live on key save): `CachingTranslator( ChainTranslator.Of(key ? deepl, google-gtx : google-gtx) )`. `ChainTranslator` (E3.S3) replaced `FallbackTranslator`: tiers are tried in order, a tier whose **gate** is inside a block window is SKIPPED (no request, no delay), and when every tier was skipped the caller gets one `AllProvidersPaused` carrying the EARLIEST remembered window. The chain never calls `TryEnter` — `HttpProviderCore` is the one admission point — and it skips on `BlockedUntil > Now()`, never on `State == Open` (that state outlives its window on purpose; skipping on it pauses the provider forever).
 - Only SUCCESSES are cached (failure placeholders start with `(`). On DeepL batch count mismatch, throw `TranslationException` — **never pad the result** (padding once bypassed the fallback and poisoned the cache).
 - Slang: bodies are `SlangGlossary.Expand`-ed BEFORE translation; one shared position-aware matcher feeds both `Decode` (🔑 line) and `Expand`. In `Data/slang.json`, only add a `full` field when SURE of the Russian expansion.
 - OCR paths pick source per message: `IsProbablyRussian(body)` → `"ru"` else `"auto"`; displayed original + 🔑 line stay raw (never show expanded text as the original).

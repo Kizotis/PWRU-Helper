@@ -673,8 +673,12 @@ public class HttpProviderCoreTests : GatesTestBase
     [Fact]
     public void Every_await_on_the_request_path_configures_away_the_context()
     {
+        // ChainTranslator.cs joined the list with E3.S3: it is the OUTERMOST await on the request
+        // path now — every translation the app makes goes through its one `await call(tier…)` — and
+        // it is awaited from the same UI-thread methods, so it has the same obligation as the four
+        // files below and none of the reasons to be exempt.
         foreach (var file in new[] { "HttpProviderCore.cs", "TranslationService.cs",
-                                     "DeepLTranslator.cs", "RequestLog.cs" })
+                                     "DeepLTranslator.cs", "RequestLog.cs", "ChainTranslator.cs" })
         {
             var offenders = Statements(SourceOf(file))
                 .Where(s => Regex.IsMatch(s, @"(^|[^\w.])await\s") && !s.Contains(".ConfigureAwait(false)"))

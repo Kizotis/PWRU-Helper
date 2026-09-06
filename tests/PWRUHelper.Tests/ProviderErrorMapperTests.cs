@@ -442,7 +442,7 @@ public class ProviderErrorMapperTests : GatesTestBase
     /// <summary>
     /// The E1.S1 deferred item on the DeepL side: the timeout mapping wrapped <c>SendAsync</c> but
     /// not the body read, so a timeout while reading the response escaped as a raw
-    /// TaskCanceledException — past the TranslationException contract the FallbackTranslator and
+    /// TaskCanceledException — past the TranslationException contract the provider chain and
     /// the LIVE loop are written against. Both sit in the same try now.
     /// <para>What this case can actually prove is the mapping, not the position: with HttpClient's
     /// default <c>ResponseContentRead</c> the body is buffered inside <c>SendAsync</c>, so a

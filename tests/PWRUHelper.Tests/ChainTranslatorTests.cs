@@ -2,6 +2,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using System.Threading;
 using PWRUHelper.Services;
 using Xunit;
@@ -218,8 +219,19 @@ public class ChainTranslatorTests : GatesTestBase
     /// core <b>without a request</b> — the shape it raises is a <c>TranslationException</c> with
     /// <c>NotSent</c> and <c>RetryAt = now + t</c> — and the chain must read that as a skip, not as
     /// a failure: the tier is unused and <c>now + t</c> is what <c>LastOutcome</c> remembers.
-    /// (Today's constants cannot make the real bucket ask for more than 1 s, so the case is driven
-    /// on the shape the core produces rather than on a policy the suite would have to move.)
+    ///
+    /// <para><b>Why this half is driven on the shape and not end to end</b>, stated in full because
+    /// the short version was incomplete. <c>AdmitAsync</c> refuses on <i>three</i> conditions
+    /// (<c>HttpProviderCore.cs:373-375</c>), not one, and none of the three is reachable from a
+    /// chain test today: <c>WorthWaiting(delay)</c> and <c>WorthWaiting(waited + delay)</c> cannot
+    /// fail because the bucket can never ask for more than
+    /// <c>MinSpacingMs × BucketCapacity</c> = 1 s against a <c>MaxSpacingWaitMs</c> of 2 s, and
+    /// <c>wait &gt;= MaxWaits</c> cannot fire because IS-7 credits every requested delay to the
+    /// virtual clock the instant it is asked for (<c>TestBackoffRedirect.cs:43</c>) — so the bucket
+    /// has always refilled by the next turn of the loop. Reaching any of them means moving a policy
+    /// constant this story does not own or defeating IS-7 and sleeping (CI-3). So the short half is
+    /// real and end to end, and this one pins the contract between the two files: the exact shape
+    /// the core raises when it does refuse.</para>
     /// </summary>
     [Fact]
     public async Task TP_CHN_06_a_wait_past_the_budget_leaves_the_tier_unused_and_remembers_now_plus_t()
@@ -289,21 +301,54 @@ public class ChainTranslatorTests : GatesTestBase
     //  TP-CHN-07 / TP-CHN-08 — I3, the OCE trap. THE NAMES ARE THE REGRESSION.
     // =============================================================================================
 
+    /// <summary>
+    /// <b>The I3 guard, and it has to cancel MID-TIER to be one.</b> A GENUINE cancellation: the tier
+    /// is already running when the player presses Stop, and it throws an OCE bound to the chain's own
+    /// token. That must propagate — never silently drop to the next tier.
+    ///
+    /// <para>The timing is the whole test. Cancelling <i>before</i> the call — which is how this guard
+    /// was written when it moved here — is answered by the loop's own
+    /// <c>ct.ThrowIfCancellationRequested()</c> before the first tier is ever entered, so the filtered
+    /// catch this case is named after is never reached: E3.S3's review deleted the filter as a mutation
+    /// and every cancel case stayed green. <see cref="Assert.Same"/> closes the other half — the tier's
+    /// own exception must come back out, not a fresh one minted by the guard further down, which is
+    /// what a chain with no filter would produce while still looking correct from the outside.</para>
+    /// </summary>
     [Fact]
     public async Task Cancellation_is_not_turned_into_a_fallback()
     {
-        // A GENUINE cancellation: the token passed to the chain IS cancelled and the tier throws an
-        // OCE bound to it. This must propagate — never silently drop to the next tier.
+        var cts = new CancellationTokenSource();
+        var second = new Fake(() => "G");
+        OperationCanceledException? thrown = null;
+        var chain = Chain(
+            (ProviderIds.DeepL, new Fake(() =>
+            {
+                cts.Cancel();                       // Stop pressed while this tier is in flight
+                throw thrown = new OperationCanceledException(cts.Token);
+            })),
+            (ProviderIds.GoogleGtx, second));
+
+        var caught = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => chain.TranslateAsync("x", "ru", "en", cts.Token));
+
+        Assert.Equal(0, second.Calls);
+        Assert.Same(thrown, caught);
+    }
+
+    /// <summary>The other timing, kept because it is also real — the player stopped before the call
+    /// even started. Nothing is tried at all, which is the loop's pre-tier guard rather than the
+    /// filtered catch, and the two are separate cases on purpose.</summary>
+    [Fact]
+    public async Task A_token_cancelled_before_the_call_reaches_no_tier_at_all()
+    {
         var cts = new CancellationTokenSource();
         cts.Cancel();
-        var second = new Fake(() => "G");
-        var chain = Chain(
-            (ProviderIds.DeepL, new Fake(() => throw new OperationCanceledException(cts.Token))),
-            (ProviderIds.GoogleGtx, second));
+        var first = new Fake(() => "P");
+        var chain = Chain((ProviderIds.DeepL, first), (ProviderIds.GoogleGtx, new Fake(() => "G")));
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => chain.TranslateAsync("x", "ru", "en", cts.Token));
-        Assert.Equal(0, second.Calls);
+        Assert.Equal(0, first.Calls);
     }
 
     [Fact]
@@ -323,17 +368,22 @@ public class ChainTranslatorTests : GatesTestBase
         Assert.Empty(chain.LastOutcome!.Skipped);
     }
 
-    /// <summary>A real cancel stops the chain from ANY tier, not only from the first — the loop's
-    /// filter is per-tier, and a chain that only guarded tier 1 would keep going.</summary>
+    /// <summary>A real cancel stops the chain from ANY tier, not only from the first — the filter is
+    /// per-tier, and a chain that only guarded tier 1 would keep going. Tier 1 fails for real first,
+    /// so the loop has already been round once and `lastFailure` is set: the cancel must beat it out
+    /// (the player gets the cancel, not tier 1's failure re-thrown at the exit).</summary>
     [Fact]
     public async Task A_real_cancel_from_a_later_tier_stops_the_chain()
     {
         var cts = new CancellationTokenSource();
-        cts.Cancel();
         var third = new Fake(() => "G");
         var chain = Chain(
             (ProviderIds.DeepL, new Fake(() => throw new TranslationException(TranslationErrorKind.Unavailable, "down"))),
-            (ProviderIds.GoogleGtx, new Fake(() => throw new OperationCanceledException(cts.Token))),
+            (ProviderIds.GoogleGtx, new Fake(() =>
+            {
+                cts.Cancel();                       // Stop pressed while tier 2 is in flight
+                throw new OperationCanceledException(cts.Token);
+            })),
             (ProviderIds.GoogleDict, third));
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
@@ -370,6 +420,78 @@ public class ChainTranslatorTests : GatesTestBase
         var ex = await Assert.ThrowsAsync<TranslationException>(() => chain.TranslateAsync("x", "ru", "en"));
         Assert.NotEqual(TranslationErrorKind.AllProvidersPaused, ex.Kind);
         Assert.Equal(ProviderIds.GoogleGtx, ex.ProviderId);
+    }
+
+    /// <summary>
+    /// AC 4's other half, and the exit rule §6.2 states in prose: when SEVERAL tiers really tried,
+    /// the caller gets <b>the last one's</b> failure — "the real reason the last provider that
+    /// actually tried gave". Nothing ranks the Kinds and nothing keeps the first, so this is the one
+    /// case that fails if `lastFailure` ever stops being overwritten (or starts being kept).
+    /// </summary>
+    [Fact]
+    public async Task The_last_tier_that_tried_is_the_failure_the_caller_gets()
+    {
+        var chain = Chain(
+            (ProviderIds.DeepL, new Fake(() => throw new TranslationException(TranslationErrorKind.Unavailable, "deepl down"))),
+            (ProviderIds.GoogleGtx, new Fake(() => throw new TranslationException(TranslationErrorKind.BadResponse, "google gibberish"))));
+
+        var ex = await Assert.ThrowsAsync<TranslationException>(() => chain.TranslateAsync("x", "ru", "en"));
+
+        Assert.Equal(TranslationErrorKind.BadResponse, ex.Kind);
+        Assert.Equal(TranslationErrorKind.BadResponse, chain.LastOutcome!.Kind);
+        Assert.Empty(chain.LastOutcome!.Skipped);   // both TRIED — neither is a skip (D-2)
+    }
+
+    /// <summary>
+    /// The one exit path that deliberately publishes <b>nothing</b>: a genuine cancel. R-3 says
+    /// <c>LastOutcome</c> is set after every call, and the decision recorded here is that a call the
+    /// player stopped is not one — overwriting the previous call's account with a half-finished one
+    /// would make E7 render a status for an attempt that never produced an answer. So the previous
+    /// account survives, unchanged, and this pins it in both directions.
+    /// </summary>
+    [Fact]
+    public async Task LastOutcome_is_left_untouched_by_a_cancelled_call()
+    {
+        var cts = new CancellationTokenSource();
+        var chain = Chain(
+            (ProviderIds.DeepL, new Fake(() => cts.IsCancellationRequested
+                ? throw new OperationCanceledException(cts.Token)
+                : "P")));
+
+        Assert.Equal("P", await chain.TranslateAsync("x", "ru", "en"));
+        var before = chain.LastOutcome;
+        Assert.Equal(ProviderIds.DeepL, before!.ProviderId);
+
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => chain.TranslateAsync("x", "ru", "en", cts.Token));
+
+        Assert.Same(before, chain.LastOutcome);
+    }
+
+    /// <summary>
+    /// Ruling E3-b has exactly one writer, and that is the whole of why the chain may trust the
+    /// flag: <c>NotSent</c> means "the request never left this machine", which only
+    /// <c>HttpProviderCore.Paused</c> can know. A second writer — a provider "helpfully" setting it
+    /// on a failure it decided not to send — would turn a real failure into a skip and hand the
+    /// player <c>AllProvidersPaused</c> while an engine was actually refusing.
+    /// </summary>
+    [Fact]
+    public void NotSent_is_written_in_exactly_one_place()
+    {
+        var writers = ProductionSources(RepoRoot())
+            .Where(f => Regex.IsMatch(Code(File.ReadAllText(f)), @"NotSent\s*=(?!=)"))
+            .Select(Path.GetFileName)
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal(new[] { "HttpProviderCore.cs" }, writers);
+
+        // Non-vacuity: the reader is where it is claimed to be, so the scan is looking at a flag
+        // that is actually load-bearing and not at a dead property.
+        Assert.Contains("paused.NotSent",
+            File.ReadAllText(Path.Combine(RepoRoot(), "Services", "ChainTranslator.cs")),
+            StringComparison.Ordinal);
     }
 
     /// <summary>I5 — the chain never pads. A tier that returns fewer lines than it was given is
@@ -414,6 +536,38 @@ public class ChainTranslatorTests : GatesTestBase
     public void An_empty_chain_is_refused_at_construction()
         => Assert.Throws<ArgumentException>(() => new ChainTranslator(Array.Empty<ChainTier>()));
 
+    /// <summary>…and so is every other way a tier list can be malformed, because all of them fail as
+    /// degraded runtime behaviour rather than loudly: a blank id registers a gate nothing will ever
+    /// show, and a repeated id hands two tiers ONE gate — the second is then skipped exactly when the
+    /// first is, which is a fallback that structurally cannot be one.</summary>
+    [Fact]
+    public void Of_refuses_a_malformed_tier_list()
+    {
+        var ok = new Fake(() => "G");
+        Assert.Throws<ArgumentException>(() => ChainTranslator.Of((" ", ok)));
+        Assert.Throws<ArgumentException>(() => ChainTranslator.Of((ProviderIds.DeepL, null!)));
+        Assert.Throws<ArgumentException>(() => ChainTranslator.Of(
+            (ProviderIds.GoogleGtx, ok), (ProviderIds.GoogleGtx, new Fake(() => "G2"))));
+    }
+
+    /// <summary>The empty-chain guard is checked once, at construction — so the chain must not keep
+    /// reading the caller's list afterwards. A list emptied after the fact would walk past that guard
+    /// into the all-paused exit with nothing skipped and a null <c>retryAt</c>: "wait for something
+    /// that is never coming", which is the exact sentence the guard exists to prevent.</summary>
+    [Fact]
+    public async Task A_chain_does_not_alias_the_list_it_was_built_from()
+    {
+        var tiers = new List<ChainTier>
+        {
+            new(ProviderIds.GoogleGtx, new ProviderGate(), new Fake(() => "G")),
+        };
+        var chain = new ChainTranslator(tiers);
+
+        tiers.Clear();
+
+        Assert.Equal("G", await chain.TranslateAsync("x", "ru", "en"));
+    }
+
     // =============================================================================================
     //  The I6 / I7 pins (ruling GAP-1 / GAP-2) and AC 6's deletion
     // =============================================================================================
@@ -421,15 +575,22 @@ public class ChainTranslatorTests : GatesTestBase
     /// <summary>
     /// <b>I6 — the glossary stays upstream of every engine.</b> The failure mode this pins is a new
     /// provider "helpfully" expanding slang itself: the text would be double-expanded and the
-    /// expanded form would end up displayed as the original. Nothing under <c>Services/</c> other
-    /// than <c>SlangGlossary.cs</c> may call <c>.Expand(</c>, and the LIVE loop's single call stays
-    /// where it is — above the chain, once per body, before the split.
+    /// expanded form would end up displayed as the original. The invariant is about WHERE the
+    /// expansion may live, not how many there are: nothing under <c>Services/</c> other than
+    /// <c>SlangGlossary.cs</c> may call <c>.Expand(</c>, and both of the code-behind's calls stay
+    /// above the chain — <c>MainWindow.Live.cs:302</c>, once per body and before the split, and
+    /// <c>MainWindow.Translate.cs:93</c> for what the user writes. (The story and this comment used
+    /// to claim the LIVE one was the only caller in the app; it is the only one in the LIVE path.)
+    ///
+    /// <para>The scan is recursive on purpose: a provider added under <c>Services/Providers/</c> — E3
+    /// adds three — would walk straight out of a top-level-only enumeration.</para>
     /// </summary>
     [Fact]
     public void I6_only_the_code_behind_expands_slang_and_never_a_provider()
     {
         var root = RepoRoot();
-        var services = Directory.EnumerateFiles(Path.Combine(root, "Services"), "*.cs")
+        var services = Directory
+            .EnumerateFiles(Path.Combine(root, "Services"), "*.cs", SearchOption.AllDirectories)
             .Where(f => Path.GetFileName(f) != "SlangGlossary.cs")
             .Where(f => Code(File.ReadAllText(f)).Contains(".Expand(", StringComparison.Ordinal))
             .Select(Path.GetFileName)
@@ -456,6 +617,13 @@ public class ChainTranslatorTests : GatesTestBase
         var live = Code(File.ReadAllText(Path.Combine(RepoRoot(), "MainWindow.Live.cs")));
         Assert.Contains("TranslateLinesAsync(ru, \"ru\", target, ct)", live, StringComparison.Ordinal);
         Assert.Contains("TranslateLinesAsync(auto, \"auto\", target, ct)", live, StringComparison.Ordinal);
+
+        // …and the third clause of the invariant, which the two source pins above do not cover: the
+        // ORIGINAL ORDER is restored. Each group is scattered back through the index list it was
+        // collected with — a refactor that simply concatenated the two answers would keep both
+        // sources, keep both calls, and hand every row the wrong translation.
+        Assert.Contains("result[ruIdx[i]] = t[i]", live, StringComparison.Ordinal);
+        Assert.Contains("result[autoIdx[i]] = t[i]", live, StringComparison.Ordinal);
 
         var tier = new Fake(() => "?") { Lines = lines => lines.Select(l => l.ToUpperInvariant()).ToList() };
         var chain = Chain((ProviderIds.GoogleGtx, tier));
