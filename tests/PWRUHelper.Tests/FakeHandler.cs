@@ -24,33 +24,41 @@ internal sealed class FakeHandler : HttpMessageHandler
         public Uri Uri = new("about:blank");
         public Dictionary<string, string> Headers = new();
         public string? Body;
-        public HttpStatusCode? Status;      // what we answered; null when we threw instead
+        public HttpStatusCode? Status;      // what we answered; null if we threw or never finished
         public string? ResponseBody;
         public Exception? Thrown;
     }
 
     private sealed record Step(HttpStatusCode Status, string Body, string ContentType, Exception? Throw);
 
+    // Guards both lists: a provider that ever sends two requests at once must still get a
+    // deterministic script step and an intact recording.
+    private readonly object _gate = new();
     private readonly List<Step> _steps = new();
+    private readonly List<Call> _calls = new();
 
-    public readonly List<Call> Calls = new();
-    public int Requests => Calls.Count;
+    /// <summary>The exchanges so far, oldest first (a snapshot; the Call objects are live).</summary>
+    public IReadOnlyList<Call> Calls { get { lock (_gate) return _calls.ToList(); } }
+
+    public int Requests { get { lock (_gate) return _calls.Count; } }
 
     /// <summary>Artificial latency, for the slow-provider / timeout paths.</summary>
     public TimeSpan Delay = TimeSpan.Zero;
 
     public FakeHandler Respond(HttpStatusCode status, string body = "", string contentType = "application/json")
     {
-        _steps.Add(new Step(status, body, contentType, null));
+        lock (_gate) _steps.Add(new Step(status, body, contentType, null));
         return this;
     }
 
     public FakeHandler RespondJson(string json) => Respond(HttpStatusCode.OK, json);
 
-    /// <summary>Answer with a transport failure (an HttpRequestException, or anything else).</summary>
+    /// <summary>Answer with a transport failure (an HttpRequestException, or anything else). A
+    /// repeated step rethrows the same instance, so assert on its type and message, not its
+    /// stack trace.</summary>
     public FakeHandler Throws(Exception ex)
     {
-        _steps.Add(new Step(default, "", "", ex));
+        lock (_gate) _steps.Add(new Step(default, "", "", ex));
         return this;
     }
 
@@ -62,21 +70,40 @@ internal sealed class FakeHandler : HttpMessageHandler
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
+        // A real handler observes the token, so a "cancelled token costs zero requests" assertion
+        // has to be able to fail here rather than record a phantom exchange.
+        ct.ThrowIfCancellationRequested();
+
+        // Request headers and content headers land in one bag (they never share a name), so a
+        // Content-Type assertion finds what it expects. Multi-value headers are joined with ", ":
+        // the User-Agent therefore reads as its parsed product tokens, not the raw string.
+        var headers = request.Headers.Concat(
+            request.Content?.Headers ?? Enumerable.Empty<KeyValuePair<string, IEnumerable<string>>>());
         var call = new Call
         {
             Method = request.Method,
             Uri = request.RequestUri ?? new Uri("about:blank"),
-            Headers = request.Headers.ToDictionary(h => h.Key, h => string.Join(", ", h.Value)),
+            Headers = headers.ToDictionary(h => h.Key, h => string.Join(", ", h.Value)),
             Body = request.Content == null ? null : await request.Content.ReadAsStringAsync(ct),
         };
-        Calls.Add(call);
+
+        Step step;
+        lock (_gate)
+        {
+            _calls.Add(call);
+
+            // An unscripted 200 with an empty body would surface as "the service returned an
+            // unexpected response" — a parser bug that is not one. Say what actually happened.
+            if (_steps.Count == 0)
+                throw new InvalidOperationException(
+                    "FakeHandler received a request with nothing scripted — call Respond/Throws first.");
+
+            // Past the end of the script the last step repeats, so "429 on every attempt" is one
+            // step. The index is this call's own, taken under the lock — not a later count.
+            step = _steps[Math.Min(_calls.Count - 1, _steps.Count - 1)];
+        }
 
         if (Delay > TimeSpan.Zero) await Task.Delay(Delay, ct);
-
-        // Past the end of the script the last step repeats, so "429 on every attempt" is one step.
-        var step = _steps.Count == 0
-            ? new Step(HttpStatusCode.OK, "", "application/json", null)
-            : _steps[Math.Min(Calls.Count - 1, _steps.Count - 1)];
 
         if (step.Throw != null)
         {

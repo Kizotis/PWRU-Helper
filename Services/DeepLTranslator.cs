@@ -21,21 +21,29 @@ public class DeepLTranslator : ITranslator
 
     public DeepLTranslator(string apiKey) : this(apiKey, null) { }
 
-    /// <summary>Test seam: a handler builds a private client so the status mapping and the parser can
-    /// be exercised offline; the app passes nothing and keeps the shared static client.</summary>
+    /// <summary>Test seam: a handler builds a private client — same timeout as the shared one — so
+    /// the status mapping and the parser can be exercised offline; the app passes nothing and keeps
+    /// the shared static client. Nothing disposes the private client: production never takes this
+    /// path, and a test handler owns no sockets.</summary>
     internal DeepLTranslator(string apiKey, HttpMessageHandler? handler = null)
     {
         _key = (apiKey ?? "").Trim();
         _endpoint = FreeKey(_key)
             ? "https://api-free.deepl.com/v2/translate"
             : "https://api.deepl.com/v2/translate";
-        _http = handler == null ? Http : new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(12) };
+        _http = handler == null ? Http : CreateClient(handler);
     }
 
-    // Same reasoning as TranslationService: a process-lifetime client needs its pooled connections
-    // recycled, or a stale one is never replaced.
-    private static HttpClient CreateClient() =>
-        new(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(2) })
+    /// <summary>Same reasoning as TranslationService: a process-lifetime client needs its pooled
+    /// connections recycled, or a stale one is never replaced. `internal` so the lifetime can be
+    /// pinned by a test without reflecting into HttpClient's private fields.</summary>
+    internal static SocketsHttpHandler CreatePooledHandler() =>
+        new() { PooledConnectionLifetime = TimeSpan.FromMinutes(2) };
+
+    // One factory for both paths, so a test client differs from the production one by its handler
+    // and nothing else.
+    private static HttpClient CreateClient(HttpMessageHandler? handler = null) =>
+        new(handler ?? CreatePooledHandler())
         {
             Timeout = TimeSpan.FromSeconds(12),
         };

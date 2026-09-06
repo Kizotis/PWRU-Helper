@@ -36,18 +36,30 @@ public class TranslationService : ITranslator
 
     private readonly HttpClient _http;
 
-    /// <summary>Test seam: a handler builds a private client so the retry policy and the response
-    /// parsing can be exercised offline; the app passes nothing and keeps the shared static client.</summary>
+    public TranslationService() : this(null) { }
+
+    /// <summary>Test seam: a handler builds a private client — configured exactly like the shared
+    /// one, so a test sees the same timeout and the same User-Agent — and the retry policy and the
+    /// response parsing become reachable offline; the app passes nothing and keeps the shared
+    /// static client. Nothing disposes the private client: production never takes this path, and a
+    /// test handler owns no sockets.</summary>
     internal TranslationService(HttpMessageHandler? handler = null)
     {
-        _http = handler == null ? Http : new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(12) };
+        _http = handler == null ? Http : CreateClient(handler);
     }
 
-    private static HttpClient CreateClient()
+    /// <summary>The production handler: the client built on it lives for the whole process, and
+    /// without a pooled-connection lifetime it can sit on a connection (or a DNS answer) that has
+    /// gone stale and never replace it. `internal` so the lifetime can be pinned by a test without
+    /// reflecting into HttpClient's private fields.</summary>
+    internal static SocketsHttpHandler CreatePooledHandler() =>
+        new() { PooledConnectionLifetime = TimeSpan.FromMinutes(2) };
+
+    // One factory for both paths, so a test client differs from the production one by its handler
+    // and nothing else.
+    private static HttpClient CreateClient(HttpMessageHandler? handler = null)
     {
-        // This client lives for the whole process: without a pooled-connection lifetime it can sit
-        // on a connection (or a DNS answer) that has gone stale and never replace it.
-        var c = new HttpClient(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(2) })
+        var c = new HttpClient(handler ?? CreatePooledHandler())
         {
             Timeout = TimeSpan.FromSeconds(12),
         };
