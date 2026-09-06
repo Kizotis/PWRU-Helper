@@ -1,0 +1,165 @@
+# generated: 2026-09-06
+# last_updated: 2026-09-06
+# project: PWRU Helper — translation-path rebuild (P2) and startup expectations (P1)
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: docs/investigations/03-stories/stories
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog -> in-progress: automatically when the first story is created (via create-story)
+#   - in-progress -> done: manually when all stories reach 'done'
+#
+# Story Status:
+#   - backlog: Story only exists in epics.md
+#   - ready-for-dev: Story file created in the stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# Action Item Status:
+#   - open / in-progress / done
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when its first story is created
+# - Stories can be worked in parallel if capacity allows; here they are ordered by increment
+# - Dev moves a story to 'review', then runs code-review (fresh context, different LLM recommended)
+# - Retrospective appends its action items to action_items; sprint-status surfaces open ones
+#
+# PROJECT-SPECIFIC DEVIATIONS (deliberate, see sprint-plan.md):
+# ============================================================
+# 1. KEY FORMAT. epics.md numbers stories "E1.S1", not "1.1". Keys here are
+#    "e{epic}-s{story}-{kebab-title}" and the story files are "stories/E1.S1-<slug>.md".
+#    A key is therefore NOT the plain "{n}-{n}-{title}" the default workflow expects.
+# 2. 'ready-for-dev' MEANS "the story file exists and is complete". It does NOT mean work may
+#    start: every story that touches production code is gated behind the owner's explicit
+#    Phase-4 go (ground rule 2, docs/investigations/README.md). Each story file says so in its
+#    status line: "ready-for-dev (Phase 4 - owner's go required)".
+# 3. FIVE ITEMS ARE NOT AGENT WORK and will never move past 'backlog' by an agent:
+#    e8-s5, e9-s1, e9-s2, e9-s3, e9-s4, e9-s7, e9-s8, e9-s12 are owner tasks.
+# 4. NINE ITEMS ARE SPIKES with a measurable exit criterion and a go/no-go:
+#    e2-s7 (U9), e3-s1 (U1), e3-s2 (U2), e3-s9 (U3), e4-s3 (U8), e6-s1 (U4), e6-s6 (U5),
+#    e8-s1 (U7), e8-s4 (U6). e3-s1/e3-s2/e3-s9 additionally require the owner's explicit go
+#    for the requests they send, and must not run from the dev box (Phase-1 incident).
+# 5. RELEASE COUPLING: epic-2 and epic-3 are separate PRs but ONE release. A sprint that
+#    schedules them into different releases is wrong (owner's decision 2; architecture R7).
+
+generated: 2026-09-06
+last_updated: 2026-09-06
+project: PWRU Helper — translation-path rebuild (P2) and startup expectations (P1)
+project_key: NOKEY
+tracking_system: file-system
+story_location: docs/investigations/03-stories/stories
+
+development_status:
+  # ---- Release A.0 · increment 0 · may ship alone -------------------------------
+  epic-1: in-progress
+  e1-s1-http-handler-seam: ready-for-dev
+  e1-s2-typed-translation-errors: ready-for-dev
+  e1-s3-provider-error-mapper: ready-for-dev
+  e1-s4-html-abuse-page-sniffing: ready-for-dev
+  e1-s5-per-request-diagnostic-log: ready-for-dev
+  e1-s6-friendly-kind-switch: ready-for-dev
+  e1-s7-translation-policy: ready-for-dev
+  epic-1-retrospective: optional
+
+  # ---- Release A.1 · increment 1 · ONE RELEASE WITH EPIC 3 ----------------------
+  epic-2: in-progress
+  e2-s1-provider-gate-breaker: ready-for-dev
+  e2-s2-provider-gates-registry: ready-for-dev
+  e2-s3-rate-ceiling-interactive-reserve: backlog
+  e2-s4-persist-gate-state: backlog
+  e2-s5-http-provider-core: backlog
+  e2-s6-log-gate-transitions: backlog
+  e2-s7-tune-gate-windows-spike-u9: backlog      # spike; scheduled AFTER the A.1 release ships
+  epic-2-retrospective: optional
+
+  # ---- Release A.1 · increment 2 · ONE RELEASE WITH EPIC 2 ----------------------
+  epic-3: backlog
+  e3-s1-capture-dict-chrome-ex-batch-spike-u1: backlog   # spike; owner's go for 2 requests
+  e3-s2-capture-edge-shapes-spike-u2: backlog            # spike; no EdgeTranslator before it
+  e3-s3-chain-translator: backlog
+  e3-s4-google-dict-translator: backlog
+  e3-s5-edge-translator: backlog
+  e3-s6-demote-gtx-extract-textchunker: backlog
+  e3-s7-build-both-chains-once: backlog
+  e3-s8-bound-per-line-fallback: backlog
+  e3-s9-soak-dict-chrome-ex-spike-u3: backlog            # spike; designated connection only
+  epic-3-retrospective: optional
+
+  # ---- Release A.2 · increment 3 ------------------------------------------------
+  epic-4: backlog
+  e4-s1-extract-translation-cache-store: backlog
+  e4-s2-persist-cache-debounced: backlog
+  e4-s3-measure-cache-load-spike-u8: backlog             # spike
+  e4-s4-share-one-store-both-decorators: backlog
+  epic-4-retrospective: optional
+
+  # ---- Release A.2 · increment 4 ------------------------------------------------
+  epic-5: backlog
+  e5-s1-skip-tick-and-back-off-while-paused: backlog
+  e5-s2-honest-auto-stop: backlog
+  e5-s3-retry-failed-rows-after-recovery: backlog
+  e5-s4-honest-cancellable-read-once: backlog
+  epic-5-retrospective: optional
+
+  # ---- Release B.1 · increment 5 ------------------------------------------------
+  epic-6: backlog
+  e6-s1-verify-azure-f0-spike-u4: backlog                # spike
+  e6-s2-azure-translator: backlog
+  e6-s3-azure-key-and-region-settings: backlog
+  e6-s4-use-key-for-reading-opt-in: backlog
+  e6-s5-test-a-key-without-spending-quota: backlog
+  e6-s6-deepl-fx-keys-still-work-spike-u5: backlog       # spike
+  epic-6-retrospective: optional
+
+  # ---- Release B.2 · increment 6 ------------------------------------------------
+  epic-7: backlog
+  e7-s1-one-sentence-per-error-kind: backlog
+  e7-s2-one-per-window-countdown: backlog
+  e7-s3-provider-chip-and-tooltip: backlog
+  e7-s4-paused-state-and-frozen-heartbeat: backlog
+  e7-s5-live-read-once-overlay-copy: backlog
+  e7-s6-pending-retry-row-render-test: backlog
+  e7-s7-about-translation-engines-block: backlog
+  e7-s8-readme-and-about-copy: backlog
+  epic-7-retrospective: optional
+
+  # ---- Release C · increment 7 · prototype branch, merges only on go ------------
+  epic-8: backlog
+  e8-s1-dll-beside-exe-spike-u7: backlog                 # spike; needs e9-s12
+  e8-s2-prototype-bergamot-translator: backlog
+  e8-s3-one-click-offline-install: backlog
+  e8-s4-measure-bergamot-spike-u6: backlog               # spike; needs e9-s12
+  e8-s5-record-go-no-go-decision: backlog                # owner task
+  epic-8-retrospective: optional
+
+  # ---- Track P · parallel, independent, START NOW -------------------------------
+  epic-9: backlog
+  e9-s1-close-pr-49-confirm-mit: backlog                 # owner task; gates e9-s2..e9-s8
+  e9-s2-apply-to-signpath-foundation: backlog            # owner task
+  e9-s3-create-signpath-project: backlog                 # owner task
+  e9-s4-add-github-secret-and-variables: backlog         # owner task
+  e9-s5-wire-signing-into-release-workflow: backlog
+  e9-s6-keep-signpath-doc-in-sync: backlog
+  e9-s7-first-signed-tag-as-a-test: backlog              # owner task
+  e9-s8-verify-signature-and-remeasure: backlog          # owner task
+  e9-s9-readme-and-release-note-expectations: backlog
+  e9-s10-first-launch-after-update-toast: backlog
+  e9-s11-release-checklist-state-files: backlog
+  e9-s12-startup-diagnostics-campaign: backlog           # owner task; R-12, the standing blocker
+  epic-9-retrospective: optional
+
+# No retrospective has run yet; this section exists so the first one has a home.
+action_items: []

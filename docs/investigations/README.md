@@ -197,3 +197,22 @@ Paige (WD/VD): `SYNTHESE.md` — per problem: top-3 causes with evidence, quick 
 | R-7 | Setting names disagree (`UseKeyForReading` vs `AzureForReading`; `OfflineFallbackEnabled` vs `OfflineEngineEnabled`) | **Architecture §12 names win:** `AzureApiKey`, `AzureRegion`, `UseKeyForReading`, `OfflineFallbackEnabled`, `LastRunVersion`. Stories use these; the UX doc is read with this mapping. |
 | R-8 | Amendment A-1 (Bergamot) lived only in this README; `architecture-cible.md` §7.6 read as superseded | **Applied in place** — an "Amendment A-1" block now opens §7.6. |
 | R-12 | No affected machine has ever been measured | **Owner task** (E9 diagnostics campaign) — it gates U6/U7 and every P1 threshold; nothing in E1–E3 depends on it. |
+
+---
+
+## Phase 3 — Closure by the orchestrator (Winston, 2026-09-06)
+
+| File | Owner | Status |
+|------|-------|--------|
+| [`03-stories/epics.md`](03-stories/epics.md) | John (CE) — 9 epics, 62 stories (46 ⛔ Phase 4 — owner's go; 9 spikes, one per U1–U9; 8 👤 owner tasks), Given/When/Then ACs with `file:line` | **done** (2,932 lines) |
+| [`03-stories/readiness-report.md`](03-stories/readiness-report.md) | John (IR) — coverage matrices (FR, components, UX states, invariants, U1–U9), gaps R-1…R-17 | **READY WITH NOTES** (419 lines) |
+| [`03-stories/test-plan.md`](03-stories/test-plan.md) | Murat (TEA, test design) — 145 automated tests designed (96 unit / 34 integration / 15 STA), field campaigns P1/P2, Bergamot harness, isolation IS-1…IS-12, traceability | **done** (550 lines) |
+| [`03-stories/sprint-plan.md`](03-stories/sprint-plan.md) + [`sprint-status.yaml`](03-stories/sprint-status.yaml) | Amelia (SP) — release cut A.0 / **A.1 (E2+E3, one tag)** / A.2 / B / C / track P; Release A ≈ 31 stories ≈ 32.5 agent-days, critical path to the P2 fix ≈ 15 | **done** |
+| [`03-stories/stories/`](03-stories/stories/) | Amelia (CS) — 9 story files, `ready-for-dev (Phase 4 — owner's go required)`: E1.S1–S7 (increment 0) + E2.S1–S2 (gate core) | **done** |
+
+- **Mirrored to the BMAD artifact folders of the main checkout** (gitignored): `_bmad-output/planning-artifacts/pwru-diagnostic/` (epics, readiness, test plan) and `_bmad-output/implementation-artifacts/pwru-diagnostic/` (sprint plan, status yaml, stories).
+- **Architecture glossary updated** (§16) with the three ruled additions: `ChainTranslator.LastOutcome`, `ProviderGate.Snapshot()`, `UserMessages`; §7.6 carries amendment A-1.
+- **Still open, by owner** (nothing else blocks A.0/A.1): the Phase 4 go; an explicit go for the two capture spikes E3.S1/E3.S2 (U1/U2 — from a connection he designates, never the dev box); R-12 — one measured affected machine (gates E8 Bergamot go/no-go and every P1 threshold); closing PR #49 and the SignPath application (track P).
+- **Implementation order for E1**: S1 → S2 → S7 → S3 → S4 → S5 → S6 (S7 pulled forward; S4 depends on it).
+
+**Mission status:** Phases 0–3 complete. **Phase 4 (implementation, story by story, Amelia DS then CR) starts only on the owner's explicit go.**

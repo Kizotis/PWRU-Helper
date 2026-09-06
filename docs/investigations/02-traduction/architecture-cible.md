@@ -1223,8 +1223,11 @@ a very different support cost.
 | `EdgeTranslator` | `Services/EdgeTranslator.cs` | `edge.microsoft.com/translate/translatetext`, keyless — the independent vendor. |
 | `GoogleGtxTranslator` | `Services/GoogleGtxTranslator.cs` | Today's `TranslationService`, renamed and demoted to the last free tier. |
 | `AzureTranslator` | `Services/AzureTranslator.cs` | Azure AI Translator over raw `HttpClient`, native array batching. |
-| `BergamotTranslator` | `Services/BergamotTranslator.cs` | **Prototype only.** Lazy-loaded, idle-unloaded offline terminal fallback. |
+| `BergamotTranslator` | `Services/BergamotTranslator.cs` | **Prototype only.** Offline terminal fallback; per amendment A-1 (§7.6): one-click install, loaded on first fallback use and kept loaded while LIVE runs, unloaded after LIVE stops + idle timeout. |
 | `TextChunker` | `Services/TextChunker.cs` | `ChunkText` / `HardSplit`, moved out of the renamed provider because two providers need them. |
+| `ChainTranslator.LastOutcome` | `Services/ChainTranslator.cs` (nested record) | _Added by ruling R-3._ Immutable `{ProviderId, Skipped: [(ProviderId, Reason)], RetryAt?, Kind?}` set after every call; the code-behind reads it to name the answering provider and the skip reason (UX states S2/S3). `ITranslator` unchanged (I1). |
+| `ProviderGate.Snapshot()` | `Services/ProviderGate.cs` | _Added by rulings OQ-c / R-2._ Immutable `{State, BlockedUntil, Strikes, LastKind}`; the UI polls it at 1 Hz from the countdown timer. No events leave `Services/`. |
+| `UserMessages` | `Services/UserMessages.cs` | _Added by ruling GAP-4._ UI-free static table of every user-facing sentence keyed by error kind / provider state (Sally's copy deck); tests assert on it, XAML/code-behind read it. |
 
 ---
 
