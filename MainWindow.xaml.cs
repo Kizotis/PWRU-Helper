@@ -400,14 +400,24 @@ public partial class MainWindow : Window
         _toastTimer.Start();
     }
 
-    /// <summary>Turn an exception into a short, non-technical message for the user.</summary>
-    private static string Friendly(Exception ex) => ex switch
-    {
-        TranslationException te => te.Message,
-        System.Net.Http.HttpRequestException => "no Internet connection",
-        TaskCanceledException => "the request timed out",
-        _ => ex.Message,
-    };
+    /// <summary>
+    /// Turn an exception into a short, non-technical message for the user.
+    ///
+    /// It used to render whatever sentence the throw site happened to carry, which is how one dead
+    /// network could read three different ways depending on which provider noticed it first. It now
+    /// renders one sentence per <see cref="TranslationErrorKind"/>, from the single copy-deck table
+    /// (<c>Services/UserMessages.cs</c>, ruling GAP-4) — the exception's own message stays what the
+    /// diagnostic log records, and stops being what the player reads.
+    ///
+    /// The mapping is a pure function and lives in <c>Services/</c> so the suite can assert on the
+    /// copy without an STA host; this stays the display-time entry point, which is where the
+    /// countdown will be formatted from <see cref="TranslationException.RetryAt"/> when E7.S1 adds
+    /// it (I2: <c>Services/</c> never formats a time).
+    ///
+    /// <c>internal</c>, not <c>private</c>: the suite reaches it through <c>InternalsVisibleTo</c>.
+    /// Both feed-row call sites wrap the result in parentheses — do not add them here (I4).
+    /// </summary>
+    internal static string Friendly(Exception ex) => UserMessages.For(ex);
 
     // ============================================================
     //  GLOBAL HOTKEYS (work even while the game has focus)

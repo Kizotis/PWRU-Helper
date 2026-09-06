@@ -122,12 +122,13 @@ public class DeepLTranslator : ITranslator
 
                 var kind = ProviderErrorMapper.Classify(resp, bodyHead: null, transport: null,
                     keyWasSent: true, ct);
-                // WARNING for E6: the Kind and the sentence come from two switches over the same
-                // status, and they agree only while bodyHead stays null. Pass one and a
-                // quota-bearing 403 becomes QuotaExhausted while this switch still tells the user
-                // to check the API key — the two-places-disagree bug the mapper exists to end.
-                // Whoever starts passing a bodyHead here owns making the sentence follow the Kind
-                // (E1.S6 owns the wording).
+                // The sentence below is no longer what the player reads: E1.S6 made Friendly()
+                // render one sentence per Kind from Services/UserMessages.cs, and this message is
+                // now the LOG's account of what DeepL said. That defuses the two-switch trap this
+                // warning was about — a bodyHead-driven QuotaExhausted can no longer arrive on
+                // screen as "check the API key". It can still make the log disagree with the Kind
+                // beside it, so whoever starts passing a bodyHead here still owns keeping the two
+                // switches in step (E6).
                 var message = code switch
                 {
                     401 or 403 => "DeepL rejected the API key — check it in Settings.",

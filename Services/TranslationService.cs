@@ -215,8 +215,8 @@ public class TranslationService : ITranslator
 
                         // Not retried, exactly as an unparseable 200 was not retried before: the
                         // retry DECISION is unchanged (E2.S5 owns it). The sentence is the one the
-                        // parser's catch renders today, so nothing the user reads changes here —
-                        // only the Kind, which is what E1.S6 will reword against.
+                        // parser's catch carries, and since E1.S6 it is the log's account only:
+                        // what the player reads is the Kind's sentence from UserMessages.
                         throw new TranslationException(
                             ProviderErrorMapper.Classify(resp, json, transport: null,
                                 keyWasSent: false, ct),
@@ -266,8 +266,10 @@ public class TranslationService : ITranslator
                 bool transient = code == 429 || code >= 500;
                 if (!transient)
                     // A real, non-retryable error — report it as-is instead of retrying and then
-                    // mislabeling it as "no Internet". The sentence is unchanged; what changed is
-                    // that a 403 no longer arrives with the same Kind as a 400 (E1.S6 rewords it).
+                    // mislabeling it as "no Internet". The HTTP code stays in the message because
+                    // the message is now the log's, not the player's: since E1.S6 a 403 renders as
+                    // Blocked's sentence and a 400 (Unknown) is the one case that still falls
+                    // through to this text, which is exactly what §4.4 wants Unknown to do.
                     throw new TranslationException(kind,
                         $"Translation service error (HTTP {code}). Please try again later.", retryAt);
                 if (code == 429 && attempt == 2)
@@ -302,9 +304,9 @@ public class TranslationService : ITranslator
                             keyWasSent: false, ct),
                         ex is HttpRequestException
                             ? "Couldn't reach the translation service. Check your Internet connection."
-                            // The exact sentence Friendly() renders today for a raw
-                            // TaskCanceledException (MainWindow.xaml.cs), so nothing the user reads
-                            // changes here. E1.S6 owns the wording.
+                            // The log's account of a timeout. It used to be the sentence the user
+                            // read, word for word; since E1.S6 the Timeout Kind carries its own
+                            // copy-deck sentence and this literal never reaches a surface.
                             : "the request timed out");
             }
 

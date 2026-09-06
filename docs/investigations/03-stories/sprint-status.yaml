@@ -70,7 +70,7 @@ development_status:
   e1-s3-provider-error-mapper: done
   e1-s4-html-abuse-page-sniffing: done
   e1-s5-per-request-diagnostic-log: done
-  e1-s6-friendly-kind-switch: ready-for-dev
+  e1-s6-friendly-kind-switch: review
   e1-s7-translation-policy: done
   epic-1-retrospective: optional
 
