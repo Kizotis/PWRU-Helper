@@ -76,7 +76,8 @@ public class ProviderErrorMapperTests
     [Theory]
     [InlineData(429, false, TranslationErrorKind.RateLimited)]      // TP-MAP-04, row 4
     [InlineData(429, true, TranslationErrorKind.RateLimited)]       // a key changes nothing here
-    [InlineData(401, false, TranslationErrorKind.AuthFailed)]       // TP-MAP-05, row 5
+    [InlineData(401, true, TranslationErrorKind.AuthFailed)]        // TP-MAP-05, row 5 — with a key
+    [InlineData(401, false, TranslationErrorKind.Blocked)]          // row 5b, ruling E2-g — keyless
     [InlineData(403, false, TranslationErrorKind.Blocked)]          // TP-MAP-08, row 8
     [InlineData(403, true, TranslationErrorKind.AuthFailed)]        // TP-MAP-07, row 7
     [InlineData(456, true, TranslationErrorKind.QuotaExhausted)]    // TP-MAP-09, row 9
@@ -114,6 +115,23 @@ public class ProviderErrorMapperTests
         using var resp = Resp(403, envelope);
         Assert.Equal(TranslationErrorKind.Blocked,
             ProviderErrorMapper.Classify(resp, envelope, null, false, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// Ruling E2-g — a 401 with no key sent is a <c>Blocked</c>, exactly like a 403 with no key.
+    /// The free Google endpoint sends no credentials, so a 401 from it is never "the key is wrong":
+    /// it is a captive portal, a corporate proxy or a hiccup. Mapped to <c>AuthFailed</c> it opened
+    /// that provider's gate until <c>ProviderGates.ClearAuthBlock</c> — which for a keyless provider
+    /// has no key-save handler and therefore <b>no reachable caller</b>. One hotel Wi-Fi login page
+    /// and the provider was gone for the life of the process, with the app's own exit table saying
+    /// "restart it". A block is a state the breaker's own probe can leave.
+    /// </summary>
+    [Fact]
+    public void A_401_without_a_key_is_Blocked_and_not_the_user_only_exit()
+    {
+        using var resp = Resp(401, "<html><body>Sign in to continue</body></html>");
+        Assert.Equal(TranslationErrorKind.Blocked,
+            ProviderErrorMapper.Classify(resp, null, null, keyWasSent: false, CancellationToken.None));
     }
 
     /// <summary>TP-MAP-07 — a 403 with a key and no quota wording is the key being rejected.</summary>

@@ -96,7 +96,17 @@ internal static class ProviderErrorMapper
             int code = (int)resp.StatusCode;
 
             if (code == 429) return TranslationErrorKind.RateLimited;   // 4
-            if (code == 401) return TranslationErrorKind.AuthFailed;    // 5
+
+            // 5 / 5b — a 401 is guarded on keyWasSent exactly like rows 7/8 below (ruling E2-g).
+            // With a key it is the key: AuthFailed, and the gate stays open until the user re-saves
+            // one. WITHOUT a key it cannot be — the free endpoints send no credentials — so a 401
+            // is a captive portal, a corporate proxy or a hiccup, and mapping it to AuthFailed
+            // opened that provider's gate to DateTimeOffset.MaxValue with no key-save handler and
+            // therefore no reachable ClearAuthBlock caller: one hotel Wi-Fi login page and the
+            // provider was gone until the app restarted. Blocked is the honest row — a state the
+            // breaker's own half-open probe can leave.
+            if (code == 401 && keyWasSent) return TranslationErrorKind.AuthFailed;   // 5
+            if (code == 401) return TranslationErrorKind.Blocked;                    // 5b
 
             // 6, 7, 8 — the split this story exists for, written as three separate rules in the
             // table's own order so the file diffs line by line against §4.2. (A single nested

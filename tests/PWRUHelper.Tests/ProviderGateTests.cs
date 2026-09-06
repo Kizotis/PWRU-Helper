@@ -383,13 +383,23 @@ public class ProviderGateTests
     }
 
     // ---- TP-GATE-13/14/15: the server's own hint ----------------------------------------------
+    //
+    // Ruling E2-f (architect, 2026-09-06) replaced §5.5's "the hint overrides the computed window"
+    // with **a floor, never a shortcut**: the effective window is
+    //     max(computed window, clamp(hint, 1 s, max(OpenCapMinutes, the kind's own window)))
+    // The three problems it settles, all found by E2.S1's review: a `Retry-After: 1` bought a
+    // one-second pause while the strike ladder climbed with no effect; an HTTP-date resolved
+    // against a PC running five minutes fast collapsed to that same floor; and the clamp ceiling
+    // (30 min) sat BELOW the QuotaExhausted window (60 min), so a hint made a quota block shorter
+    // than its own row. A tiny or skewed hint is now a no-op; a large one lengthens, within the
+    // kind's own ceiling.
 
     [Fact]
-    public void TP_GATE_13_Retry_After_delta_seconds_overrides_the_computed_window()
+    public void TP_GATE_13_Retry_After_delta_seconds_lengthens_the_computed_window()
     {
         var (gate, clock) = NewGate();
         var said = TimeSpan.FromSeconds(120);       // literal: it is the header's value, not a policy number
-        Assert.NotEqual(Base, said);                // the point of the case is that it is NOT the window
+        Assert.True(said > Base);                   // the point of the case: it is LONGER than the window
 
         gate.ReportFailure(TranslationErrorKind.RateLimited, clock.Now + said);
 
@@ -414,13 +424,19 @@ public class ProviderGateTests
     [Theory]
     [InlineData(0)]         // "Retry-After: 0"
     [InlineData(-3600)]     // an HTTP-date that has already elapsed
-    public void TP_GATE_15_A_hint_in_the_past_is_clamped_up_to_one_second(int offsetSeconds)
+    [InlineData(1)]         // "Retry-After: 1" — the header that used to switch the breaker off
+    [InlineData(-300)]      // the skew case: a PC running five minutes fast reading an HTTP date
+    public void TP_GATE_15_A_hint_at_or_below_the_floor_is_a_no_op(int offsetSeconds)
     {
+        // Ruling E2-f. Before it, each of these four headers replaced the computed window with one
+        // second, so a server could climb the whole strike ladder while never being paused for
+        // longer than a heartbeat — the breaker off, on the server's word.
         var (gate, clock) = NewGate();
 
         gate.ReportFailure(TranslationErrorKind.RateLimited, clock.Now.AddSeconds(offsetSeconds));
 
-        Assert.Equal(clock.Now + TimeSpan.FromSeconds(1), gate.Snapshot().BlockedUntil);
+        Assert.Equal(clock.Now + Base, gate.Snapshot().BlockedUntil);
+        Assert.Equal(1, gate.Snapshot().Strikes);
     }
 
     [Fact]
@@ -436,7 +452,7 @@ public class ProviderGateTests
     }
 
     [Fact]
-    public void A_hint_bounds_the_soft_cooldown_and_the_quota_window_too()
+    public void A_hint_lengthens_the_soft_cooldown_and_the_quota_window_too()
     {
         // §5.5 says "every non-success response", not "the 429s": a 503 with a Retry-After is the
         // one case where a 5 s cooldown would be demonstrably wrong.
@@ -444,9 +460,19 @@ public class ProviderGateTests
         soft.ReportFailure(TranslationErrorKind.Unavailable, clockA.Now + TimeSpan.FromSeconds(45));
         Assert.Equal(clockA.Now + TimeSpan.FromSeconds(45), soft.Snapshot().BlockedUntil);
 
+        // Ruling E2-f: the ceiling is max(OpenCapMinutes, the kind's own window), so a day-long hint
+        // on a quota row clamps to the QUOTA window (60 min) and not to the breaker cap (30 min).
+        // Clamping to the cap made the hint SHORTEN a quota block — §15 R9 says one request an
+        // hour, and the server asking for longer must never buy the app a shorter pause.
+        var quotaWindow = TimeSpan.FromMinutes(TranslationPolicy.QuotaOpenMinutes);
         var (quota, clockB) = NewGate();
         quota.ReportFailure(TranslationErrorKind.QuotaExhausted, clockB.Now + TimeSpan.FromDays(1));
-        Assert.Equal(clockB.Now + Cap, quota.Snapshot().BlockedUntil);   // still clamped
+        Assert.Equal(clockB.Now + quotaWindow, quota.Snapshot().BlockedUntil);
+
+        // …and a hint well inside that window changes nothing at all.
+        var (quotaShort, clockD) = NewGate();
+        quotaShort.ReportFailure(TranslationErrorKind.QuotaExhausted, clockD.Now + TimeSpan.FromMinutes(45));
+        Assert.Equal(clockD.Now + quotaWindow, quotaShort.Snapshot().BlockedUntil);
 
         var (auth, clockC) = NewGate();
         auth.ReportFailure(TranslationErrorKind.AuthFailed, clockC.Now + TimeSpan.FromSeconds(30));
@@ -499,20 +525,40 @@ public class ProviderGateTests
     }
 
     [Fact]
-    public void An_escalating_failure_still_obeys_an_explicit_hint_over_a_standing_block()
+    public void A_hint_shorter_than_the_strike_ladders_own_window_is_a_no_op()
     {
-        // The guard above must not swallow §5.5: a server that says "come back at X" gets the last
-        // word on its own window, standing block or not. Without this the previous case would be
-        // indistinguishable from "escalate can never shorten anything".
+        // Ruling E2-f, the case E2.S1 got the other way round: an escalating row used to ASSIGN the
+        // hint, so "Retry-After: 90" on the third strike replaced a four-minute window with ninety
+        // seconds. The hint is a floor now, so the ladder's own window stands.
         var (gate, clock) = NewGate();
         gate.ReportFailure(TranslationErrorKind.RateLimited);
         gate.ReportFailure(TranslationErrorKind.RateLimited);        // strikes 2 ⇒ 2 × Base standing
 
         var said = clock.Now + TimeSpan.FromSeconds(90);             // literal: a header value
         Assert.True(said < gate.Snapshot().BlockedUntil);
-        gate.ReportFailure(TranslationErrorKind.RateLimited, said);
+        gate.ReportFailure(TranslationErrorKind.RateLimited, said);  // strikes 3 ⇒ 4 × Base computed
 
-        Assert.Equal(said, gate.Snapshot().BlockedUntil);
+        Assert.Equal(clock.Now + Base * 4, gate.Snapshot().BlockedUntil);
+    }
+
+    [Fact]
+    public void A_hint_cannot_lift_the_two_blocks_only_the_user_can_lift_either()
+    {
+        // The last hole the E2.S1 review's "extend, never shorten" patch left open: it exempted an
+        // explicit hint, because §5.5 gave the server the last word. Ruling E2-f took that word
+        // back, so a stale 429 carrying a hint can no longer end an auth block or shorten a quota
+        // window either — the two states whose only honest exit is the user (AC 4, §15 R9).
+        var (auth, clockA) = NewGate();
+        auth.ReportFailure(TranslationErrorKind.AuthFailed);
+        auth.ReportFailure(TranslationErrorKind.RateLimited, clockA.Now + TimeSpan.FromSeconds(90));
+        Assert.Equal(DateTimeOffset.MaxValue, auth.Snapshot().BlockedUntil);
+
+        var (quota, clockB) = NewGate();
+        quota.ReportFailure(TranslationErrorKind.QuotaExhausted);
+        var hour = clockB.Now + TimeSpan.FromMinutes(TranslationPolicy.QuotaOpenMinutes);
+        clockB.AdvanceSeconds(1);
+        quota.ReportFailure(TranslationErrorKind.Blocked, clockB.Now + TimeSpan.FromSeconds(90));
+        Assert.Equal(hour, quota.Snapshot().BlockedUntil);
     }
 
     [Fact]

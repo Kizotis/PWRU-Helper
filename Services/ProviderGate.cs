@@ -264,11 +264,12 @@ internal sealed class ProviderGate
     /// gate, and how, is §5.3's table and nothing else.
     /// </summary>
     /// <param name="retryAt">The server's own "come back at", when it sent a <c>Retry-After</c>
-    /// (§5.5). It <b>overrides</b> the computed window and is clamped to
-    /// <c>[1 s, OpenCapMinutes]</c> — the clamp E1.S3 deferred to "whoever first reads
-    /// <c>RetryAt</c>", which is this method. Absolute rather than a delta on purpose: that is what
-    /// <c>TranslationException.RetryAt</c> carries, and resolving it against this gate's own clock
-    /// is the only way the two cannot disagree. Parsing it off the response is E2.S5's.</param>
+    /// (§5.5). It is <b>a floor, never a shortcut</b> (ruling E2-f): it may lengthen the computed
+    /// window, clamped to <c>[1 s, max(OpenCapMinutes, the row's own window)]</c>, and can never
+    /// shorten it — see <see cref="Honour"/>. The clamp is the one E1.S3 deferred to "whoever first
+    /// reads <c>RetryAt</c>", which is this method. Absolute rather than a delta on purpose: that
+    /// is what <c>TranslationException.RetryAt</c> carries, and resolving it against this gate's own
+    /// clock is the only way the two cannot disagree. Parsing it off the response is E2.S5's.</param>
     internal void ReportFailure(TranslationErrorKind kind, DateTimeOffset? retryAt = null)
     {
         var reaction = Reaction(kind);
@@ -289,14 +290,14 @@ internal sealed class ProviderGate
                 case GateReaction.Escalate:     // RateLimited, Blocked — and a failed probe re-opens here
                     _strikes++;
                     var window = now + Honour(retryAt, EscalatedWindow(_strikes), now);
-                    // An explicit Retry-After assigns — §5.5 gives the server the last word. With
-                    // no hint, the same "extend, never shorten" rule as the rows below applies:
-                    // doubling always extends this row's own window, so the guard only bites where
-                    // a LONGER block already stands and a stale in-flight 429 would otherwise lift
-                    // it — an AuthFailed MaxValue (AC 4: only ClearAuthBlock lifts it) or a
-                    // 60-minute QuotaExhausted window (§15 R9: one request an hour, not one a
-                    // minute). The strike is still counted either way.
-                    if (retryAt is not null) _blockedUntil = window; else BlockUntil(window);
+                    // "Extend, never shorten", with no exception for an explicit hint any more:
+                    // ruling E2-f made Retry-After a floor rather than the server's last word, so
+                    // there is nothing left that may lift a longer standing block. Doubling always
+                    // extends this row's own window, so the guard only bites where a LONGER block
+                    // stands and a stale in-flight 429 would otherwise end it — an AuthFailed
+                    // MaxValue (AC 4: only ClearAuthBlock lifts it) or a 60-minute QuotaExhausted
+                    // window (§15 R9). The strike is still counted either way.
+                    BlockUntil(window);
                     break;
 
                 case GateReaction.Quota:        // open for an hour, no strike escalation (§15 R9)
@@ -399,25 +400,44 @@ internal sealed class ProviderGate
     /// comes back 429 and opens the gate for 30 minutes, the second times out a second later — and
     /// a plain assignment would replace those 30 minutes with a 5-second cooldown and hand a
     /// blocked provider a request every 5 seconds. A soft failure may extend a block, never lift
-    /// one. An escalating failure assigns instead, because its own window is the policy, and
-    /// because §5.5 lets a server's explicit <c>Retry-After</c> be the last word on it.
+    /// one. Every row goes through here since ruling E2-f: the last exemption — an escalating row
+    /// carrying an explicit <c>Retry-After</c> — went away when the hint became a floor rather than
+    /// the server's last word.
     /// </summary>
     private void BlockUntil(DateTimeOffset candidate) =>
         _blockedUntil = _blockedUntil is { } standing && standing > candidate ? standing : candidate;
 
-    /// <summary>§5.5: a <c>Retry-After</c> overrides the computed window, clamped to
-    /// <c>[1 s, OpenCapMinutes]</c>. The clamp is what makes an already-elapsed HTTP date (a
-    /// negative delta ⇒ 1 s) and a 30-day one (⇒ the cap) both harmless — either would otherwise be
-    /// R-01, an app that never asks again.</summary>
+    /// <summary>
+    /// A <c>Retry-After</c> is <b>a floor, never a shortcut</b> (ruling E2-f, which supersedes
+    /// §5.5's "it overrides the computed window"):
+    /// <c>max(computed, clamp(hint, 1 s, max(OpenCapMinutes, the kind's own window)))</c>.
+    ///
+    /// <para>The three ways the old reading switched the breaker off, all found by E2.S1's review.
+    /// <b>A tiny hint</b>: <c>Retry-After: 1</c> bought a one-second pause while the strike ladder
+    /// climbed with no effect at all — the server deciding how long the app pauses. <b>A skewed
+    /// one</b>: the HTTP-date form is resolved against the <i>client</i> clock
+    /// (<c>ProviderErrorMapper.cs:307</c> hands over <c>header.Date</c>), so a PC running five
+    /// minutes fast collapsed every date hint to the same floor. <b>A ceiling below the row's own
+    /// window</b>: clamping to <c>OpenCapMinutes</c> (30) made a hint <i>shorten</i> a
+    /// <c>QuotaExhausted</c> block (60 min) — §15 R9 says one request an hour, not one every half
+    /// hour. A hint may now only lengthen, and only within its own row's ceiling.</para>
+    /// </summary>
     private TimeSpan Honour(DateTimeOffset? retryAt, TimeSpan computed, DateTimeOffset now)
     {
         if (retryAt is not { } at) return computed;
 
         var cap = TimeSpan.FromMinutes(_policy.OpenCapMinutes);
+        var ceiling = computed > cap ? computed : cap;   // a row whose own window exceeds the cap keeps it
         var delta = at - now;
-        return delta < TimeSpan.FromSeconds(1) ? TimeSpan.FromSeconds(1)
-             : delta > cap ? cap
-             : delta;
+
+        // The floor of the clamp is stated because the ruling states it; with "a floor, never a
+        // shortcut" it can no longer be observed, since the shortest window any row computes is
+        // SoftCooldownSecs (5 s). It is kept so the arithmetic reads as the ruling wrote it.
+        var hint = delta < TimeSpan.FromSeconds(1) ? TimeSpan.FromSeconds(1)
+                 : delta > ceiling ? ceiling
+                 : delta;
+
+        return hint > computed ? hint : computed;
     }
 
     /// <summary>
