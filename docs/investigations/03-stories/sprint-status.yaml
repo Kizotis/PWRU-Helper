@@ -79,7 +79,7 @@ development_status:
   e2-s1-provider-gate-breaker: done
   e2-s2-provider-gates-registry: done
   e2-s3-rate-ceiling-interactive-reserve: done
-  e2-s4-persist-gate-state: ready-for-dev
+  e2-s4-persist-gate-state: review
   e2-s5-http-provider-core: ready-for-dev
   e2-s6-log-gate-transitions: ready-for-dev
   e2-s7-tune-gate-windows-spike-u9: backlog      # spike; scheduled AFTER the A.1 release ships

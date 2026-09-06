@@ -54,12 +54,12 @@ internal static class ProviderIds
 /// incident.</para>
 ///
 /// <para><b>Not on the startup path</b> (I10): nothing here is referenced from the
-/// <c>MainWindow</c> constructor, <c>ApplySettings</c> or <c>OnWindowLoaded</c>, and this type's
-/// static initialiser does no I/O. <c>provider-state.json</c> is read lazily on the first
-/// <c>TryEnter</c> of the process and written debounced — both are <b>E2.S4</b>; this story lands
-/// the seams they fill in (<see cref="PathOverride"/>, <see cref="CancelPendingSave"/>,
-/// <see cref="TransitionHook"/>) so no test can ever be written that touches the real
-/// <c>%AppData%</c>.</para>
+/// <c>MainWindow</c> constructor, <c>ApplySettings</c> or <c>OnWindowLoaded</c> — a source scan
+/// (TP-START-02) keeps it that way — and this type's static initialiser does no I/O.
+/// <c>provider-state.json</c> is read lazily on the first <c>TryEnter</c> of the process
+/// (<see cref="EnsureLoaded"/>) and written debounced on transitions (<see cref="QueueSave"/>,
+/// <see cref="Flush"/>). <c>OnClosing</c>'s <see cref="Flush"/> is the one permitted reference to
+/// this type outside <c>Services/</c> (ruling E2-e).</para>
 ///
 /// <para><b>No events</b> (ruling R-2/OQ-c): the UI polls <see cref="Snapshot"/> / <see cref="All"/>
 /// at 1 Hz from the countdown timer it already runs. There is no <c>StateChanged</c>, no
@@ -116,7 +116,127 @@ internal static class ProviderGates
     /// matters (a lock would be equally correct and slower on the request path).
     /// </summary>
     internal static ProviderGate For(string providerId) =>
-        Registry.GetOrAdd(providerId, static _ => new ProviderGate(Now));
+        Registry.GetOrAdd(providerId, id => new ProviderGate(
+            Now, null,
+            // E2.S4's two seams. The load hangs off TryEnter and NOT off this factory: For runs
+            // inside MainWindow's field initializer (MainWindow.xaml.cs:43), before first paint, so
+            // reading the file here would break I10 and TP-START-01. The transition callback closes
+            // over the id because a gate does not know its own — the registry is the only thing that
+            // does.
+            EnsureLoaded,
+            (from, to) => NoteTransition(id, from, to)));
+
+    // ---- §5.7: the file, read once and written debounced (E2.S4) -------------------------------
+
+    /// <summary>One lock for the load and the save both. Two would be one lock order to get wrong:
+    /// the flush walks every gate and takes their locks, and a gate announces a transition — which
+    /// queues a save — only after releasing its own.</summary>
+    private static readonly object Sync = new();
+
+    private static bool _loaded;                 // has this process read provider-state.json yet?
+    private static bool _savePending;            // a transition is waiting for the debounce to flush
+    private static System.Threading.Timer? _saveTimer;
+    private static IReadOnlyDictionary<string, System.Text.Json.JsonElement>? _unknown;
+
+    /// <summary>The §5.7 debounce, as a settable number rather than a constant so a test can prove
+    /// coalescing without waiting a real second (CI-3: no <c>Task.Delay</c> anywhere). Production
+    /// never touches it; <see cref="ResetForTests"/> puts it back.</summary>
+    internal static int SaveDebounceMs = 1000;
+
+    /// <summary>
+    /// Read <c>provider-state.json</c>, once per process, and seed the gates with what it holds.
+    /// Called from <see cref="ProviderGate.TryEnter"/> — <b>the first translation request of the
+    /// session</b> — and from nowhere else (AC 2, I10, ruling E2-e).
+    ///
+    /// <para><b>"Off the UI thread", honestly.</b> <c>TryEnter</c> is synchronous, so this read
+    /// happens on whichever thread issues that first request. E2.S5's <c>HttpProviderCore</c> is what
+    /// makes that a pool thread (it <c>ConfigureAwait(false)</c>s), and until E2.S5 lands the read
+    /// may fall on the dispatcher. That is accepted rather than hidden: it is a single sub-kilobyte
+    /// read of a directory <c>SettingsService</c> has already created, on a user-initiated action,
+    /// long after first paint — which is exactly what I10 protects. Warming it from
+    /// <c>OnWindowLoaded</c> was explicitly rejected: it would put this type on a startup path and
+    /// fail TP-START-02's scan.</para>
+    ///
+    /// <para>Synchronous under <see cref="Sync"/>, deliberately: the file is a few hundred bytes, and
+    /// a second thread arriving mid-load must wait rather than translate against a gate that is about
+    /// to be seeded under it. After the first request it is one <c>Volatile.Read</c> on the hot path.</para>
+    /// </summary>
+    internal static void EnsureLoaded()
+    {
+        if (Volatile.Read(ref _loaded)) return;
+
+        lock (Sync)
+        {
+            if (_loaded) return;
+
+            var state = ProviderStateStore.Load(StatePath);   // never throws; empty on any failure
+            _unknown = state.Unknown;                         // re-emitted verbatim on the next write
+
+            foreach (var pair in state.Providers)
+                // For(id), not a fresh gate: MainWindow's field initializer may already have handed
+                // this id's gate to a chain, and seeding a different instance would restore the pause
+                // into an object nobody consults. TrySeedState declines a gate that has already
+                // recorded something in this process — live evidence beats a file.
+                For(pair.Key).TrySeedState(pair.Value);
+
+            Volatile.Write(ref _loaded, true);
+        }
+    }
+
+    /// <summary>
+    /// A gate changed state, so the file is stale. Debounced by 1 s and coalesced (§5.7): N
+    /// transitions inside the window produce <b>one</b> write, of the state at flush time. A
+    /// <c>System.Threading.Timer</c> and not a <c>DispatcherTimer</c> — <c>Services/</c> is UI-free
+    /// (I2) — and the window is fixed from the first pending transition rather than restarted by
+    /// each one, so a busy minute cannot postpone the write indefinitely.
+    /// </summary>
+    private static void QueueSave()
+    {
+        lock (Sync)
+        {
+            if (_savePending) return;                        // already inside a window: coalesced
+            _savePending = true;
+            _saveTimer ??= new System.Threading.Timer(static _ => Flush());
+            _saveTimer.Change(SaveDebounceMs, Timeout.Infinite);
+        }
+    }
+
+    /// <summary>
+    /// Write the pending state now: the debounce timer's own callback, and the call
+    /// <c>MainWindow.OnClosing</c> makes so a pause the user is waiting out survives the restart
+    /// (<c>MainWindow.xaml.cs:229</c> — the one <c>ProviderGates</c> reference outside
+    /// <c>Services/</c>, ruling E2-e). It is also the seam every persistence test uses instead of
+    /// waiting a real second.
+    ///
+    /// <para>Nothing pending means nothing to do: the file already says what the gates say, and
+    /// rewriting it on every close would be disk churn for the many sessions that never see a
+    /// failure. Best-effort and non-blocking, like everything else on the close path — the store
+    /// swallows its own I/O failures and this swallows anything else.</para>
+    /// </summary>
+    internal static void Flush()
+    {
+        try
+        {
+            lock (Sync)
+            {
+                _saveTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+                if (!_savePending) return;
+                _savePending = false;
+
+                // Read before write, so an id this build knows nothing about survives a rewrite
+                // (AC 5) even when the first transition of the session beat the first TryEnter.
+                // A no-op after the first request, which is when the load normally happens.
+                EnsureLoaded();
+
+                var providers = new Dictionary<string, ProviderStateRecord>(StringComparer.Ordinal);
+                foreach (var pair in Registry)
+                    if (pair.Value.ExportState() is { } record) providers[pair.Key] = record;
+
+                ProviderStateStore.Save(StatePath, providers, _unknown);
+            }
+        }
+        catch { /* persistence must never be able to fail a translation or a window close */ }
+    }
 
     /// <summary>
     /// The user re-saved this provider's key, so the two blocks a key can cause are lifted
@@ -172,6 +292,11 @@ internal static class ProviderGates
     /// a save or a log line must never be able to fail a translation.</summary>
     internal static void NoteTransition(string providerId, GateState from, GateSnapshot to)
     {
+        // The save is queued by the registry ITSELF and not by a subscriber (ruling R-2/OQ-c):
+        // hanging it off TransitionHook would mean E2.S6's log line replaces persistence the day it
+        // installs one, and a test that stubs the hook would silently stop the app saving.
+        QueueSave();
+
         var hook = TransitionHook;                  // read once: it can be replaced concurrently
         if (hook == null) return;
         try { hook(providerId, from, to); } catch { /* observability must not break the request */ }
@@ -185,21 +310,30 @@ internal static class ProviderGates
     /// </summary>
     internal static void ResetForTests()
     {
+        CancelPendingSave();                        // FIRST: nothing queued may outlive this line
         Registry.Clear();
         _clock = () => DateTimeOffset.UtcNow;
         PathOverride = null;                        // belt to TempGateState's braces (IS-1/IS-3)
         TransitionHook = null;
-        CancelPendingSave();
+        SaveDebounceMs = 1000;
+        lock (Sync) { Volatile.Write(ref _loaded, false); _unknown = null; }   // the next case reloads
     }
 
     /// <summary>
-    /// The second half of IS-4, landed now so E2.S4 only fills it in. Nothing is queued in this
-    /// story — the debounced save arrives with the store — and the method is called from
-    /// <see cref="ResetForTests"/> already, so the day a timer exists there is exactly one place to
-    /// cancel it and no test to remember to update.
+    /// The second half of IS-4: cancel the debounce timer and drop whatever it was about to write.
+    /// Without it a save queued by one case lands during the next one — in the next case's temp
+    /// directory or, worse, after <see cref="PathOverride"/> has gone back to null and the developer's
+    /// own <c>%AppData%</c> is live again. That is the failure mode the whole <c>Gates</c> collection
+    /// exists to prevent, and it is why this runs before the registry is even cleared.
     /// </summary>
     private static void CancelPendingSave()
     {
-        // E2.S4: cancel the 1 s debounce timer and drop whatever it was about to write.
+        lock (Sync)
+        {
+            _savePending = false;                   // a callback already past its Change() sees this
+            var timer = _saveTimer;
+            _saveTimer = null;
+            timer?.Dispose();
+        }
     }
 }

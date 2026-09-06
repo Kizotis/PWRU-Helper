@@ -172,16 +172,26 @@ internal sealed record GatePolicy(
 /// pays a token like anybody else (ruling OQ-b), and carries a token of its own so a stale
 /// in-flight report cannot resolve it (ruling E2-h).
 ///
-/// Seam left deliberately open: E2.S4 adds the restore path that rebuilds a gate from
-/// <c>provider-state.json</c> — the breaker only; the bucket starts full in every process (I9,
-/// §5.7). Nothing here is wired to a caller: providers reach a gate only through
-/// <c>HttpProviderCore</c> (E2.S5).
+/// Since E2.S4 it also carries the persisted half: <see cref="TrySeedState"/> rebuilds the breaker
+/// from <c>provider-state.json</c> — the breaker only; the bucket starts full in every process and
+/// no probe latch is ever restored (I9, §5.7) — <see cref="ExportState"/> is what gets written, and
+/// two <c>Action</c>s handed in at construction let the registry read the file on the first
+/// <see cref="TryEnter"/> and queue a debounced write on a transition. Nothing here is wired to a
+/// caller: providers reach a gate only through <c>HttpProviderCore</c> (E2.S5).
 /// </summary>
 internal sealed class ProviderGate
 {
     private readonly object _lock = new();
     private readonly Func<DateTimeOffset> _clock;
     private readonly GatePolicy _policy;
+
+    // The two seams E2.S4 hands in at construction. Neither is an event and neither is settable
+    // afterwards (ruling R-2/OQ-c: no state-change event out of Services/) — an Action the registry
+    // passes to the gates it builds is the registry talking to itself, and it keeps this class
+    // passive. Both are null for a gate a test builds directly, which is what keeps ProviderGateTests
+    // free of the file entirely.
+    private readonly Action? _ensureLoaded;             // read provider-state.json, once per process
+    private readonly Action<GateState, GateSnapshot>? _onTransition;   // queue a debounced save
 
     private int _strikes;                     // consecutive opening failures; drives the doubling
     private int _badResponses;                // consecutive BadResponse; 3 of them open the gate
@@ -275,10 +285,21 @@ internal sealed class ProviderGate
     /// <c>blockedUntil</c> ends up compared against a different now. Defaults to the wall clock.</param>
     /// <param name="policy">The six §5.6 numbers; defaults to <see cref="TranslationPolicy"/>'s.
     /// A test (and later a field experiment) passes <see cref="GatePolicy.Parse"/>'s result here.</param>
-    internal ProviderGate(Func<DateTimeOffset>? clock = null, GatePolicy? policy = null)
+    /// <param name="ensureLoaded">E2.S4: read <c>provider-state.json</c> if this process has not yet
+    /// (AC 2 / I10). Called at the top of <see cref="TryEnter"/> and nowhere else — the trigger
+    /// cannot be <c>ProviderGates.For</c>, which runs inside <c>MainWindow</c>'s field initializer,
+    /// before first paint.</param>
+    /// <param name="onTransition">E2.S4: "this gate just changed state, from X to this snapshot" —
+    /// the registry turns it into a debounced write and E2.S6 will turn it into a log line. Raised
+    /// <b>outside</b> the lock (see <see cref="Notify"/>).</param>
+    internal ProviderGate(Func<DateTimeOffset>? clock = null, GatePolicy? policy = null,
+                          Action? ensureLoaded = null,
+                          Action<GateState, GateSnapshot>? onTransition = null)
     {
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
         _policy = policy ?? GatePolicy.Default;
+        _ensureLoaded = ensureLoaded;
+        _onTransition = onTransition;
     }
 
     /// <summary>
@@ -311,6 +332,28 @@ internal sealed class ProviderGate
     /// keystroke — and, by ruling OQ-a, read-once. Who passes what is settled at the call sites
     /// (E2.S5 passes it through; E3.S7 and E5.S4 decide it).</param>
     internal GateDecision TryEnter(RequestPriority priority)
+    {
+        // E2.S4 / AC 2: the one place provider-state.json is read. It is here rather than in
+        // ProviderGates.For because For runs inside MainWindow's field initializer
+        // (MainWindow.xaml.cs:43), i.e. before first paint — loading there would break I10 and
+        // TP-START-01. Before the lock, so the registry's load can seed this very gate without a
+        // lock inversion; after the first request of the process it is one predicted branch
+        // (ProviderGates.EnsureLoaded's Volatile.Read).
+        _ensureLoaded?.Invoke();
+
+        GateState from = default;
+        GateSnapshot? landed = null;
+        var decision = Enter(priority, ref from, ref landed);
+        // Open → HalfOpen is the only edge TryEnter can take, and it is raised out here: firing a
+        // callback that takes the registry's lock while holding this gate's would be a lock
+        // inversion against the flush path, which walks every gate.
+        if (landed is not null) Notify(from, landed);
+        return decision;
+    }
+
+    /// <summary>The decision itself, under the lock. Split out of <see cref="TryEnter"/> only so the
+    /// transition it can cause is announced after the lock is released.</summary>
+    private GateDecision Enter(RequestPriority priority, ref GateState from, ref GateSnapshot? landed)
     {
         lock (_lock)
         {
@@ -395,9 +438,12 @@ internal sealed class ProviderGate
 
             if (eligibleAt is null) return GateDecision.Allow;
 
+            from = StateAt(now);                // Open — the window this probe is being granted out of
             _probeOutstanding = true;           // half-open: this caller, and only this caller
             _probeStartedAt = now;
-            return GateDecision.Probe(_probeToken = ++_probeSeq);
+            var probe = GateDecision.Probe(_probeToken = ++_probeSeq);
+            landed = SnapshotAt(now);           // §5.2's Open → HalfOpen edge, worth a write
+            return probe;
         }
     }
 
@@ -433,9 +479,13 @@ internal sealed class ProviderGate
     /// report may end the half-open window.</param>
     internal void ReportSuccess(long probeToken = 0)
     {
+        GateState from = default;
+        GateSnapshot? landed = null;
+
         lock (_lock)
         {
             var now = _clock();
+            from = StateAt(now);
             _lastAt = now;
             _badResponses = 0;                  // "a success in between resets the soft count" (§5.3)
 
@@ -447,18 +497,27 @@ internal sealed class ProviderGate
                 _keyBlockedUntil = null;         // a successful probe closes the gate outright,
                 _ipBlockedUntil = null;          // both timelines with it (§5.2)
                 _cleanSince = now;
-                return;
+                landed = SnapshotAt(now);        // HalfOpen → Closed: the pause is over, persist it
             }
+            else
+            {
+                // A clean run cannot start inside a block. The success is real, but it belongs to a
+                // request that was already in flight when the gate closed behind it (the two chains
+                // share one gate, I9), and it is not evidence that the provider is well now — only a
+                // probe is. Without the guard, one such late 200 sets `cleanSince` at the start of a
+                // 30-minute window; CleanResetMinutes later the probe's own failure runs DecayStrikes
+                // first and re-opens at strike 1 for 60 s, erasing the whole escalation ladder.
+                if (BlockedUntil is null) _cleanSince ??= now;
 
-            // A clean run cannot start inside a block. The success is real, but it belongs to a
-            // request that was already in flight when the gate closed behind it (the two chains
-            // share one gate, I9), and it is not evidence that the provider is well now — only a
-            // probe is. Without the guard, one such late 200 sets `cleanSince` at the start of a
-            // 30-minute window; CleanResetMinutes later the probe's own failure runs DecayStrikes
-            // first and re-opens at strike 1 for 60 s, erasing the whole escalation ladder.
-            if (BlockedUntil is null) _cleanSince ??= now;
-            DecayStrikes(now);
+                // A strike reset is not a §5.2 edge — the state does not move — but it IS persisted
+                // state, and T3 lists it as worth a write: a restart must not hand a provider back
+                // an escalation ladder it has already worked off. E2.S6 filters it out by `from ==
+                // to.State`, which is exactly why the edge is reported as it is and not invented.
+                if (DecayStrikes(now)) landed = SnapshotAt(now);
+            }
         }
+
+        if (landed is not null) Notify(from, landed);
     }
 
     /// <summary>
@@ -481,9 +540,14 @@ internal sealed class ProviderGate
         var reaction = Reaction(kind);
         if (reaction == GateReaction.Ignore) return;   // not one byte of state changes — see Reaction
 
+        GateState from = default;
+        GateSnapshot? landed = null;
+
         lock (_lock)
         {
             var now = _clock();
+            from = StateAt(now);
+            var blockedBefore = BlockedUntil;
             // A probe failure is an ordinary failure that happens to end half-open: the machine
             // needs no branch on it, only the latch released so the window it is about to set is
             // the state everyone sees (§5.2, HalfOpen → Open).
@@ -493,7 +557,7 @@ internal sealed class ProviderGate
                 _probeOutstanding = false;
                 _probeToken = 0;                // one report per probe; a replay resolves nothing
             }
-            DecayStrikes(now);                  // a failure after a long clean run starts from strike 1
+            var strikesReset = DecayStrikes(now);   // a failure after a long clean run starts from strike 1
 
             switch (reaction)
             {
@@ -552,7 +616,23 @@ internal sealed class ProviderGate
             _lastKind = kind;
             _lastAt = now;
             _cleanSince = null;                 // the clean run is over; the next success restarts it
+
+            // E2.S4 / T3: which failures are worth a write. The §5.2 edges are — a breaker that
+            // opened, a probe that failed — and so is a strike reset. A SOFT COOLDOWN IS NOT, even
+            // though it does set a 5-second window and does move Snapshot() to Open: it is worth
+            // five seconds, and a DNS blip on every LIVE tick would otherwise rewrite the file every
+            // 700 ms. E2.S6 must make the same call for its log lines (ruling E2-b already does:
+            // "no line for strike resets, soft cooldowns"), and the two must agree.
+            // The window moving counts too, and not only the state: a second 429 arriving while the
+            // gate is already open escalates the ladder and lengthens the pause without changing
+            // Open → Open, and a restart must not hand back the shorter window.
+            var softOnly = reaction == GateReaction.SoftCooldown && !wasProbe;
+            var to = StateAt(now);
+            if (!softOnly && (to != from || strikesReset || BlockedUntil != blockedBefore))
+                landed = SnapshotAt(now);
         }
+
+        if (landed is not null) Notify(from, landed);
     }
 
     /// <summary>
@@ -579,17 +659,31 @@ internal sealed class ProviderGate
     /// </summary>
     internal void ClearAuthBlock()
     {
+        GateState from = default;
+        GateSnapshot? landed = null;
+
         lock (_lock)
         {
             if (_keyBlockedUntil is null) return;   // nothing a key could have caused
 
+            var now = _clock();
+            from = StateAt(now);
             _keyBlockedUntil = null;
-            if (BlockedUntil is not null) return;   // an IP-scoped window still stands (E2-i)
 
-            _probeOutstanding = false;
-            _probeToken = 0;                        // whatever was in flight can no longer resolve it
-            _cleanSince = _clock();                 // the gate is closed: a clean run starts here
+            if (BlockedUntil is null)
+            {
+                _probeOutstanding = false;
+                _probeToken = 0;                    // whatever was in flight can no longer resolve it
+                _cleanSince = now;                  // the gate is closed: a clean run starts here
+            }
+            // Persisted either way: a QuotaExhausted window that the user has just bought their way
+            // out of must not come back on the next start, whether or not an IP-scoped window is
+            // still standing underneath it (E2-i). An AuthFailed sentinel was never on disk in the
+            // first place (E2-a), so that case writes a file that says the same thing it already did.
+            landed = SnapshotAt(now);
         }
+
+        Notify(from, landed);
     }
 
     /// <summary>
@@ -616,21 +710,111 @@ internal sealed class ProviderGate
     /// no token spent.</summary>
     internal GateSnapshot Snapshot()
     {
+        lock (_lock) { return SnapshotAt(_clock()); }
+    }
+
+    /// <summary>Where the gate stands at <paramref name="now"/>. Called under <c>_lock</c>, by
+    /// <see cref="Snapshot"/> and by every mutator that has to know which §5.2 edge it just took.
+    ///
+    /// <para>HalfOpen only while a probe could still be running — the same test <see cref="TryEnter"/>
+    /// applies before it re-arms one. Reading <c>_probeOutstanding</c> alone would leave the 1 Hz
+    /// status chip on "checking…" for the life of the process after a probe was abandoned (LIVE
+    /// switched off mid-probe, or a crash), because the re-arm needs a <c>TryEnter</c> that a paused
+    /// app never makes. Reading the clock is not a side effect: no probe is taken, no state is
+    /// written.</para></summary>
+    private GateState StateAt(DateTimeOffset now) =>
+        _probeOutstanding && now - _probeStartedAt < ProbeTimeout ? GateState.HalfOpen
+        : BlockedUntil is null ? GateState.Closed
+        : GateState.Open;                       // still Open once the window elapses — until a caller
+                                                // takes the probe, which is what makes it exactly one
+
+    private GateSnapshot SnapshotAt(DateTimeOffset now) =>
+        new(StateAt(now), BlockedUntil, _strikes, _lastKind);
+
+    /// <summary>Announce a transition to the registry, <b>outside</b> the lock. Never inside: the
+    /// registry's flush walks every gate and takes their locks, so a callback raised while holding
+    /// one would put the two lock orders back to back and deadlock the first time a debounced save
+    /// landed on the same instant as a report.</summary>
+    private void Notify(GateState from, GateSnapshot to) => _onTransition?.Invoke(from, to);
+
+    // ---- §5.7, the persisted half (E2.S4) ------------------------------------------------------
+
+    /// <summary>
+    /// This gate as the file sees it, or <c>null</c> when there is nothing worth a line — a gate that
+    /// <c>For(id)</c> created and nothing ever failed on writes no entry at all, which is what keeps
+    /// the file a few hundred bytes.
+    ///
+    /// <para><b>What is deliberately not exported.</b> The token bucket and the probe latch (§5.7,
+    /// I9 — see the field comments). And <c>AuthFailed</c>, both halves of it: ruling <b>E2-a</b> says
+    /// it is never persisted in A.1 — in-memory only, a restart resets it. The key is re-read from
+    /// settings at every start anyway, the user may well have fixed it while the app was closed, and
+    /// a <i>file</i> that pauses a provider until the user notices is exactly the lockout R-01 is
+    /// about (the story's own alternative — persist it and clamp it — was rejected here in favour of
+    /// the ruling, which is later and binding). So the <c>MaxValue</c> sentinel is dropped from the
+    /// account-scoped timeline and the kind is dropped from <c>lastKind</c>; a <c>QuotaExhausted</c>
+    /// window that a later 401 happened to cover is lost with it, which is the accepted cost of the
+    /// two blocks sharing one timeline.</para>
+    /// </summary>
+    internal ProviderStateRecord? ExportState()
+    {
         lock (_lock)
         {
-            // HalfOpen only while a probe could still be running — the same test TryEnter applies
-            // before it re-arms one. Reading `_probeOutstanding` alone would leave the 1 Hz status
-            // chip on "checking…" for the life of the process after a probe was abandoned (LIVE
-            // switched off mid-probe, or a crash), because the re-arm needs a TryEnter that a
-            // paused app never makes. Reading the clock is not a side effect: no probe is taken,
-            // no state is written.
-            var state = _probeOutstanding && _clock() - _probeStartedAt < ProbeTimeout ? GateState.HalfOpen
-                      : BlockedUntil is null ? GateState.Closed
-                      : GateState.Open;         // still Open once the window elapses — until a caller
-                                                // takes the probe, which is what makes it exactly one
-            return new GateSnapshot(state, BlockedUntil, _strikes, _lastKind);
+            var key = _keyBlockedUntil == DateTimeOffset.MaxValue ? null : _keyBlockedUntil;
+            var kind = _lastKind == TranslationErrorKind.AuthFailed ? null : _lastKind;
+
+            if (_ipBlockedUntil is null && key is null && _strikes == 0
+                && kind is null && _cleanSince is null) return null;
+
+            return new ProviderStateRecord(
+                _ipBlockedUntil, key, _strikes, kind?.ToString(), _lastAt, _cleanSince);
         }
     }
+
+    /// <summary>
+    /// Restore what <see cref="ExportState"/> wrote, <b>without</b> going through
+    /// <see cref="ReportFailure"/> — which would escalate a strike and announce a transition for a
+    /// failure that happened in another process. Returns false, and changes nothing, if this gate has
+    /// already recorded something in this process: evidence from a live request beats a file, and the
+    /// load is what makes that ordering reachable at all.
+    ///
+    /// <para>Every window is clamped as it is read (AC 4 / §5.7): a machine whose clock jumped
+    /// cannot pause the app for a week. The IP-scoped timeline is clamped to <c>OpenCapMinutes</c>,
+    /// the account-scoped one to <c>QuotaOpenMinutes</c> — its own longest window (§15 R9), since
+    /// clamping it to the cap would silently halve the one block §5.3 says lasts an hour. A value in
+    /// the <i>past</i> needs no clamp: it is simply expired, the gate loads open and the first
+    /// <c>TryEnter</c> half-opens it, which is the correct recovery and the reason the entry is not
+    /// "helpfully" dropped.</para>
+    /// </summary>
+    internal bool TrySeedState(ProviderStateRecord record)
+    {
+        lock (_lock)
+        {
+            if (ExportedStateExists()) return false;
+
+            var now = _clock();
+            _ipBlockedUntil = Clamp(record.BlockedUntil, now, TimeSpan.FromMinutes(_policy.OpenCapMinutes));
+            _keyBlockedUntil = Clamp(record.KeyBlockedUntil, now, TimeSpan.FromMinutes(_policy.QuotaOpenMinutes));
+            _strikes = Math.Max(0, record.Strikes);
+            _lastAt = record.LastAt;
+            _cleanSince = record.CleanSince;
+
+            // E2-a from the reading side, so the invariant is total: this app never writes
+            // AuthFailed, and a hand-edited or downgraded file that does cannot bring it back either.
+            var kind = ProviderStateStore.ParseKind(record.LastKind);
+            _lastKind = kind == TranslationErrorKind.AuthFailed ? null : kind;
+
+            return true;
+        }
+    }
+
+    /// <summary>Whether anything in this gate would be written to the file — the same question
+    /// <see cref="ExportState"/> answers, without building the record. Called under <c>_lock</c>.</summary>
+    private bool ExportedStateExists() =>
+        _ipBlockedUntil is not null || _keyBlockedUntil is not null
+        || _strikes != 0 || _lastKind is not null || _cleanSince is not null;
+
+    private static DateTimeOffset? Clamp(DateTimeOffset? value, DateTimeOffset now, TimeSpan cap) =>
+        value is not { } v ? null : v > now + cap ? now + cap : v;
 
     // ---- the arithmetic ------------------------------------------------------------------------
 
@@ -714,14 +898,19 @@ internal sealed class ProviderGate
     /// transitions, because it is what ages <c>_badResponses</c> when no success has landed, and
     /// because E2.S4 restores a gate from disk with a <c>cleanSince</c> the process never observed.
     /// </summary>
-    private void DecayStrikes(DateTimeOffset now)
+    /// <returns>True if it actually reset something — E2.S4 persists a strike reset (T3), and
+    /// "nothing to reset" must not queue a write on every single success.</returns>
+    private bool DecayStrikes(DateTimeOffset now)
     {
         if (_cleanSince is { } since && now - since >= TimeSpan.FromMinutes(_policy.CleanResetMinutes))
         {
+            var reset = _strikes != 0 || _badResponses != 0;
             _strikes = 0;
             _badResponses = 0;
             _cleanSince = now;                  // the run continues; it does not have to start over
+            return reset;
         }
+        return false;
     }
 
     // ---- §5.3, as one total function -----------------------------------------------------------

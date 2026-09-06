@@ -229,6 +229,15 @@ public partial class MainWindow : Window
     protected override void OnClosing(CancelEventArgs e)
     {
         base.OnClosing(e);
+
+        // Write out any provider pause that is still inside its 1-second debounce, so a block the
+        // user is waiting out survives the restart instead of being re-earned on the first request
+        // (E2.S4, architecture §5.7). The ONE ProviderGates reference outside Services/ (ruling
+        // E2-e) and the one piece of UI wiring in the whole of Epic 2: no control, no binding, so
+        // _restoringSettings is not engaged. Best-effort and non-blocking by contract — and outside
+        // the settings try/catch below, because neither save may be skipped because the other threw.
+        ProviderGates.Flush();
+
         try
         {
             var s = _settings;
