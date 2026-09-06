@@ -9,7 +9,7 @@ namespace PWRUHelper.Services;
 /// sentence and roll away the incident that started it.
 ///
 /// <para>It exists so that "the gate opens and never clears" stops being a feeling and becomes a
-/// timeline in a paste: "Copy error report" (<c>MainWindow.xaml.cs:312-322</c>) copies
+/// timeline in a paste: "Copy error report" (<c>MainWindow.xaml.cs:323-333</c>) copies
 /// <c>Logging.ReadRecent()</c>, so a gate line is in the report the moment it is in the log, beside
 /// E1.S5's per-request <c>tr </c> lines. That pair is §10.3.</para>
 ///
@@ -194,6 +194,12 @@ internal static class GateLog
                                 DateTimeOffset now) =>
         Render(Id(providerId), Edge(from, to.State), to, reason, now);
 
+    /// <summary>Every value on this line is rendered with the invariant culture, not only the one
+    /// where a French or Russian Windows visibly disagrees: <c>:</c> in a custom date format is the
+    /// <i>culture's</i> time separator, and <c>StringBuilder.Append(int)</c> formats with the
+    /// current culture too. A line E2.S7 greps and the owner reads must be the same line on every
+    /// machine, and one rule for the whole builder is cheaper to keep than one exception to
+    /// remember.</summary>
     private static string Render(string id, string edge, GateSnapshot to, string reason,
                                  DateTimeOffset now)
     {
@@ -201,7 +207,7 @@ internal static class GateLog
             .Append("gate provider=").Append(id)
             .Append(' ').Append(edge)
             .Append(" kind=").Append(to.LastKind?.ToString() ?? Nothing)
-            .Append(" strikes=").Append(to.Strikes)
+            .Append(" strikes=").Append(to.Strikes.ToString(CultureInfo.InvariantCulture))
             .Append(" for=").Append(For(to.BlockedUntil, now))
             .Append(" until=").Append(Until(to.BlockedUntil))
             .Append(" reason=").Append(reason);

@@ -15,7 +15,7 @@ namespace PWRUHelper.Tests;
 /// <para><b>TP-LOG-07</b> is the load-bearing case: one open + 200 refused calls + one close is
 /// <b>3</b> lines, not 202. <b>TP-LOG-09</b>'s gate half is the other: after a scripted episode,
 /// <c>Logging.ReadRecent()</c> — which is literally what the About tab's "Copy error report" copies
-/// (<c>MainWindow.xaml.cs:312-322</c>) — holds the whole open/half-open/closed timeline. The AC-2
+/// (<c>MainWindow.xaml.cs:323-333</c>) — holds the whole open/half-open/closed timeline. The AC-2
 /// negatives extend E1.S5's I11 discipline to this family: no user text, no key, no URL, no
 /// <c>q=</c>, ever.</para>
 ///
@@ -387,7 +387,7 @@ public class GateLoggingTests : GatesTestBase
     [Fact]
     public void TP_LOG_09_the_copied_report_holds_the_open_half_open_closed_history()
     {
-        // AC 3. "Copy error report" (MainWindow.xaml.cs:312-322) copies Logging.ReadRecent() and
+        // AC 3. "Copy error report" (MainWindow.xaml.cs:323-333) copies Logging.ReadRecent() and
         // nothing else, so this is the assertion that makes §10.3's claim true — E1.S5 deferred the
         // gate half of TP-LOG-09 to this story, and this is it.
         var clock = new FakeClock();
@@ -503,6 +503,41 @@ public class GateLoggingTests : GatesTestBase
         Assert.Equal($"gate provider=edge CLOSED->OPEN kind=Blocked strikes=2 for=90s " +
                      $"until={Local(now + TimeSpan.FromSeconds(90))} reason=failure", line);
         Assert.Equal(line, GateLog.Line(ProviderIds.Edge, GateState.Closed, snapshot, "failure", now));
+    }
+
+    [Fact]
+    public void The_line_renders_the_same_digits_on_a_hostile_locale()
+    {
+        // I11 / §10.2, as a pin rather than as a comment. `until=` is local HH:mm:ss and the `:` of
+        // a CUSTOM date format is the culture's TimeSeparator, not a literal — so a machine whose
+        // locale spells time differently would write a `until=` E2.S7's grep and the owner's eye
+        // both read as something else. `strikes=` goes through the same door for the same reason.
+        // The culture here is deliberately hostile: one that happened to agree with the invariant
+        // one would make this test pass while proving nothing.
+        var hostile = (CultureInfo)CultureInfo.InvariantCulture.Clone();
+        hostile.DateTimeFormat.TimeSeparator = "#";
+        hostile.NumberFormat.NegativeSign = "MINUS";
+
+        var previous = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = hostile;
+
+            var now = new DateTimeOffset(2026, 9, 6, 12, 0, 0, TimeSpan.Zero);
+            var until = now + TimeSpan.FromSeconds(90);
+            var snapshot = new GateSnapshot(GateState.Open, until, 2, TranslationErrorKind.RateLimited);
+
+            var line = GateLog.Line(ProviderIds.GoogleDict, GateState.Closed, snapshot,
+                                    GateLog.ReasonFailure, now);
+
+            Assert.Equal($"gate provider=google-dict CLOSED->OPEN kind=RateLimited strikes=2 " +
+                         $"for=90s until={Local(until)} reason=failure", line);
+            Assert.Matches(@" strikes=2 for=90s until=\d\d:\d\d:\d\d ", line);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previous;
+        }
     }
 
     private static string Field(string line, string name)
