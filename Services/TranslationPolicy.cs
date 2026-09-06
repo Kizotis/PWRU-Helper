@@ -15,11 +15,11 @@ namespace PWRUHelper.Services;
 ///
 /// A table and nothing else: no methods, no state, no I/O, and no dependency — not even on
 /// <c>Logging</c> (I2). It holds today's values plus the §5.6 target numbers whose code has
-/// landed — the six breaker numbers arrived with <c>ProviderGate</c> (E2.S1). The rest
-/// (<c>MinSpacingMs</c>, <c>MaxAttempts = 2</c>, <c>PerLineCap</c>, <c>CacheCapacity = 2000</c> …)
-/// still arrive with the code that reads them — E2.S3/E2.S5 for the ceiling and the retry, E3.S8
-/// for the batch cap, E4 for the cache, E5 for LIVE — because an unused constant is a constant
-/// nobody grades.
+/// landed — the six breaker numbers arrived with <c>ProviderGate</c> (E2.S1), the four rate-ceiling
+/// numbers with its token bucket (E2.S3). The rest (<c>MaxAttempts = 2</c>, <c>PerLineCap</c>,
+/// <c>CacheCapacity = 2000</c> …) still arrive with the code that reads them — E2.S5 for the retry,
+/// E3.S8 for the batch cap, E4 for the cache, E5 for LIVE — because an unused constant is a
+/// constant nobody grades.
 /// Source: <c>docs/investigations/02-traduction/architecture-cible.md</c> §5.6 (the target table),
 /// §4.3 (the HTML markers).
 /// </summary>
@@ -86,6 +86,35 @@ internal static class TranslationPolicy
     /// <summary>Consecutive <c>BadResponse</c>s that open the gate. One is a hiccup; three in a row
     /// is a provider whose shape has changed.</summary>
     public const int BadResponseStrikesToOpen = 3;  // [ASSUMED] architecture-cible.md §5.6
+
+    // ---- rate ceiling (§5.4) -----------------------------------------------------------------
+    // Read by Services/ProviderGate.cs's token bucket (E2.S3). All four are [ASSUMED]: 500 ms is
+    // the value the ecosystem converged on (mecanismes-de-blocage-google.md Q2) and this project
+    // has measured none of them. They ship instrumented and are tuned from >= 3 field reports
+    // after the A.1 release (U9 / E2.S7) — instrument first, tune from the logs, never from an
+    // opinion. Deliberately NOT pinned by TranslationPolicyTests' today's-values case: a literal
+    // there would make E2.S7's tuning commit rewrite the suite.
+
+    /// <summary>Minimum spacing between two requests to the same provider, expressed as the token
+    /// bucket's refill period: one token per <c>MinSpacingMs</c>.</summary>
+    public const int MinSpacingMs = 500;        // [ASSUMED] architecture-cible.md §5.4/§5.6; mecanismes-de-blocage-google.md Q2
+
+    /// <summary>Tokens the bucket holds at rest. Two, so an interactive keypress after a quiet
+    /// minute is never made to wait — and so exactly one of them can be reserved: with a capacity
+    /// of 2, "<c>Background</c> may not take the last token" is the whole reserve (§5.4).</summary>
+    public const int BucketCapacity = 2;        // [ASSUMED] architecture-cible.md §5.4
+
+    /// <summary>How long a caller may sit on a <c>Wait</c> before the tier counts as unavailable.
+    /// It is the <b>caller's</b> rule, not the gate's: <c>ChainTranslator</c> (E3.S3) moves on past
+    /// a longer wait and the LIVE loop (E5.S1) backs off — <c>ProviderGate.TryEnter</c> never waits
+    /// for anybody (§5.4: it is not a scheduler).</summary>
+    public const int MaxSpacingWaitMs = 2000;   // [ASSUMED] architecture-cible.md §5.4
+
+    /// <summary>How long a <c>Background</c> caller that finds the gate probe-eligible stands aside
+    /// before taking the half-open probe itself, so a user pressing Enter inside that second gets it
+    /// instead (§5.4, architect's concern #1). One second: long enough to cover a keystroke, short
+    /// enough that a paused provider is re-tried promptly when nobody is typing.</summary>
+    public const int ProbeDeferMs = 1000;       // [ASSUMED] architecture-cible.md §5.4
 
     // ---- HTML abuse-page markers (§4.3) ------------------------------------------------------
     // Matched lower-cased against DE-TAGGED text — E1.S4 does the de-tagging and lower-casing, so

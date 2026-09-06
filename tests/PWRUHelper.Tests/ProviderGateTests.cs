@@ -46,6 +46,11 @@ public class ProviderGateTests
     private static readonly TimeSpan ProbeTimeout =
         TimeSpan.FromSeconds(TranslationPolicy.RequestTimeoutSeconds);
 
+    // §5.4's rate ceiling, as relationships rather than literals (U9: E2.S7 tunes all four).
+    private static readonly TimeSpan Spacing = TimeSpan.FromMilliseconds(TranslationPolicy.MinSpacingMs);
+    private static readonly TimeSpan ProbeDefer = TimeSpan.FromMilliseconds(TranslationPolicy.ProbeDeferMs);
+    private static readonly int Capacity = TranslationPolicy.BucketCapacity;
+
     /// <summary>Asserts the decision is `Open` and hands back its `retryAt`, so a wrong outcome
     /// reads as "the gate let a request through", not as a comparison of two default dates.</summary>
     private static DateTimeOffset OpenUntil(GateDecision d)
@@ -55,15 +60,22 @@ public class ProviderGateTests
     }
 
     /// <summary>Walks an open gate to its probe: advance to `blockedUntil`, take the single probe.
-    /// The half-open state is reached the only way production reaches it.</summary>
-    private static void TakeProbe(ProviderGate gate, FakeClock clock)
+    /// The half-open state is reached the only way production reaches it. Interactive, because
+    /// §5.4 defers a `Background` caller by `ProbeDeferMs` and these cases are about the breaker.
+    /// <para>Hands back the probe's <b>token</b> (ruling E2-h): only a report quoting it may close
+    /// the gate or release the latch, so every case that resolves a probe must pass it back — which
+    /// is exactly what `HttpProviderCore` (E2.S5) will do.</para></summary>
+    private static long TakeProbe(ProviderGate gate, FakeClock clock)
     {
         var until = gate.Snapshot().BlockedUntil;
         Assert.NotNull(until);
         if (clock.Now < until!.Value) clock.Advance(until.Value - clock.Now);
 
-        Assert.Equal(GateOutcome.Probe, gate.TryEnter(RequestPriority.Interactive).Outcome);
+        var decision = gate.TryEnter(RequestPriority.Interactive);
+        Assert.Equal(GateOutcome.Probe, decision.Outcome);
+        Assert.NotEqual(0, decision.ProbeToken);
         Assert.Equal(GateState.HalfOpen, gate.Snapshot().State);
+        return decision.ProbeToken;
     }
 
     // ---- TP-GATE-01 / 02: it opens, and it stays open ----------------------------------------
@@ -127,8 +139,10 @@ public class ProviderGateTests
         // one" has to survive genuine concurrency, not just two sequential calls.
         var (gate, clock) = NewGate();
         gate.ReportFailure(TranslationErrorKind.RateLimited);
-        clock.Advance(Base);
+        clock.Advance(Base + ProbeDefer);   // past the §5.4 defer window, so Background may take it
 
+        // The clock is NOT advanced inside the parallel section: a FakeClock read concurrently with
+        // a write would be a flake generator, and the property under test is a count, not a timing.
         var decisions = new ConcurrentBag<GateOutcome>();
         Parallel.For(0, 64, _ => decisions.Add(gate.TryEnter(RequestPriority.Background).Outcome));
 
@@ -144,9 +158,9 @@ public class ProviderGateTests
         var (gate, clock) = NewGate();
         gate.ReportFailure(TranslationErrorKind.RateLimited);
         gate.ReportFailure(TranslationErrorKind.RateLimited);   // two strikes to prove they are cleared
-        TakeProbe(gate, clock);
+        var probe = TakeProbe(gate, clock);
 
-        gate.ReportSuccess();
+        gate.ReportSuccess(probe);
 
         Assert.Equal(new GateSnapshot(GateState.Closed, null, 0, TranslationErrorKind.RateLimited),
                      gate.Snapshot());
@@ -158,9 +172,9 @@ public class ProviderGateTests
     {
         var (gate, clock) = NewGate();
         gate.ReportFailure(TranslationErrorKind.RateLimited);
-        TakeProbe(gate, clock);
+        var probe = TakeProbe(gate, clock);
 
-        gate.ReportFailure(TranslationErrorKind.RateLimited);
+        gate.ReportFailure(TranslationErrorKind.RateLimited, null, probe);
 
         var snap = gate.Snapshot();
         Assert.Equal(GateState.Open, snap.State);
@@ -179,10 +193,10 @@ public class ProviderGateTests
         // cap, and the two after it prove the clamp holds rather than merely arriving once.
         for (var strike = 1; strike <= 8; strike++)
         {
-            if (strike > 1) TakeProbe(gate, clock);
+            var probe = strike > 1 ? TakeProbe(gate, clock) : 0;
             var at = clock.Now;
 
-            gate.ReportFailure(TranslationErrorKind.RateLimited);
+            gate.ReportFailure(TranslationErrorKind.RateLimited, null, probe);
 
             var expected = TimeSpan.FromSeconds(Math.Min(Base.TotalSeconds * Math.Pow(2, strike - 1),
                                                          Cap.TotalSeconds));
@@ -203,14 +217,12 @@ public class ProviderGateTests
         var (gate, clock) = NewGate();
         for (var i = 0; i < 3; i++)
         {
-            if (i > 0) TakeProbe(gate, clock);
-            gate.ReportFailure(TranslationErrorKind.RateLimited);
+            gate.ReportFailure(TranslationErrorKind.RateLimited, null, i > 0 ? TakeProbe(gate, clock) : 0);
         }
         Assert.Equal(3, gate.Snapshot().Strikes);
 
         // The provider comes back: the probe succeeds, then CleanResetMinutes of successes.
-        TakeProbe(gate, clock);
-        gate.ReportSuccess();
+        gate.ReportSuccess(TakeProbe(gate, clock));
         for (var i = 0; i < 10; i++)
         {
             clock.Advance(TimeSpan.FromMinutes(TranslationPolicy.CleanResetMinutes / 10.0));
@@ -232,16 +244,14 @@ public class ProviderGateTests
         // fresh 60-second window.
         var (gate, clock) = NewGate();
         gate.ReportFailure(TranslationErrorKind.RateLimited);
-        TakeProbe(gate, clock);
-        gate.ReportFailure(TranslationErrorKind.RateLimited);    // strikes 2
+        gate.ReportFailure(TranslationErrorKind.RateLimited, null, TakeProbe(gate, clock));   // strikes 2
 
-        TakeProbe(gate, clock);
-        gate.ReportFailure(TranslationErrorKind.Timeout);        // soft: 5 s, no strike, no forgiveness
+        gate.ReportFailure(TranslationErrorKind.Timeout, null, TakeProbe(gate, clock));       // soft: 5 s, no strike
         Assert.Equal(2, gate.Snapshot().Strikes);
 
-        TakeProbe(gate, clock);
+        var probe = TakeProbe(gate, clock);
         var at = clock.Now;
-        gate.ReportFailure(TranslationErrorKind.RateLimited);
+        gate.ReportFailure(TranslationErrorKind.RateLimited, null, probe);
 
         Assert.Equal(3, gate.Snapshot().Strikes);
         Assert.Equal(at + Base * 4, gate.Snapshot().BlockedUntil);
@@ -259,9 +269,9 @@ public class ProviderGateTests
         Assert.Equal(clock.Now + quota, gate.Snapshot().BlockedUntil);
         Assert.Equal(0, gate.Snapshot().Strikes);       // a quota is refilled by a billing period,
 
-        TakeProbe(gate, clock);
+        var probe = TakeProbe(gate, clock);
         var at = clock.Now;
-        gate.ReportFailure(TranslationErrorKind.QuotaExhausted);
+        gate.ReportFailure(TranslationErrorKind.QuotaExhausted, null, probe);
 
         Assert.Equal(at + quota, gate.Snapshot().BlockedUntil);   // … not by a longer back-off
         Assert.Equal(0, gate.Snapshot().Strikes);
@@ -385,8 +395,9 @@ public class ProviderGateTests
 
         // The MaxValue is gone and only the elapsed 429 window is left, so the gate answers the way
         // it answers any elapsed window: one probe, and a success on it closes the gate.
-        Assert.Equal(GateOutcome.Probe, gate.TryEnter(RequestPriority.Interactive).Outcome);
-        gate.ReportSuccess();
+        var probe = gate.TryEnter(RequestPriority.Interactive);
+        Assert.Equal(GateOutcome.Probe, probe.Outcome);
+        gate.ReportSuccess(probe.ProbeToken);
         Assert.Equal(GateState.Closed, gate.Snapshot().State);
         Assert.Equal(GateOutcome.Allow, gate.TryEnter(RequestPriority.Interactive).Outcome);
     }
@@ -398,8 +409,7 @@ public class ProviderGateTests
         // nothing to touch.
         var (gate, clock) = NewGate();
         gate.ReportFailure(TranslationErrorKind.RateLimited);
-        TakeProbe(gate, clock);
-        gate.ReportSuccess();                     // a successful probe closes it and clears the strikes
+        gate.ReportSuccess(TakeProbe(gate, clock));   // a successful probe closes it, strikes and all
         var before = gate.Snapshot();
 
         gate.ClearAuthBlock();
@@ -425,9 +435,9 @@ public class ProviderGateTests
         Assert.Equal(0, gate.Snapshot().Strikes);
 
         // Repeated soft failures never escalate — the chain moves on, the gate does not punish.
-        TakeProbe(gate, clock);
+        var probe = TakeProbe(gate, clock);
         var at = clock.Now;
-        gate.ReportFailure(kind);
+        gate.ReportFailure(kind, null, probe);
         Assert.Equal(at + cooldown, gate.Snapshot().BlockedUntil);
         Assert.Equal(0, gate.Snapshot().Strikes);
     }
@@ -467,8 +477,7 @@ public class ProviderGateTests
         // redraw it). This file may name the kind; no production source may (TP-MAP-17).
         var (gate, clock) = NewGate();
         gate.ReportFailure(TranslationErrorKind.RateLimited);
-        TakeProbe(gate, clock);
-        gate.ReportSuccess();
+        gate.ReportSuccess(TakeProbe(gate, clock));
         clock.AdvanceMinutes(1);
         gate.ReportSuccess();                                   // a clean run is under way
 
@@ -493,9 +502,11 @@ public class ProviderGateTests
     {
         var (gate, clock) = NewGate();
         gate.ReportFailure(TranslationErrorKind.RateLimited);
-        TakeProbe(gate, clock);
+        var probe = TakeProbe(gate, clock);
 
-        gate.ReportFailure(TranslationErrorKind.Cancelled);
+        // With its own token, so the case really is "Cancelled changes nothing" and not "the report
+        // was ignored because it quoted no probe" (ruling E2-h).
+        gate.ReportFailure(TranslationErrorKind.Cancelled, null, probe);
 
         Assert.Equal(GateState.HalfOpen, gate.Snapshot().State);
         Assert.Equal(GateOutcome.Open, gate.TryEnter(RequestPriority.Interactive).Outcome);
@@ -702,9 +713,9 @@ public class ProviderGateTests
         // caller in turn a fresh probe, at full request rate, against a provider that just failed.
         var (gate, clock) = NewGate();
         gate.ReportFailure(TranslationErrorKind.RateLimited);
-        TakeProbe(gate, clock);
+        var probe = TakeProbe(gate, clock);
 
-        gate.ReportFailure(TranslationErrorKind.BadResponse);        // 1 of 3: no window of its own
+        gate.ReportFailure(TranslationErrorKind.BadResponse, null, probe);   // 1 of 3: no window of its own
 
         Assert.Equal(GateState.Open, gate.Snapshot().State);
         Assert.Equal(clock.Now + TimeSpan.FromSeconds(TranslationPolicy.SoftCooldownSecs),
@@ -725,8 +736,7 @@ public class ProviderGateTests
         var (gate, clock) = NewGate();
         for (var i = 0; i < 5; i++)
         {
-            if (i > 0) TakeProbe(gate, clock);
-            gate.ReportFailure(TranslationErrorKind.RateLimited);
+            gate.ReportFailure(TranslationErrorKind.RateLimited, null, i > 0 ? TakeProbe(gate, clock) : 0);
         }
         Assert.Equal(5, gate.Snapshot().Strikes);
         var standing = gate.Snapshot().BlockedUntil;
@@ -736,9 +746,9 @@ public class ProviderGateTests
         gate.ReportSuccess();                                        // the stale 200
         Assert.Equal(standing, gate.Snapshot().BlockedUntil);        // it lifts nothing, either
 
-        TakeProbe(gate, clock);
+        var probe = TakeProbe(gate, clock);
         var at = clock.Now;
-        gate.ReportFailure(TranslationErrorKind.RateLimited);
+        gate.ReportFailure(TranslationErrorKind.RateLimited, null, probe);
 
         Assert.Equal(6, gate.Snapshot().Strikes);                    // not 1
         Assert.Equal(at + Cap, gate.Snapshot().BlockedUntil);        // not the 60-second floor
@@ -887,11 +897,12 @@ public class ProviderGateTests
     }
 
     [Fact]
-    public void Priority_does_not_change_the_breakers_answer_yet()
+    public void Priority_never_changes_the_breakers_own_window()
     {
-        // The enum lands here (OQ-a: read-once is Interactive) but nothing reads it until the token
-        // bucket (E2.S3). Pinned so the seam is visible: the day this stops being true, it is
-        // because §5.4's reserve arrived, and that is E2.S3's case to write.
+        // E2.S1 pinned "priority changes nothing yet"; E2.S3's reserve is what made that stop being
+        // true, so this is its replacement. What priority moves is the CEILING and the probe
+        // preference (TP-GATE-16/17/18) — never the breaker's window: a Background caller is told
+        // the same retryAt as an Interactive one, and neither is let through early.
         var (gate, clock) = NewGate();
         Assert.Equal(GateOutcome.Allow, gate.TryEnter(RequestPriority.Background).Outcome);
 
@@ -899,8 +910,334 @@ public class ProviderGateTests
         Assert.Equal(OpenUntil(gate.TryEnter(RequestPriority.Interactive)),
                      OpenUntil(gate.TryEnter(RequestPriority.Background)));
 
-        clock.Advance(Base);
+        // …and an Open spends nothing, so the bucket that refilled during the window is untouched:
+        // the probe, once it is offered, is affordable to either priority.
+        clock.Advance(Base + ProbeDefer);
         Assert.Equal(GateOutcome.Probe, gate.TryEnter(RequestPriority.Background).Outcome);
+    }
+
+    // ---- §5.4 the rate ceiling: TP-GATE-16 / 17 / 18 -----------------------------------------
+    //
+    // All four constants are [ASSUMED] and E2.S7 tunes them (U9), so these cases assert
+    // RELATIONSHIPS — the bucket holds `BucketCapacity`, it refills one token per `MinSpacingMs`,
+    // `Background` is refused the last one, the defer is one `ProbeDeferMs` — and never literals.
+    // Every instant is driven by the injected clock; there is no `Task.Delay` here either (CI-3).
+
+    [Fact]
+    public void TP_GATE_16_The_bucket_holds_BucketCapacity_and_refills_one_token_per_MinSpacingMs()
+    {
+        var (gate, clock) = NewGate();
+
+        // A full bucket, spent without the clock moving at all.
+        for (var i = 0; i < Capacity; i++)
+            Assert.Equal(GateOutcome.Allow, gate.TryEnter(RequestPriority.Interactive).Outcome);
+
+        var empty = gate.TryEnter(RequestPriority.Interactive);
+        Assert.Equal(GateOutcome.Wait, empty.Outcome);
+        Assert.True(empty.Delay > TimeSpan.Zero && empty.Delay <= Spacing,
+                    $"the wait for the next token must be at most one refill period; it was {empty.Delay}");
+
+        // A rate, not a step: half a period later the wait is half as long, and the token is not
+        // there yet. (A bucket implemented with a timer could not answer this without sleeping.)
+        clock.Advance(Spacing / 2);
+        var half = gate.TryEnter(RequestPriority.Interactive);
+        Assert.Equal(GateOutcome.Wait, half.Outcome);
+        Assert.True(half.Delay < empty.Delay, "the wait must shrink as the bucket refills");
+
+        clock.Advance(half.Delay);
+        Assert.Equal(GateOutcome.Allow, gate.TryEnter(RequestPriority.Interactive).Outcome);
+    }
+
+    [Fact]
+    public void TP_GATE_16_An_idle_gate_banks_nothing_beyond_the_capacity()
+    {
+        // The clamp, which is why the bucket is read lazily rather than accumulated: without it a
+        // gate nobody touched for an hour would hand out 7 200 requests back to back.
+        var (gate, clock) = NewGate();
+        clock.AdvanceMinutes(60);
+
+        for (var i = 0; i < Capacity; i++)
+            Assert.Equal(GateOutcome.Allow, gate.TryEnter(RequestPriority.Interactive).Outcome);
+
+        Assert.Equal(GateOutcome.Wait, gate.TryEnter(RequestPriority.Interactive).Outcome);
+    }
+
+    [Fact]
+    public void TP_GATE_17_The_last_token_is_reserved_for_Interactive()
+    {
+        // AC 2, and the pair is asserted in this order in ONE case on purpose: a regression that
+        // drops the reserve makes both Allow, and two separate cases would not catch it.
+        var (gate, _) = NewGate();
+        for (var i = 0; i < Capacity - 1; i++)
+            Assert.Equal(GateOutcome.Allow, gate.TryEnter(RequestPriority.Background).Outcome);
+
+        var refused = gate.TryEnter(RequestPriority.Background);   // one token left: not yours
+        Assert.Equal(GateOutcome.Wait, refused.Outcome);
+
+        Assert.Equal(GateOutcome.Allow, gate.TryEnter(RequestPriority.Interactive).Outcome);
+    }
+
+    [Fact]
+    public void TP_GATE_17_A_Background_Wait_names_the_token_the_caller_may_actually_take()
+    {
+        // The wait is measured to `tokens >= BucketCapacity` for Background, not to `tokens >= 1`.
+        // Against the wrong threshold a Background caller is told to come back 500 ms too early and
+        // is refused again — the same request twice, which is the behaviour this epic removes.
+        var (gate, clock) = NewGate();
+        for (var i = 0; i < Capacity - 1; i++) gate.TryEnter(RequestPriority.Background);
+
+        var wait = gate.TryEnter(RequestPriority.Background);
+        Assert.Equal(GateOutcome.Wait, wait.Outcome);
+
+        clock.Advance(wait.Delay);
+        Assert.Equal(GateOutcome.Allow, gate.TryEnter(RequestPriority.Background).Outcome);
+    }
+
+    [Fact]
+    public void TP_GATE_18_A_Background_caller_stands_aside_from_the_probe_for_one_ProbeDeferMs()
+    {
+        // AC 3, the architect's concern #1: during an outage the LIVE loop ticks every 700 ms and
+        // would win every probe, so the one request the user is watching would be the least likely
+        // to be tried.
+        var (gate, clock) = NewGate();
+        gate.ReportFailure(TranslationErrorKind.RateLimited);
+        var eligibleAt = gate.Snapshot().BlockedUntil!.Value;
+        clock.Advance(eligibleAt - clock.Now);                    // exactly probe-eligible
+
+        Assert.Equal(eligibleAt + ProbeDefer, OpenUntil(gate.TryEnter(RequestPriority.Background)));
+        Assert.Equal(GateState.Open, gate.Snapshot().State);      // …and the latch was NOT taken
+
+        // The user presses Enter inside that second and gets the probe.
+        clock.Advance(ProbeDefer / 2);
+        Assert.Equal(GateOutcome.Probe, gate.TryEnter(RequestPriority.Interactive).Outcome);
+        Assert.Equal(GateState.HalfOpen, gate.Snapshot().State);
+    }
+
+    [Fact]
+    public void TP_GATE_18_With_nobody_typing_Background_takes_the_probe_when_the_defer_elapses()
+    {
+        // The other half: the defer must not become a pause. The window is latched to the INSTANT
+        // the gate became probe-eligible, not to the caller — a per-caller "has deferred once" flag
+        // would let two Background callers each defer and then both race for the probe, and it
+        // could be restarted for ever by a loop that keeps asking.
+        var (gate, clock) = NewGate();
+        gate.ReportFailure(TranslationErrorKind.RateLimited);
+        var eligibleAt = gate.Snapshot().BlockedUntil!.Value;
+        clock.Advance(eligibleAt - clock.Now);
+
+        Assert.Equal(eligibleAt + ProbeDefer, OpenUntil(gate.TryEnter(RequestPriority.Background)));
+        clock.Advance(ProbeDefer / 2);
+        Assert.Equal(eligibleAt + ProbeDefer,                       // a second asker does not restart it
+                     OpenUntil(gate.TryEnter(RequestPriority.Background)));
+
+        clock.Advance(ProbeDefer / 2);                              // exactly at the end of the window
+        Assert.Equal(GateOutcome.Probe, gate.TryEnter(RequestPriority.Background).Outcome);
+    }
+
+    [Fact]
+    public void The_probe_pays_a_token_like_any_other_request()
+    {
+        // Ruling OQ-b: a half-open probe IS a real request — one rule, no special case. With the
+        // bucket at capacity the probe leaves exactly one token behind it.
+        var (gate, clock) = NewGate();
+        gate.ReportFailure(TranslationErrorKind.RateLimited);
+        var probe = TakeProbe(gate, clock);
+        gate.ReportSuccess(probe);                                  // the gate closes, bucket at 1
+
+        Assert.Equal(GateOutcome.Allow, gate.TryEnter(RequestPriority.Interactive).Outcome);
+        Assert.Equal(GateOutcome.Wait, gate.TryEnter(RequestPriority.Interactive).Outcome);
+    }
+
+    [Fact]
+    public void A_probe_that_cannot_afford_a_token_is_refused_and_the_probe_is_not_burnt()
+    {
+        // The T4 edge case, and the one assertion in this file that has no TP row: it is R-01 (a
+        // permanently paused app) arrived at by the back door. If a probe-eligible caller that the
+        // bucket refuses were handed `Probe` anyway — or had the latch marked taken — the single
+        // probe of a 30-minute window would be spent by a caller that never sent a request, and the
+        // gate would stay open for another full window with nothing outstanding.
+        //
+        // The bucket is emptied by reflection because with today's numbers the state is unreachable
+        // from outside: the shortest block window a GatePolicy can set is 1 s, which already
+        // refills BucketCapacity × MinSpacingMs. That is a relationship, not a law — it is asserted
+        // below so E2.S7 (U9) sees what it is changing the moment it tunes MinSpacingMs up.
+        Assert.True(TranslationPolicy.SoftCooldownSecs * 1000 >= Capacity * TranslationPolicy.MinSpacingMs,
+                    "no block window is short enough today to leave the bucket empty when it elapses — "
+                    + "if E2.S7 breaks that, this guard stops being defensive and starts being load-bearing");
+
+        var (gate, clock) = NewGate();
+        gate.ReportFailure(TranslationErrorKind.RateLimited);
+        var eligibleAt = gate.Snapshot().BlockedUntil!.Value;
+        clock.Advance(eligibleAt - clock.Now);
+        EmptyTheBucket(gate, eligibleAt);
+
+        var refused = gate.TryEnter(RequestPriority.Interactive);
+        Assert.Equal(GateOutcome.Wait, refused.Outcome);
+        Assert.Equal(GateState.Open, gate.Snapshot().State);        // NOT HalfOpen: the latch is free
+
+        // …and the probe is still on offer to the next caller once a token has refilled.
+        clock.Advance(refused.Delay);
+        var probe = gate.TryEnter(RequestPriority.Interactive);
+        Assert.Equal(GateOutcome.Probe, probe.Outcome);
+        Assert.NotEqual(0, probe.ProbeToken);
+        Assert.Equal(GateState.HalfOpen, gate.Snapshot().State);
+    }
+
+    [Fact]
+    public void An_Open_and_a_Wait_spend_no_token()
+    {
+        // No request is made on those paths, so no budget may be charged for one — otherwise a LIVE
+        // loop ticking against a paused provider would keep the bucket empty for the user.
+        var (gate, clock) = NewGate();
+        for (var i = 0; i < Capacity; i++) gate.TryEnter(RequestPriority.Interactive);
+        for (var i = 0; i < 50; i++)
+            Assert.Equal(GateOutcome.Wait, gate.TryEnter(RequestPriority.Interactive).Outcome);
+
+        gate.ReportFailure(TranslationErrorKind.RateLimited);       // now the breaker refuses instead
+        for (var i = 0; i < 50; i++)
+            Assert.Equal(GateOutcome.Open, gate.TryEnter(RequestPriority.Interactive).Outcome);
+
+        // The window elapsed on wall time alone, so the bucket is FULL — which is what a Background
+        // caller taking the probe proves, since Background needs the whole capacity.
+        clock.Advance(Base + ProbeDefer);
+        Assert.Equal(GateOutcome.Probe, gate.TryEnter(RequestPriority.Background).Outcome);
+    }
+
+    [Fact]
+    public void Snapshot_neither_refills_nor_spends_the_bucket()
+    {
+        // T6 / R-2: the UI polls this at 1 Hz. A Snapshot that refilled the bucket would make the
+        // rate ceiling depend on whether the About tab is open; one that spent a token would make
+        // the status chip eat the user's next request.
+        var (gate, clock) = NewGate();
+        for (var i = 0; i < Capacity; i++) gate.TryEnter(RequestPriority.Interactive);
+
+        clock.Advance(Spacing);
+        for (var i = 0; i < 10; i++) Assert.Equal(GateState.Closed, gate.Snapshot().State);
+
+        // Exactly one token refilled, and exactly one: the ten polls added nothing and took nothing.
+        Assert.Equal(GateOutcome.Allow, gate.TryEnter(RequestPriority.Interactive).Outcome);
+        Assert.Equal(GateOutcome.Wait, gate.TryEnter(RequestPriority.Interactive).Outcome);
+    }
+
+    [Fact]
+    public void The_ceiling_never_makes_the_gate_wait_for_anybody()
+    {
+        // AC 4 stops at the constant and the SHAPE of the decision in this story: `ChainTranslator`
+        // (E3.S3) and the LIVE loop (E5.S1) are what act on it. What must be true here is that the
+        // gate hands back a TimeSpan a caller can compare — and never blocks, sleeps, takes a
+        // CancellationToken or returns a Task. A gate that waits for you is the scheduler §5.4
+        // explicitly refuses to build.
+        var wait = TimeSpan.FromMilliseconds(TranslationPolicy.MaxSpacingWaitMs);
+        Assert.True(GateDecision.WorthWaiting(wait));
+        Assert.False(GateDecision.WorthWaiting(wait + TimeSpan.FromMilliseconds(1)));
+
+        // …and the ceiling can never produce one the chain would walk away from: the longest Wait
+        // the bucket returns is BucketCapacity × MinSpacingMs. A tuning commit that broke that
+        // would have the chain skip a perfectly healthy provider.
+        Assert.True(Capacity * TranslationPolicy.MinSpacingMs <= TranslationPolicy.MaxSpacingWaitMs,
+                    "the longest wait the bucket can return must stay inside MaxSpacingWaitMs");
+
+        var tryEnter = typeof(ProviderGate).GetMethod(
+            "TryEnter", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        Assert.NotNull(tryEnter);
+        Assert.Equal(typeof(GateDecision), tryEnter!.ReturnType);
+        Assert.Equal(new[] { typeof(RequestPriority) },
+                     tryEnter.GetParameters().Select(p => p.ParameterType));
+    }
+
+    // ---- ruling E2-h: the probe carries an identity -------------------------------------------
+
+    [Fact]
+    public void E2_h_A_success_that_quotes_no_probe_token_cannot_close_the_gate()
+    {
+        // The race this ruling closes. Both chains share one gate (I9), so a 200 from a request
+        // dispatched BEFORE the gate closed behind it lands while the probe is still out. It used
+        // to close the gate and reset the whole strike ladder on evidence that proved nothing.
+        var (gate, clock) = NewGate();
+        gate.ReportFailure(TranslationErrorKind.RateLimited);
+        gate.ReportFailure(TranslationErrorKind.RateLimited);       // two strikes, to prove they survive
+        var probe = TakeProbe(gate, clock);
+
+        gate.ReportSuccess();                                       // the stale 200: no token
+
+        Assert.Equal(GateState.HalfOpen, gate.Snapshot().State);    // the probe is still out
+        Assert.Equal(2, gate.Snapshot().Strikes);
+        Assert.Equal(GateOutcome.Open, gate.TryEnter(RequestPriority.Interactive).Outcome);
+
+        gate.ReportSuccess(probe);                                  // …and the real probe still closes it
+        Assert.Equal(GateState.Closed, gate.Snapshot().State);
+        Assert.Equal(0, gate.Snapshot().Strikes);
+    }
+
+    [Fact]
+    public void E2_h_A_failure_that_quotes_no_probe_token_cannot_steal_the_probe()
+    {
+        // The mirror image: a stale 429 stealing the latch left a provider that is being probed
+        // successfully blocked for another full window. The evidence still counts against §5.3 —
+        // it is a real 429 — but it may not end the half-open window.
+        var (gate, clock) = NewGate();
+        gate.ReportFailure(TranslationErrorKind.RateLimited);
+        var probe = TakeProbe(gate, clock);
+
+        gate.ReportFailure(TranslationErrorKind.RateLimited);       // the stale 429
+
+        Assert.Equal(GateState.HalfOpen, gate.Snapshot().State);
+        Assert.Equal(2, gate.Snapshot().Strikes);                   // the evidence was not discarded
+
+        gate.ReportSuccess(probe);                                  // the probe itself comes back healthy
+        Assert.Equal(GateState.Closed, gate.Snapshot().State);
+    }
+
+    [Fact]
+    public void E2_h_A_token_from_an_earlier_probe_resolves_nothing_and_neither_does_a_replay()
+    {
+        var (gate, clock) = NewGate();
+        gate.ReportFailure(TranslationErrorKind.RateLimited);
+        var first = TakeProbe(gate, clock);
+        gate.ReportFailure(TranslationErrorKind.RateLimited, null, first);   // it fails and re-opens
+
+        var second = TakeProbe(gate, clock);
+        Assert.NotEqual(first, second);                             // a token is never handed out twice
+
+        gate.ReportSuccess(first);                                  // the first probe's very late 200
+        Assert.Equal(GateState.HalfOpen, gate.Snapshot().State);
+
+        gate.ReportSuccess(second);
+        Assert.Equal(GateState.Closed, gate.Snapshot().State);
+
+        gate.ReportFailure(TranslationErrorKind.RateLimited, null, second);  // a replay of a spent token
+        Assert.Equal(1, gate.Snapshot().Strikes);                   // …counts as the ordinary failure it is
+    }
+
+    [Fact]
+    public void E2_h_Only_a_Probe_decision_carries_a_token()
+    {
+        var (gate, clock) = NewGate();
+        Assert.Equal(0, gate.TryEnter(RequestPriority.Interactive).ProbeToken);         // Allow
+        for (var i = 1; i < Capacity; i++) gate.TryEnter(RequestPriority.Interactive);
+        Assert.Equal(0, gate.TryEnter(RequestPriority.Interactive).ProbeToken);         // Wait
+
+        gate.ReportFailure(TranslationErrorKind.RateLimited);
+        Assert.Equal(0, gate.TryEnter(RequestPriority.Interactive).ProbeToken);         // Open
+        Assert.NotEqual(0, TakeProbe(gate, clock));                                     // Probe
+    }
+
+    /// <summary>
+    /// Sets the rate-ceiling bucket to empty at <paramref name="at"/>. Reflection rather than a
+    /// production seam, and used by exactly one case: the state is unreachable through
+    /// <c>TryEnter</c>/<c>Report*</c> with today's constants, and a hook on `ProviderGate` that
+    /// existed only for a test would be worse than this. Asserts rather than returning quietly, so
+    /// a renamed field reads as "the seam moved" instead of as a test that stopped testing.
+    /// </summary>
+    private static void EmptyTheBucket(ProviderGate gate, DateTimeOffset at)
+    {
+        var tokens = typeof(ProviderGate).GetField("_tokens", BindingFlags.Instance | BindingFlags.NonPublic);
+        var tokensAt = typeof(ProviderGate).GetField("_tokensAt", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.True(tokens != null && tokensAt != null, "the bucket's fields moved — this case is not testing anything");
+
+        tokens!.SetValue(gate, 0d);
+        tokensAt!.SetValue(gate, (DateTimeOffset?)at);
     }
 
     // ---- IS-12: the overrides hatch (the L1 half of TP-SET-11) --------------------------------
