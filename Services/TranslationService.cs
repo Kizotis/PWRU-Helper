@@ -34,9 +34,23 @@ public class TranslationService : ITranslator
     // The text travels in the GET query string; keep well under typical URL limits.
     private const int MaxQueryBytes = 1500;
 
+    private readonly HttpClient _http;
+
+    /// <summary>Test seam: a handler builds a private client so the retry policy and the response
+    /// parsing can be exercised offline; the app passes nothing and keeps the shared static client.</summary>
+    internal TranslationService(HttpMessageHandler? handler = null)
+    {
+        _http = handler == null ? Http : new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(12) };
+    }
+
     private static HttpClient CreateClient()
     {
-        var c = new HttpClient { Timeout = TimeSpan.FromSeconds(12) };
+        // This client lives for the whole process: without a pooled-connection lifetime it can sit
+        // on a connection (or a DNS answer) that has gone stale and never replace it.
+        var c = new HttpClient(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(2) })
+        {
+            Timeout = TimeSpan.FromSeconds(12),
+        };
         // A browser-like UA avoids the endpoint occasionally rejecting the request.
         c.DefaultRequestHeaders.Add("User-Agent",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36");
@@ -128,7 +142,7 @@ public class TranslationService : ITranslator
             ct.ThrowIfCancellationRequested();
             try
             {
-                using var resp = await Http.GetAsync(url, ct);
+                using var resp = await _http.GetAsync(url, ct);
                 if (resp.IsSuccessStatusCode)
                 {
                     json = await resp.Content.ReadAsStringAsync(ct);

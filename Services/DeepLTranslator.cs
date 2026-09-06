@@ -13,18 +13,32 @@ namespace PWRUHelper.Services;
 /// </summary>
 public class DeepLTranslator : ITranslator
 {
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(12) };
+    private static readonly HttpClient Http = CreateClient();
 
+    private readonly HttpClient _http;
     private readonly string _key;
     private readonly string _endpoint;
 
-    public DeepLTranslator(string apiKey)
+    public DeepLTranslator(string apiKey) : this(apiKey, null) { }
+
+    /// <summary>Test seam: a handler builds a private client so the status mapping and the parser can
+    /// be exercised offline; the app passes nothing and keeps the shared static client.</summary>
+    internal DeepLTranslator(string apiKey, HttpMessageHandler? handler = null)
     {
         _key = (apiKey ?? "").Trim();
         _endpoint = FreeKey(_key)
             ? "https://api-free.deepl.com/v2/translate"
             : "https://api.deepl.com/v2/translate";
+        _http = handler == null ? Http : new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(12) };
     }
+
+    // Same reasoning as TranslationService: a process-lifetime client needs its pooled connections
+    // recycled, or a stale one is never replaced.
+    private static HttpClient CreateClient() =>
+        new(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(2) })
+        {
+            Timeout = TimeSpan.FromSeconds(12),
+        };
 
     // Free-tier keys carry a ":fx" suffix and must use the free host.
     internal static bool FreeKey(string key) => key.TrimEnd().EndsWith(":fx", StringComparison.Ordinal);
@@ -75,7 +89,7 @@ public class DeepLTranslator : ITranslator
         HttpResponseMessage resp;
         try
         {
-            resp = await Http.SendAsync(req, ct);
+            resp = await _http.SendAsync(req, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (OperationCanceledException)
