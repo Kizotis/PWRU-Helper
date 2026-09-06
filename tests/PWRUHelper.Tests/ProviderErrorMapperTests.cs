@@ -687,6 +687,33 @@ public class ProviderErrorMapperTests
         Assert.Equal("hello", doc.RootElement[0][0][0].GetString());
     }
 
+    /// <summary>
+    /// The sniff is the first thing that touches a response, so it may never be the thing that
+    /// throws: a malformed Content-Type has to fall through to the body sniff rather than surface a
+    /// parse failure past the TranslationException contract every caller is written against.
+    /// <para>The second half pins what row 11 hands back when the caller read <b>no body at all</b>
+    /// — which is exactly TranslationService's non-success branch (it passes <c>bodyHead: null</c>):
+    /// the HTML path really was taken, so the head is <b>empty, not null</b>. E1.S5 must therefore
+    /// test the head for emptiness, not just for null, before writing a <c>body=</c> field.</para>
+    /// </summary>
+    [Fact]
+    public void The_sniff_never_throws_on_a_malformed_content_type_and_a_body_less_HTML_path_gives_an_empty_head()
+    {
+        const string page = "<html><body>we're sorry</body></html>";
+        using var garbage = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(page) };
+        garbage.Content.Headers.Remove("Content-Type");
+        garbage.Content.Headers.TryAddWithoutValidation("Content-Type", "not a media type;;");
+
+        Assert.True(ProviderErrorMapper.LooksLikeHtml(garbage, page));   // no throw — the body decides
+        Assert.Equal(TranslationErrorKind.Blocked,
+            ProviderErrorMapper.Classify(garbage, page, null, false, CancellationToken.None));
+
+        using var htmlNoBody = Html(404, "");
+        Assert.Equal(TranslationErrorKind.Blocked,
+            ProviderErrorMapper.Classify(htmlNoBody, null, null, false, CancellationToken.None, out var head));
+        Assert.Equal(string.Empty, head);
+    }
+
     // ---- The de-tagger itself (T2): bounded, single-pass, and not a regex ----------------------
 
     [Fact]

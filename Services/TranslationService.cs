@@ -193,9 +193,13 @@ public class TranslationService : ITranslator
                 int code = (int)resp.StatusCode;
                 // The single classification point (§4.2). keyWasSent is FALSE here — this is the
                 // keyless Google endpoint — which is precisely why its 403 is a Blocked (the
-                // endpoint refusing this network) and not a rejected key. No body is read: E1.S4
-                // is the story that hands the mapper a bodyHead, and reading it here would consume
-                // the stream the parser needs.
+                // endpoint refusing this network) and not a rejected key. STILL no body is read on
+                // this branch, and E1.S4 deliberately left it that way: the sniff it added sits on
+                // the success path, where the body is already in hand. Row 11 therefore sees only
+                // this response's Content-Type here — an error status that declares text/html reads
+                // as Blocked with an empty head, and the measured 429 keeps its RateLimited from
+                // row 4 by the shorter road. Reading an error body belongs to the story that needs
+                // it: E1.S5 wants it for the log's `body=` field, E2.S5 owns the shared shape.
                 // The mapper's caller contract, honoured rather than only quoted: row 1 returns the
                 // cancel Kind whenever the token is cancelled, and every line below hands `kind`
                 // straight to a TranslationException — the one construction TranslationErrors.cs
