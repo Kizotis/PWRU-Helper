@@ -233,6 +233,20 @@ internal sealed class ProviderGate
     private static readonly TimeSpan RefillPeriod =
         TimeSpan.FromMilliseconds(TranslationPolicy.MinSpacingMs);
 
+    /// <summary>
+    /// How far below its floor the bucket may sit and still count as at it. <c>_tokens</c> is a
+    /// <c>double</c>, so a level that is arithmetically exactly at the floor lands a few ULPs under
+    /// it on perfectly ordinary timings: two requests 0.4 × <c>MinSpacingMs</c> apart and a third
+    /// 0.6 × later leave <c>0.4 + 0.6 = 0.9999999999999999</c>. Without this the gate answers
+    /// <c>Wait(0 ticks)</c> — "come back immediately" — which a caller obeys and is refused again at
+    /// the same instant: a spin, not a pause, and a refusal that names no delay is not a decision
+    /// E3.S3 or E5.S1 can act on. One clock tick's worth of refill (100 ns) is finer than any
+    /// instant <c>DateTimeOffset</c> can distinguish, so nothing the ceiling means to refuse gets
+    /// through on it — and it makes the shortest <c>Wait</c> the bucket can return exactly one tick.
+    /// Declared after <see cref="RefillPeriod"/> because static initialisers run in textual order.
+    /// </summary>
+    private static readonly double TokenEpsilon = 1.0 / RefillPeriod.Ticks;
+
     /// <summary>The block the gate actually enforces: the later of the two timelines, or
     /// <c>null</c> (closed) when neither stands. Read under <c>_lock</c> like the fields it reads.</summary>
     private DateTimeOffset? BlockedUntil =>
@@ -317,6 +331,23 @@ internal sealed class ProviderGate
                 // the old probe could no longer be running, not now — so the defer window below is
                 // measured from that instant and a Background caller does not restart it by asking.
                 eligibleAt = _probeStartedAt + ProbeTimeout;
+
+                // …but never re-arm THROUGH a block that landed while the probe was out. Ruling
+                // E2-h is what makes that state reachable and this branch predates it: a stale
+                // in-flight 429 or 401 is still classified against §5.3 and still sets a window,
+                // yet it may no longer release the latch — so `_probeOutstanding` can now be true
+                // with a brand-new block standing under it, and an abandonment (a cancel
+                // mid-probe, which by I3 never reports at all, or a crash) leaves it there. Read
+                // off the probe timeout alone, this branch then handed a caller a real request
+                // every ProbeTimeout straight through the window the provider had just asked for
+                // — and, on an `AuthFailed` MaxValue, through the one block only ClearAuthBlock
+                // may lift (AC 4). The gate is eligible at the LATER of the two instants; until
+                // then it is simply Open, which is also what `Snapshot()` already reports.
+                if (BlockedUntil is { } standing)
+                {
+                    if (now < standing) return GateDecision.Open(standing);
+                    if (standing > eligibleAt) eligibleAt = standing;
+                }
             }
             else if (BlockedUntil is { } until)
             {
@@ -335,17 +366,32 @@ internal sealed class ProviderGate
             // ---- 3. the rate ceiling (§5.4). Written as a floor derived from BucketCapacity, not
             // as a hard-coded 2, so E2.S7 can move the capacity without silently deleting the
             // reserve: Background needs the whole bucket, Interactive needs one token.
+            //
+            // At BucketCapacity = 2 this IS §5.4's rule word for word — "Background may draw the
+            // bucket down but may not take the last token; one token of the capacity-2 bucket is
+            // reserved for Interactive" — because leaving one behind and requiring a full bucket
+            // are the same statement when the capacity is two. They are NOT the same statement at
+            // any other capacity: at 5, "may not take the last token" is `tokens >= 2` while this
+            // line says `tokens >= 5`, which reserves four and lets a steady Interactive trickle
+            // starve Background outright. E2.S7 (U9) is the story that may move the capacity, and
+            // this is the line it must read before it does — the reserve is one token, not the
+            // difference between the capacity and one.
             var floor = priority == RequestPriority.Background ? TranslationPolicy.BucketCapacity : 1;
             var tokens = Refill(now);
 
-            if (tokens < floor)
+            if (tokens + TokenEpsilon < floor)
                 // The time to the next token THIS caller is allowed to take. Computed against the
                 // caller's own floor, or a Background caller would be told to come back 500 ms too
                 // early and be refused again — the same request twice, which is the behaviour this
-                // epic exists to remove.
+                // epic exists to remove. Never zero and never negative: `tokens` is below `floor`
+                // by more than TokenEpsilon here, which is one tick's worth of refill.
                 return GateDecision.Wait(RefillPeriod * (floor - tokens));
 
-            _tokens = tokens - 1;               // spent: the caller is about to make a real request
+            // Spent: the caller is about to make a real request. Floored at zero because the
+            // TokenEpsilon above admits a caller sitting a few ULPs under its floor, and a level
+            // that went very slightly negative would be a debt nobody meant to record — `_tokens`
+            // is a level, and levels do not go below empty.
+            _tokens = tokens > 1 ? tokens - 1 : 0;
 
             if (eligibleAt is null) return GateDecision.Allow;
 
@@ -543,6 +589,26 @@ internal sealed class ProviderGate
             _probeOutstanding = false;
             _probeToken = 0;                        // whatever was in flight can no longer resolve it
             _cleanSince = _clock();                 // the gate is closed: a clean run starts here
+        }
+    }
+
+    /// <summary>
+    /// <b>Test-only seam.</b> Empties the rate-ceiling bucket as of now, so a case can reach the one
+    /// state <c>TryEnter</c>/<c>Report*</c> cannot produce from outside with today's constants:
+    /// probe-eligible <i>and</i> broke. (The shortest block window any <see cref="GatePolicy"/> can
+    /// set is <c>SoftCooldownSecs</c>, which already refills <c>BucketCapacity × MinSpacingMs</c>,
+    /// so by the time a window elapses the bucket is full. That is a relationship E2.S7 can change,
+    /// not a law — which is why the guard it feeds is not dead code but one <c>if</c> ordering away
+    /// from R-01.) No production code calls this, and nothing else may: it exists because reflecting
+    /// on this class's own private fields from the suite makes a rename read as a passing test.
+    /// Takes the lock like every other mutator.
+    /// </summary>
+    internal void DrainBucketForTests()
+    {
+        lock (_lock)
+        {
+            _tokens = 0;
+            _tokensAt = _clock();
         }
     }
 
