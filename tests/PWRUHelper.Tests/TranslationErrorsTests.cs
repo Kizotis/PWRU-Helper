@@ -1,5 +1,6 @@
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using PWRUHelper.Services;
@@ -74,6 +75,47 @@ public class TranslationErrorsTests
         Assert.Equal("PWRUHelper.Services", typeof(TranslationErrorKind).Namespace);
     }
 
+    // ---- AC 2: the throw sites state the Kind §4.2 assigns ----------------------------------
+
+    /// <summary>
+    /// DeepL's status switch, driven through the E1.S1 handler seam. Pinned because AC 2 says each
+    /// throw site states the `Kind` of the §4.2 table, and only a test can say whether it still
+    /// does — the sentences are identical for two of these codes, so reading the message cannot
+    /// tell them apart. Row 10 (5xx ⇒ Unavailable) is the one a status switch forgets.
+    /// </summary>
+    [Theory]
+    [InlineData(401, TranslationErrorKind.AuthFailed)]      // §4.2 row 5
+    [InlineData(403, TranslationErrorKind.AuthFailed)]      // row 7 — a key is always sent on this path
+    [InlineData(429, TranslationErrorKind.RateLimited)]     // row 4
+    [InlineData(456, TranslationErrorKind.QuotaExhausted)]  // row 9
+    [InlineData(500, TranslationErrorKind.Unavailable)]     // row 10
+    [InlineData(503, TranslationErrorKind.Unavailable)]     // row 10
+    [InlineData(400, TranslationErrorKind.Unknown)]         // row 13
+    public async Task DeepL_status_codes_carry_the_Kind_of_section_4_2(int status, TranslationErrorKind expected)
+    {
+        var deepl = new DeepLTranslator("key:fx", new FakeHandler().Respond((HttpStatusCode)status, "{}"));
+
+        var ex = await Assert.ThrowsAsync<TranslationException>(
+            () => deepl.TranslateAsync("привет", "ru", "en"));
+        Assert.Equal(expected, ex.Kind);
+    }
+
+    /// <summary>
+    /// Google's non-transient branch, which still folds 403 in with 400/404 and therefore stays
+    /// `Unknown` until E1.S3's mapper splits it. Pinned so the provisional value is a decision on
+    /// record rather than something a later edit can drift away from unnoticed. 400 is chosen
+    /// because it throws on the first attempt — no retry delay, no sleeping test.
+    /// </summary>
+    [Fact]
+    public async Task Googles_non_transient_status_is_the_Unknown_placeholder_until_E1_S3()
+    {
+        var google = new TranslationService(new FakeHandler().Respond(HttpStatusCode.BadRequest, "nope"));
+
+        var ex = await Assert.ThrowsAsync<TranslationException>(
+            () => google.TranslateAsync("привет", "ru", "en"));
+        Assert.Equal(TranslationErrorKind.Unknown, ex.Kind);
+    }
+
     // ---- TP-MAP-17 -------------------------------------------------------------------------
 
     /// <summary>
@@ -91,6 +133,10 @@ public class TranslationErrorsTests
 
         // Non-vacuity: a scan that found nothing (wrong root, wrong filter) would pass silently.
         Assert.True(files.Count > 20, $"the scan found only {files.Count} production .cs files");
+        // Over-reach is the other failure mode, and it is not hypothetical: this file's own message
+        // three lines below names the banned token, so a scan that swallows the test project fails
+        // on itself. See ProductionSources for how that happened.
+        Assert.DoesNotContain(files, f => f.Replace('\\', '/').Contains("/tests/", StringComparison.OrdinalIgnoreCase));
         var throwers = files.Where(f => File.ReadAllText(f).Contains("throw new TranslationException("))
                             .Select(Path.GetFileName)
                             .ToList();
@@ -108,20 +154,30 @@ public class TranslationErrorsTests
         }
     }
 
-    /// <summary>Every app .cs file: the repo root minus the test project and the build outputs.</summary>
+    /// <summary>
+    /// Every app .cs file: the repo root minus the test project, the build outputs and the tool /
+    /// VCS directories. Matched on whole path SEGMENTS rather than substrings, because both
+    /// substring forms were wrong: <c>"/obj/"</c> never matches the repo-root <c>obj/</c> (no leading
+    /// slash), and the <c>"tests/"</c> PREFIX misses a second copy of the test project — which this
+    /// repo really has, under <c>.claude/worktrees/&lt;name&gt;/tests/</c>. That copy would be read as
+    /// production source, and since the assertion message above names the very token it bans, the
+    /// case failed on its own text: green in CI (a clean checkout has no worktrees), red on the
+    /// owner's machine.
+    /// </summary>
     private static List<string> ProductionSources()
     {
         var root = RepoRoot();
         return Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
-            .Where(f =>
-            {
-                var rel = Path.GetRelativePath(root, f).Replace('\\', '/');
-                return !rel.StartsWith("tests/", StringComparison.OrdinalIgnoreCase)
-                    && !rel.Contains("/bin/", StringComparison.OrdinalIgnoreCase)
-                    && !rel.Contains("/obj/", StringComparison.OrdinalIgnoreCase);
-            })
+            .Where(f => Path.GetRelativePath(root, f)
+                            .Split('/', '\\')
+                            .SkipLast(1)    // directory segments only — the file name is not a folder
+                            .All(seg => !Skipped.Contains(seg) && !seg.StartsWith('.')))
             .ToList();
     }
+
+    // ".git", ".claude" (worktrees, agent scratch) and friends are covered by the leading-dot rule.
+    private static readonly HashSet<string> Skipped =
+        new(StringComparer.OrdinalIgnoreCase) { "tests", "bin", "obj" };
 
     private static string RepoRoot()
     {

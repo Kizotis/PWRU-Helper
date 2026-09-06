@@ -131,6 +131,10 @@ public class DeepLTranslator : ITranslator
                         "DeepL free quota is used up for this month."),
                     429 => (TranslationErrorKind.RateLimited,
                         "DeepL is rate-limiting right now — try again shortly."),
+                    // §4.2 row 10: a 5xx is Unavailable at every provider. It shares the generic
+                    // sentence below (unchanged), but it must not land in Unknown — Unknown is the
+                    // last resort and a DeepL outage is the commonest failure there is.
+                    >= 500 => (TranslationErrorKind.Unavailable, $"DeepL service error (HTTP {code})."),
                     _ => (TranslationErrorKind.Unknown, $"DeepL service error (HTTP {code})."),
                 };
                 throw new TranslationException(kind, message);

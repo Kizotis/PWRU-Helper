@@ -17,11 +17,11 @@ public enum TranslationErrorKind
     AuthFailed,         // 401, or 403 while a key was sent
     Cancelled,          // a genuine user cancel — see the rule below
     AllProvidersPaused, // every tier in the chain was gate-open or failed
-    Unknown,            // the classifier's last resort; must never become common
+    Unknown,            // the mapper's last resort; must never become common
 }
 
 // The Cancelled contract, verbatim from the architecture (§4.1): Kind.Cancelled exists so the
-// classifier is a total function, but a provider that recognises a genuine cancellation RETHROWS
+// mapper is a total function, but a provider that recognises a genuine cancellation RETHROWS
 // the OperationCanceledException — it never wraps it. A TranslationException with Kind.Cancelled
 // must never be constructed. Wrapping one would turn every HttpClient timeout (an OCE whose token
 // is NOT cancelled) into a phantom user-cancel: the fallback stops firing and the LIVE indicator
