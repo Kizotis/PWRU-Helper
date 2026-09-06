@@ -216,3 +216,16 @@ Paige (WD/VD): `SYNTHESE.md` — per problem: top-3 causes with evidence, quick 
 - **Implementation order for E1**: S1 → S2 → S7 → S3 → S4 → S5 → S6 (S7 pulled forward; S4 depends on it).
 
 **Mission status:** Phases 0–3 complete. **Phase 4 (implementation, story by story, Amelia DS then CR) starts only on the owner's explicit go.**
+
+---
+
+## Phase 4 — Implementation (owner's go given 2026-09-06: "go pour la Phase 4, ne t'arrête pas")
+
+Continuous execution, story by story: Amelia **DS** (test-first, one commit) then Amelia **CR** (fix-or-record, story → `done`). Code lives on `feature/p2-a0-testable-foundation` (worktree `.claude/worktrees/p4-code`), **stacked on this docs branch** so the stories can cite these documents; the PR retargets to `main` when PR #54 merges. One PR per release cut (A.0 = E1). Stops only on an owner-dependent block (first known: E3.S1/S2 network captures U1/U2 from a connection the owner designates — never the dev box).
+
+| Story | DS commit | CR verdict / commit | Tests | Notes |
+|---|---|---|---|---|
+| E1.S1 HTTP handler seam | `1f94439` | approve-with-fixes · `1a62eb6` | 256 → 268 green, 2 s | 11 review fixes (UA pin, public ctor restored, no reflection); 9 items recorded for E1.S3+. PR line: shared clients now on `SocketsHttpHandler` with `PooledConnectionLifetime = 2 min` — the only behaviour-adjacent change of increment 0. |
+
+### Field data received during Phase 4
+- [`01-demarrage/mesures-resultats-machine-2.md`](01-demarrage/mesures-resultats-machine-2.md) — owner's personal machine (Defender-default, BAFS armed, MSI install, no MOTW): **known hash starts in ~1.1 s** (pre-process 3–29 ms); Google `gtx` healthy from that connection. Two follow-up runs requested (after reboot; fresh MOTW download).
