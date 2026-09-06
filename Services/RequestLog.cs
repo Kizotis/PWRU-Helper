@@ -265,14 +265,24 @@ internal static class RequestLog
         catch { return null; }
     }
 
+    /// <summary>The names that stand immediately in front of something a report may not carry: the
+    /// parameter that holds the user's sentence, and the parameters that hold a credential. A page
+    /// that quotes the request it refused quotes them by name, so the name is where the head stops.
+    /// Matched case-insensitively and only at a word boundary, so prose cannot trip them.</summary>
+    private static readonly string[] EchoMarkers =
+    {
+        "q=", "key=", "auth_key", "api_key", "apikey", "token=", "bearer ", "authorization",
+    };
+
     /// <summary>
     /// Where a body head stops being the server's prose and starts being an echo of the request.
-    /// The gate above keeps the provider's JSON out; this covers the other way user text can reach
-    /// a page — an interstitial or proxy error that quotes the URL it refused, which carries the
-    /// sentence in <c>q=</c> and percent-escaped. Google's own /sorry/ page does not do this, but
-    /// "the page we have seen does not" is not a rule, and I11 has to hold for the page we have not
-    /// seen. Cutting at the first <c>q=</c>, <c>://</c> or <c>%XX</c> keeps the sentence that
-    /// identifies the block and drops everything after it.
+    /// The gate above keeps the provider's JSON out; this covers the other way user text — or a key
+    /// — can reach a page: an interstitial or proxy error that quotes the request it refused, which
+    /// carries the sentence in <c>q=</c> (percent-escaped, or as HTML entities) and, for a keyed
+    /// provider, the credential beside it. Google's own /sorry/ page does none of this, but "the
+    /// page we have seen does not" is not a rule, and I11 has to hold for the page we have not seen.
+    /// Cutting at the first escape (<c>%XX</c>), entity (<c>&amp;#</c>), scheme (<c>://</c>) or
+    /// named parameter keeps the sentence that identifies the block and drops everything after it.
     /// </summary>
     private static int FirstEcho(string head)
     {
@@ -280,9 +290,16 @@ internal static class RequestLog
         {
             char c = head[i];
             if (c == '%' && i + 2 < head.Length && IsHex(head[i + 1]) && IsHex(head[i + 2])) return i;
+            if (c == '&' && i + 1 < head.Length && head[i + 1] == '#') return i;
             if (c == ':' && i + 2 < head.Length && head[i + 1] == '/' && head[i + 2] == '/') return i;
-            if ((c == 'q' || c == 'Q') && i + 1 < head.Length && head[i + 1] == '='
-                && (i == 0 || !char.IsLetterOrDigit(head[i - 1]))) return i;
+
+            // Mid-word: `unique=` is not `q=`, and `monkey=` is not `key=`.
+            if (i > 0 && char.IsLetterOrDigit(head[i - 1])) continue;
+            foreach (var marker in EchoMarkers)
+                if (i + marker.Length <= head.Length &&
+                    string.Compare(head, i, marker, 0, marker.Length,
+                        StringComparison.OrdinalIgnoreCase) == 0)
+                    return i;
         }
         return head.Length;
     }
@@ -295,23 +312,51 @@ internal static class RequestLog
     /// <summary>One line for an attempt that ended on a real response.</summary>
     internal static void Emit(Call call, int attempt, TimeSpan elapsed, int burst60,
         HttpResponseMessage resp, string? body) =>
-        Write(() => Line(call, attempt, ResponseFacts.Of(resp, body), elapsed, burst60));
+        Write(call, StatusOf(resp),
+            () => Line(call, attempt, ResponseFacts.Of(resp, body), elapsed, burst60));
 
     /// <summary>One line for an attempt that ended in a transport exception.</summary>
     internal static void Emit(Call call, int attempt, TimeSpan elapsed, int burst60, Exception transport) =>
-        Write(() => Line(call, attempt, ResponseFacts.OfTransport(transport), elapsed, burst60));
+        Write(call, transport == null ? Nothing : transport.GetType().Name,
+            () => Line(call, attempt, ResponseFacts.OfTransport(transport), elapsed, burst60));
 
     /// <summary>One line for an attempt whose response is already gone — the parse failure.</summary>
     internal static void EmitStatus(Call call, int attempt, TimeSpan elapsed, int burst60,
         int status, string? body) =>
-        Write(() => Line(call, attempt, ResponseFacts.OfStatus(status, body), elapsed, burst60));
+        Write(call, status <= 0 ? Nothing : status.ToString(),
+            () => Line(call, attempt, ResponseFacts.OfStatus(status, body), elapsed, burst60));
+
+    /// <summary>The status the suppressor keys on, read without building the rest of the line —
+    /// a suppressed attempt must not pay for the line it is not going to write.</summary>
+    private static string StatusOf(HttpResponseMessage? resp)
+    {
+        try { return resp == null ? Nothing : ((int)resp.StatusCode).ToString(); }
+        catch { return Nothing; }
+    }
+
+    /// <summary>The per-provider storm valve (see <see cref="LogSuppressor"/>). Shared by the
+    /// process, because the thing it protects — the 1 MB log — is shared by the process.</summary>
+    internal static readonly LogSuppressor Suppression = new();
+
+    /// <summary>A test that asserts an exact line count has to take this static the way it takes
+    /// <c>Logging.DirectoryOverride</c>: the run the suppressor counts is process-wide.</summary>
+    internal static void ResetSuppression() => Suppression.Reset();
 
     // Logging must never be the thing that breaks a feature — Logging.cs:89 keeps that property for
     // the WRITE, and this keeps it for the BUILD. A diagnostic that can cost a translation is not a
     // diagnostic.
-    private static void Write(Func<string> build)
+    private static void Write(Call call, string status, Func<string> build)
     {
-        try { Logging.Warn(build()); }
+        try
+        {
+            // Provider and status are sanitised HERE and not inside the suppressor: they are the
+            // two things a summary line renders, and everything a server controls has to be
+            // bounded, printable, single-line ASCII before it can reach the file.
+            var decision = Suppression.Note(Ascii(call.Provider, 24), Ascii(status, 32),
+                DateTimeOffset.UtcNow);
+            if (decision.Summary != null) Logging.Warn(decision.Summary);
+            if (decision.Write) Logging.Warn(build());
+        }
         catch { /* best-effort, exactly like the writer underneath it */ }
     }
 
@@ -382,8 +427,12 @@ internal sealed class BurstCounter
     {
         lock (_gate)
         {
+            // Trim FIRST. A queue still holding a pathological minute of hits that have since left
+            // the window would otherwise refuse this one at the cap and then report 0 for it — the
+            // first request after a storm reading as "no traffic at all" is the opposite of true.
+            Trimmed(now);
             if (_hits.Count < Cap) _hits.Enqueue(now);
-            return Trimmed(now);
+            return _hits.Count;
         }
     }
 
@@ -398,5 +447,98 @@ internal sealed class BurstCounter
         var cutoff = now - _window;
         while (_hits.Count > 0 && _hits.Peek() < cutoff) _hits.Dequeue();
         return _hits.Count;
+    }
+}
+
+/// <summary>
+/// The storm valve. One failing attempt writes one line, which is the point — but a LIVE loop
+/// meeting a hard 429 fails <b>every</b> request, and at LIVE rates three lines per logical call
+/// is a few hundred lines a minute. The log is capped at 1 MB with one rollover
+/// (<c>Logging.cs:69,95-105</c>), so a storm that ran for a few minutes would roll away the
+/// beginning of the incident — the part that says what the app was doing when the block arrived,
+/// which is the only part nobody can reconstruct afterwards.
+///
+/// <para>So: the first <see cref="Threshold"/> consecutive lines with the same
+/// <c>provider</c> + <c>status</c> are written in full, and after that the run goes quiet and is
+/// represented by <b>one</b> summary line per window carrying the count. Anything that changes —
+/// a different status, a different provider, the storm ending — ends the run and flushes what it
+/// held, so no suppressed line is ever silently lost.</para>
+///
+/// <para>The clock is the caller's, exactly like <see cref="BurstCounter"/>'s: a test needs no
+/// wall clock, and E2's injected clock can drive this when the emission moves into
+/// <c>HttpProviderCore</c>.</para>
+/// </summary>
+internal sealed class LogSuppressor
+{
+    /// <summary>How many identical lines are worth writing before the run stops being evidence and
+    /// starts being noise. Three attempts of one logical call plus a couple of repeats still read
+    /// in full; a loop hammering a closed door does not.</summary>
+    internal const int Threshold = 10;
+
+    /// <summary>What the caller should do with this line, and the summary line (if any) that has to
+    /// be written before it.</summary>
+    internal readonly record struct Decision(bool Write, string? Summary);
+
+    private readonly object _gate = new();
+    private readonly TimeSpan _window;
+    private readonly int _threshold;
+
+    private string? _signature;     // provider + status of the run in progress
+    private int _run;               // how many lines that run has seen, written or not
+    private int _held;              // how many of them were not written
+    private DateTimeOffset _since;  // when the current summary window opened
+
+    internal LogSuppressor(int threshold = Threshold,
+        int windowSeconds = RequestLog.BurstWindowSeconds)
+    {
+        _threshold = threshold;
+        _window = TimeSpan.FromSeconds(windowSeconds);
+    }
+
+    /// <summary>Records one line about to be emitted and answers whether to write it.</summary>
+    internal Decision Note(string provider, string status, DateTimeOffset now)
+    {
+        var signature = provider + " status=" + status;
+        lock (_gate)
+        {
+            if (signature != _signature)
+            {
+                // A different failure is new information: end the old run, report what it held.
+                var flushed = Flush(now);
+                _signature = signature;
+                _run = 1;
+                _held = 0;
+                _since = now;
+                return new Decision(true, flushed);
+            }
+
+            if (++_run <= _threshold) return new Decision(true, null);
+
+            _held++;
+            return now - _since >= _window
+                ? new Decision(false, Flush(now))
+                : new Decision(false, null);
+        }
+    }
+
+    /// <summary>Forgets the run in progress. For tests that assert an exact line count — the run is
+    /// process-wide, so a class that counts lines has to start from a known state.</summary>
+    internal void Reset()
+    {
+        lock (_gate) { _signature = null; _run = 0; _held = 0; }
+    }
+
+    /// <summary>The line that stands in for the ones that were not written. Same <c>tr </c> family
+    /// and the same field names as the lines it replaces, so the report is still one stream — and
+    /// it carries strictly less than they did.</summary>
+    private string? Flush(DateTimeOffset now)
+    {
+        if (_held == 0) return null;
+        var seconds = (long)Math.Max(0, (now - _since).TotalSeconds);
+        var line = $"tr provider={_signature} suppressed={_held} in={seconds}s " +
+                   "(identical lines not written)";
+        _held = 0;
+        _since = now;
+        return line;
     }
 }

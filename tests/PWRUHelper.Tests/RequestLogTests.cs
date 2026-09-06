@@ -235,6 +235,86 @@ public class RequestLogTests
     }
 
     // ---------------------------------------------------------------------------------------
+    //  I11 — adversarial: the three shapes that would leak if the gate were only a content-type
+    //  check. Each one is a real answer a real endpoint can return, not a hypothetical.
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// <b>Adversarial 1 — the provider's own answer, relabelled.</b> Google's JSON echoes the source
+    /// sentence AND the detected language back at us, and a corporate proxy is free to hand it over
+    /// as <c>text/plain</c>. That is the worst case on purpose: §4.3's wider rule reads a
+    /// non-JSON content-type as "a page", so the app itself decides this 200 is a block page and
+    /// hands the body to the log. The body gate is narrower — markup only — so the sentence still
+    /// never becomes <c>body=</c>. Driven end to end: the relabelling is a response-level fact a
+    /// unit test on the gate cannot express.
+    /// </summary>
+    [Fact]
+    public async Task I11_the_providers_own_json_relabelled_text_plain_never_becomes_a_body()
+    {
+        var echo = $"[[[\"hello\",\"{Sentinel}\",null,null,10]],null,\"ru\"]";
+        var lines = await FailingCall("zz", "qj",
+            h => h.Respond(HttpStatusCode.OK, echo, "text/plain"));
+
+        Assert.NotEmpty(lines);
+        foreach (var line in lines)
+        {
+            Assert.DoesNotContain("body=", line);
+            Assert.DoesNotContain("KIZOTIS-SENTINEL", line, StringComparison.Ordinal);
+            Assert.DoesNotContain("привет", line, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// <b>Adversarial 2 — the query hidden in markup rather than in prose.</b> A block page that
+    /// offers a "try again" form carries the sentence in an attribute, and its retry link carries it
+    /// percent-encoded in an <c>href</c>. Neither is visible text, so the de-tagger drops both; the
+    /// entity-encoded third form is cut by the echo rule. What survives is the page's own sentence,
+    /// which is the only thing the field is for.
+    /// </summary>
+    [Fact]
+    public void I11_a_query_hidden_in_an_attribute_or_a_link_never_reaches_the_head()
+    {
+        var head = RequestLog.BodyHead(
+            "<html><body>" +
+            $"<form><input name=\"q\" value=\"{Sentinel}\"></form>" +
+            "<a href=\"/translate_a/single?q=%D0%BF%D1%80%D0%B8%D0%B2%D0%B5%D1%82+KIZOTIS-SENTINEL-4711\">try again</a>" +
+            "<p>Your request was refused.</p></body></html>");
+
+        Assert.NotNull(head);
+        Assert.DoesNotContain("KIZOTIS-SENTINEL", head!, StringComparison.Ordinal);
+        Assert.DoesNotContain("привет", head!, StringComparison.Ordinal);
+        Assert.DoesNotContain("%D0", head!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("refused", head!, StringComparison.Ordinal);
+
+        // The same sentence as HTML entities — visible text this time, and still not the page's.
+        Assert.Equal("Blocked:", RequestLog.BodyHead(
+            "<p>Blocked: &#x43F;&#x440;&#x438;&#x432;&#x435;&#x442;</p>"));
+    }
+
+    /// <summary>
+    /// <b>Adversarial 3 — a credential echoed by an error page.</b> No keyed provider emits a line
+    /// in this story (DeepL joins at E2.S5), but the gate is what E2.S5 will inherit, and a keyed
+    /// provider's HTML error page naming the parameter it rejected is exactly how a key would walk
+    /// into a report pasted to Discord. The head stops at the parameter's NAME.
+    /// </summary>
+    [Theory]
+    [InlineData("<p>Authentication failed for auth_key=KIZOTIS-DEEPL-KEY-0000-1111:fx</p>",
+                "Authentication failed for")]
+    [InlineData("<p>Rejected: api_key KIZOTIS-DEEPL-KEY-0000-1111</p>", "Rejected:")]
+    [InlineData("<p>Bad token=KIZOTIS-DEEPL-KEY-0000-1111</p>", "Bad")]
+    [InlineData("<p>Use Bearer KIZOTIS-DEEPL-KEY-0000-1111 instead</p>", "Use")]
+    // The guard the cut must not trip on: prose, not a parameter.
+    [InlineData("<p>The monkey= sign is not a key</p>", "The monkey= sign is not a key")]
+    public void I11_an_api_key_echoed_by_an_error_page_is_cut_at_the_parameter_name(
+        string body, string expected)
+    {
+        var head = RequestLog.BodyHead(body);
+
+        Assert.Equal(expected, head);
+        Assert.DoesNotContain("KIZOTIS-DEEPL-KEY", head ?? "", StringComparison.Ordinal);
+    }
+
+    // ---------------------------------------------------------------------------------------
     //  burst60
     // ---------------------------------------------------------------------------------------
 
@@ -252,6 +332,103 @@ public class RequestLogTests
         // 59 s later they are all still in the window; 61 s later none of them is.
         Assert.Equal(37, counter.Count(t0.AddSeconds(59)));
         Assert.Equal(1, counter.Note(t0.AddSeconds(61)));
+    }
+
+    /// <summary>A minute of hits that have since left the window must not make the next one
+    /// invisible: the cap exists to bound memory, not to lose the request that follows a storm.</summary>
+    [Fact]
+    public void The_burst_counter_counts_the_first_request_after_a_capped_storm()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 6, 13, 29, 0, TimeSpan.Zero);
+        var counter = new BurstCounter();
+
+        for (int i = 0; i < 5000; i++) counter.Note(t0);     // past the 4096 cap
+        Assert.Equal(1, counter.Note(t0.AddSeconds(120)));   // the storm is long gone
+    }
+
+    // ---------------------------------------------------------------------------------------
+    //  The storm valve
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A LIVE loop meeting a hard 429 fails every request, and three lines per logical call at LIVE
+    /// rates would roll the 1 MB log in minutes — taking the beginning of the incident with it, the
+    /// one part nobody can reconstruct afterwards. So an identical failure goes quiet after
+    /// <see cref="LogSuppressor.Threshold"/> lines and is represented by one summary per window.
+    /// </summary>
+    [Fact]
+    public void An_identical_failure_goes_quiet_after_the_threshold_and_reports_what_it_held()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 6, 13, 29, 0, TimeSpan.Zero);
+        var valve = new LogSuppressor();
+
+        // The first N are evidence and are written in full — a retried call is not a storm.
+        for (int i = 0; i < LogSuppressor.Threshold; i++)
+        {
+            var d = valve.Note("google-gtx", "429", t0.AddSeconds(i * 0.5));
+            Assert.True(d.Write);
+            Assert.Null(d.Summary);
+        }
+
+        // After that the run is silent, and silent means silent: no line, no summary.
+        for (int i = 0; i < 200; i++)
+        {
+            var d = valve.Note("google-gtx", "429", t0.AddSeconds(10 + i * 0.1));
+            Assert.False(d.Write);
+            Assert.Null(d.Summary);
+        }
+
+        // One summary per window, carrying the count and nothing a suppressed line did not carry.
+        var minute = valve.Note("google-gtx", "429", t0.AddSeconds(61));
+        Assert.False(minute.Write);
+        Assert.NotNull(minute.Summary);
+        Assert.Matches(@"^tr provider=google-gtx status=429 suppressed=201 in=\d+s ", minute.Summary!);
+    }
+
+    /// <summary>A different failure is new information: it is written, and it flushes what the run
+    /// it interrupted was still holding — so no suppressed line is ever silently lost.</summary>
+    [Fact]
+    public void A_different_status_ends_the_run_and_flushes_its_count()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 6, 13, 29, 0, TimeSpan.Zero);
+        var valve = new LogSuppressor();
+
+        for (int i = 0; i < LogSuppressor.Threshold + 5; i++)
+            valve.Note("google-gtx", "429", t0.AddSeconds(i * 0.1));
+
+        var changed = valve.Note("google-gtx", "503", t0.AddSeconds(3));
+        Assert.True(changed.Write);
+        Assert.Contains("status=429 suppressed=5", changed.Summary);
+
+        // …and the new run starts from zero, so it gets its own full quota of lines.
+        var next = valve.Note("google-gtx", "503", t0.AddSeconds(4));
+        Assert.True(next.Write);
+        Assert.Null(next.Summary);
+    }
+
+    /// <summary>The valve is per provider as well as per status: one provider drowning must not
+    /// silence another (E2.S5 puts every provider through this same emitter).</summary>
+    [Fact]
+    public void A_different_provider_is_never_silenced_by_another_ones_storm()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 6, 13, 29, 0, TimeSpan.Zero);
+        var valve = new LogSuppressor();
+
+        for (int i = 0; i < 100; i++) valve.Note("google-gtx", "429", t0.AddSeconds(i * 0.1));
+
+        Assert.True(valve.Note("deepl", "429", t0.AddSeconds(11)).Write);
+    }
+
+    /// <summary>The three attempts of one logical call are well under the threshold, which is the
+    /// property TP-LOG-04 depends on: the valve must not eat an ordinary retried failure.</summary>
+    [Fact]
+    public void One_retried_call_is_never_suppressed()
+    {
+        var t0 = new DateTimeOffset(2026, 9, 6, 13, 29, 0, TimeSpan.Zero);
+        var valve = new LogSuppressor();
+
+        Assert.All(new[] { 0, 300, 900 },
+            ms => Assert.True(valve.Note("google-gtx", "429", t0.AddMilliseconds(ms)).Write));
     }
 
     // ---------------------------------------------------------------------------------------
@@ -330,6 +507,7 @@ public class RequestLogTests
         try
         {
             Logging.DirectoryOverride = dir;
+            RequestLog.ResetSuppression();
             int before = RequestLog.Burst.Count(DateTimeOffset.UtcNow);
 
             var svc = new TranslationService(new FakeHandler().RespondJson(GoogleOk));
@@ -391,6 +569,7 @@ public class RequestLogTests
         try
         {
             Logging.DirectoryOverride = dir;
+            RequestLog.ResetSuppression();
 
             // The failure is the measured one: a 429 whose body is Google's abuse page. So the log
             // DOES carry a body= — from the server's page — while the user's sentence does not
@@ -446,6 +625,7 @@ public class RequestLogTests
         try
         {
             Logging.DirectoryOverride = dir;
+            RequestLog.ResetSuppression();
 
             var deepl = new FakeHandler().Respond(HttpStatusCode.Forbidden, "{}");
             var google = new FakeHandler().Respond(HttpStatusCode.TooManyRequests, "{}");
@@ -502,6 +682,7 @@ public class RequestLogTests
         try
         {
             Logging.DirectoryOverride = dir;
+            RequestLog.ResetSuppression();
 
             var handler = new FakeHandler();
             script(handler);
