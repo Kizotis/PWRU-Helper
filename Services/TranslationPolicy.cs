@@ -36,7 +36,9 @@ internal static class TranslationPolicy
     /// cannot be confused with §5.6's target <c>MaxAttempts = 2</c>, which E2.S5 introduces —
     /// benchmark-fournisseurs.md §11.4 item 3: three attempts into a hard block triple the abuse
     /// signal for no benefit.</summary>
-    public const int MaxAttemptsToday = 3;          // [CONFIRMED] TranslationService.cs:158 (`attempt < 3`), still a literal there
+    // E1.S5 replaced the literal with this constant, because §10.1's line renders `attempt=n/m` and
+    // an `m` that could drift from the loop's own bound is a log that lies. Same value, same shape.
+    public const int MaxAttemptsToday = 3;          // [CONFIRMED] now the retry loop's bound at TranslationService.cs:179
 
     /// <summary>Base of the linear back-off between those attempts: <c>300 * (attempt + 1)</c>, so
     /// 300 ms then 600 ms. §5.6's target replaces it with exponential + full jitter.</summary>

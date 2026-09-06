@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -25,6 +26,12 @@ public interface ITranslator
 /// </summary>
 public class TranslationService : ITranslator
 {
+    /// <summary>How this endpoint names itself in the diagnostic log. Deliberately `google-gtx` and
+    /// not `google`: it is the id this provider KEEPS once E2.S2 introduces `ProviderIds` and E3
+    /// adds the other Google endpoints, so a field report from today still reads correctly after
+    /// the rename. That registry is where this constant moves.</summary>
+    private const string ProviderId = "google-gtx";
+
     private static readonly HttpClient Http = CreateClient();
 
     private readonly HttpClient _http;
@@ -154,16 +161,38 @@ public class TranslationService : ITranslator
         var url = "https://translate.googleapis.com/translate_a/single?client=gtx" +
                   $"&sl={source}&tl={target}&dt=t&q={HttpUtility.UrlEncode(text)}";
 
+        // E1.S5 — the identity every §10.1 line of this logical call shares, built once. The address
+        // travels as a Uri because RequestLog renders host+path and cannot render a query, and the
+        // text is handed over only to be MEASURED: `Call` keeps its byte and line counts and not the
+        // text itself, so the sentence a player typed has no route into a report they paste to
+        // Discord (I11). `cid` is shared by all three attempts, so one call reads as one event.
+        var endpoint = new Uri(url);
+        var call = RequestLog.ForRequest(ProviderId, endpoint, source, target, text,
+            TranslationPolicy.MaxAttemptsToday);
+
         string? json = null;
-        for (int attempt = 0; attempt < 3; attempt++)
+        // What the parse failure BELOW the loop needs about the attempt that produced `json`: by
+        // then the loop's locals are gone, and re-deriving them would be a second source of truth.
+        int okStatus = 0, okAttempt = 0, okBurst = 0;
+        long okStarted = 0;
+
+        for (int attempt = 0; attempt < TranslationPolicy.MaxAttemptsToday; attempt++)
         {
             ct.ThrowIfCancellationRequested();
+
+            // Every attempt is a request ISSUED, and burst60 counts them all — a failure log that
+            // only counted failures would describe the incident and not the behaviour that caused
+            // it (analyse… §2.3). This increment is the whole price of a successful request: no
+            // header set, no body read, no line (§10.1, and the 1 MB cap at Logging.cs:69,95-105).
+            int burst = RequestLog.Burst.Note(DateTimeOffset.UtcNow);
+            long started = Stopwatch.GetTimestamp();
             try
             {
                 using var resp = await _http.GetAsync(url, ct);
                 if (resp.IsSuccessStatusCode)
                 {
                     json = await resp.Content.ReadAsStringAsync(ct);
+                    (okStatus, okAttempt, okBurst, okStarted) = ((int)resp.StatusCode, attempt, burst, started);
 
                     // §4.3 step 4 — the body is classified BEFORE it is parsed, never after. This
                     // is the story: Google answers a throttled network with an HTML "Sorry..." page
@@ -177,6 +206,13 @@ public class TranslationService : ITranslator
                     ct.ThrowIfCancellationRequested();
                     if (ProviderErrorMapper.LooksLikeHtml(resp, json))
                     {
+                        // E1.S5 — an abuse page served with a 200 is the measured P2 shape
+                        // (benchmark… §3.1), so this attempt "ended non-success or exceptional" and
+                        // gets its line. It is the one case where a body reaches the log, and only
+                        // its de-tagged first 120 characters do; RequestLog decides that, not here.
+                        RequestLog.Emit(call, attempt + 1, Stopwatch.GetElapsedTime(started), burst,
+                            resp, json);
+
                         // Not retried, exactly as an unparseable 200 was not retried before: the
                         // retry DECISION is unchanged (E2.S5 owns it). The sentence is the one the
                         // parser's catch renders today, so nothing the user reads changes here —
@@ -193,13 +229,15 @@ public class TranslationService : ITranslator
                 int code = (int)resp.StatusCode;
                 // The single classification point (§4.2). keyWasSent is FALSE here — this is the
                 // keyless Google endpoint — which is precisely why its 403 is a Blocked (the
-                // endpoint refusing this network) and not a rejected key. STILL no body is read on
-                // this branch, and E1.S4 deliberately left it that way: the sniff it added sits on
-                // the success path, where the body is already in hand. Row 11 therefore sees only
-                // this response's Content-Type here — an error status that declares text/html reads
-                // as Blocked with an empty head, and the measured 429 keeps its RateLimited from
-                // row 4 by the shorter road. Reading an error body belongs to the story that needs
-                // it: E1.S5 wants it for the log's `body=` field, E2.S5 owns the shared shape.
+                // endpoint refusing this network) and not a rejected key. No body is handed to the
+                // CLASSIFIER on this branch, and E1.S4 deliberately left it that way: the sniff it
+                // added sits on the success path, where the body is already in hand. Row 11
+                // therefore sees only this response's Content-Type here — an error status that
+                // declares text/html reads as Blocked with an empty head, and the measured 429
+                // keeps its RateLimited from row 4 by the shorter road. E1.S5 does now READ the
+                // body a few lines below, for the log's `body=` field and for nothing else; it is
+                // deliberately not fed back into `kind`, so this classification is byte-for-byte
+                // what E1.S4 shipped. E2.S5 owns making the two one read.
                 // The mapper's caller contract, honoured rather than only quoted: row 1 returns the
                 // cancel Kind whenever the token is cancelled, and every line below hands `kind`
                 // straight to a TranslationException — the one construction TranslationErrors.cs
@@ -212,6 +250,16 @@ public class TranslationService : ITranslator
                 var kind = ProviderErrorMapper.Classify(resp, bodyHead: null, transport: null,
                     keyWasSent: false, ct);
                 var retryAt = ProviderErrorMapper.RetryAfter(resp, DateTimeOffset.UtcNow);
+
+                // E1.S5 — one line per non-success attempt, emitted BEFORE the throw decisions
+                // below (§5.2), so a 429 retried three times leaves three lines under one cid with
+                // their real spacing. The body is read HERE and nowhere else: E1.S4 deliberately
+                // left this branch body-less, and §10.1's body= is the field that tells a real 429
+                // apart from a captcha page. It is NOT handed to Classify — the Kind above stays
+                // exactly what E1.S4 shipped, and E2.S5's HttpProviderCore is where the two become
+                // one read. Reading cannot fail the request: SafeBodyAsync swallows its own errors.
+                RequestLog.Emit(call, attempt + 1, Stopwatch.GetElapsedTime(started), burst,
+                    resp, await RequestLog.SafeBodyAsync(resp, ct));
 
                 // The retry DECISION is unchanged and stays here: 429 and 5xx are retried, nothing
                 // else. Which Kinds are worth retrying is E2.S5's question, not this story's.
@@ -233,6 +281,13 @@ public class TranslationService : ITranslator
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException)
             {
+                // E1.S5 — an attempt that ended exceptionally, so it gets its line, and it gets it
+                // FIRST: a transport failure that really happened is evidence whatever the caller
+                // does next. The status field is the exception TYPE, which is what discriminates
+                // "no Internet" from "the request timed out" without asking the user (§5.2); the
+                // exception's MESSAGE is never logged, because on this path it can quote the URL.
+                RequestLog.Emit(call, attempt + 1, Stopwatch.GetElapsedTime(started), burst, ex);
+
                 // A network blip keeps its two retries (unchanged). What is new is the exit: on the
                 // last attempt the HttpRequestException used to escape RequestAsync raw — past the
                 // TranslationException contract the caller is written against, and leaving the
@@ -282,6 +337,16 @@ public class TranslationService : ITranslator
             // get here, so what lands in this catch is a body that claimed to be JSON, did not
             // start with '<', and still is not the provider's shape — a genuinely unreadable
             // answer, which is exactly what this Kind and this sentence are for.
+
+            // E1.S5 — the last of §5.2's insertion points: an attempt whose body only became a
+            // failure after the response object was gone. It therefore carries the status that was
+            // kept and the payload size, and `-` for everything a header would have said — §10.1
+            // forbids paying for the header set on the success path, which is what this was. The
+            // body is handed over and REFUSED by construction: it passed the §4.3 sniff, so it is
+            // the provider's own JSON, and the provider's JSON is where the user's text lives.
+            RequestLog.EmitStatus(call, okAttempt + 1, Stopwatch.GetElapsedTime(okStarted), okBurst,
+                okStatus, json);
+
             throw new TranslationException(TranslationErrorKind.BadResponse,
                 "The translation service returned an unexpected response (it may be temporarily blocked). Try again shortly.");
         }

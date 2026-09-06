@@ -4,6 +4,10 @@ using Xunit;
 
 namespace PWRUHelper.Tests;
 
+// Same collection as RequestLogTests: both take Logging.DirectoryOverride away from
+// TestLogRedirect, and it is a process-wide static — two classes swapping it concurrently would
+// each read the other's lines. Serialising them costs nothing and removes a whole class of flake.
+[Collection(LogFileCollection.Name)]
 public class LoggingTests
 {
     private static string TempDir()

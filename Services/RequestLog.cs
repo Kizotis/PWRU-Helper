@@ -1,0 +1,402 @@
+using System.Net.Http;
+using System.Text;
+
+namespace PWRUHelper.Services;
+
+/// <summary>
+/// The per-request diagnostic line of <c>architecture-cible.md</c> §10.1, built here and written
+/// through <see cref="Logging"/>.
+///
+/// It exists because <c>TranslationService</c> logs <b>nothing</b> today, so the About tab's "Copy
+/// error report" (<c>MainWindow.xaml.cs:312-322</c>) is empty for exactly the failure players
+/// report. One line per <b>non-success or exceptional</b> attempt turns the next incident into a
+/// measurement instead of an argument; successes are counted into <c>burst60</c> and never logged,
+/// because the log is capped at 1 MB with one rollover (<c>Logging.cs:69,95-105</c>) and a chatty
+/// success path would evict the evidence.
+///
+/// <para><b>I11 is the whole point.</b> That report is pasted to Discord <i>by design</i>, so the
+/// user's text, the <c>q=</c> that carries it, the full URL and any API key must be unable to reach
+/// this file — not "must be remembered to be left out". Three structural choices do that, and they
+/// are worth more than the assertions that pin them:</para>
+/// <list type="number">
+/// <item>the endpoint travels as a <see cref="Uri"/> and <see cref="Endpoint"/> renders host + path,
+///       so no call site can leak a query by handing over the wrong string;</item>
+/// <item><see cref="Call"/> is built from the request text but keeps only its SIZE, so the text is
+///       not in the record the retry loop carries;</item>
+/// <item><see cref="BodyHead"/> is the only door a body can walk through, and it takes markup only.</item>
+/// </list>
+///
+/// <para>Written as functions rather than as methods on a provider on purpose: <b>E2.S5</b> moves
+/// the emission into <c>HttpProviderCore</c>, where it becomes a call-site change and not a
+/// rewrite.</para>
+/// </summary>
+internal static class RequestLog
+{
+    /// <summary>§10.1 — the de-tagged body head's hard cap.</summary>
+    internal const int MaxBodyChars = 120;
+
+    /// <summary>One header value's share of the line. §10.1's whole line is ~300 characters and a
+    /// server is free to answer with a paragraph, so every value the SERVER controls is bounded.</summary>
+    private const int MaxHeaderChars = 40;
+
+    /// <summary>The trailing window <c>burst60</c> counts over.</summary>
+    internal const int BurstWindowSeconds = 60;
+
+    /// <summary>
+    /// The address family actually used (<c>mecanismes…</c> Q4: rate limiters bucket IPv6 by
+    /// prefix, so a dual-stack machine silently switching families looks like a block that "cleared
+    /// itself"). <b>Not obtainable on this path today</b> — <see cref="HttpClient"/> does not expose
+    /// the socket, and the only cheap way in is a <c>ConnectCallback</c> on the production handler,
+    /// which is a hot-path change this story is not allowed to make. §10.1's own instruction for
+    /// that case is to log <c>?</c> rather than to guess. <b>E2.S5</b>'s <c>HttpProviderCore</c>
+    /// owns the handler and is where the real value arrives.
+    /// </summary>
+    internal const string UnknownAddressFamily = "?";
+
+    /// <summary>The value every absent field renders as, so a reader can tell "the server said
+    /// nothing" from "the field was dropped".</summary>
+    private const string Nothing = "-";
+
+    /// <summary>The rolling request count shared by the whole process. Incremented by <b>every</b>
+    /// request issued, successes included — that is what makes the number comparable with
+    /// <c>analyse…</c> §2.3's volume model.</summary>
+    internal static readonly BurstCounter Burst = new();
+
+    private static int _sequence;
+
+    /// <summary>A short id shared by every attempt of one logical call, so one call reads as one
+    /// event. A counter rather than a Guid: it is cheaper, it is monotonic (which makes two
+    /// interleaved calls readable in the file), and 16 bits is plenty inside one log.</summary>
+    internal static string NewCorrelationId() =>
+        (Interlocked.Increment(ref _sequence) & 0xFFFF).ToString("x4");
+
+    internal static int CountLines(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return 0;
+        int lines = 1;
+        foreach (var c in text!) if (c == '\n') lines++;
+        return lines;
+    }
+
+    // ---- the logical call ----------------------------------------------------------------------
+
+    /// <summary>
+    /// Everything about one logical call that does not change between its attempts — and, just as
+    /// much, everything that must NOT survive into the retry loop. It is built from the request
+    /// <see cref="Uri"/> and the request text, and it keeps neither: the address is already reduced
+    /// to host + path, and the text to its <b>size</b> and <b>line count</b> (§5.2's "payload shape:
+    /// request byte count and line count only"). So the query that carries the user's sentence and
+    /// the sentence itself are not members of the record the line is rendered from, and no later
+    /// change to that rendering can start printing them (I11).
+    /// </summary>
+    internal readonly record struct Call(string Provider, string Endpoint, string Source, string Target,
+        string Cid, int MaxAttempts, int RequestBytes, int RequestLines);
+
+    internal static Call ForRequest(string provider, Uri? endpoint, string source, string target,
+        string? text, int maxAttempts) =>
+        new(provider, Endpoint(endpoint), source, target, NewCorrelationId(), maxAttempts,
+            text == null ? 0 : Encoding.UTF8.GetByteCount(text), CountLines(text));
+
+    // ---- what one attempt produced --------------------------------------------------------------
+
+    /// <summary>
+    /// The response half of the line, captured on the <b>failure path only</b>: building it walks
+    /// the header collection, and §10.1 says a success may cost nothing but the counter increment
+    /// (a tiny footprint is a product requirement). Every factory swallows its own errors — a
+    /// malformed header is a diagnostic problem, never a translation problem.
+    /// </summary>
+    internal readonly record struct ResponseFacts(string Status, string RetryAfter, string ContentType,
+        string Len, string Hdrs, string? Body)
+    {
+        private static readonly string NoHeaders =
+            $"via:{Nothing} srv:{Nothing} xrl:{Nothing} set-cookie:no";
+
+        /// <summary>A real response, plus the body that was read from it (may be null: the caller
+        /// is free not to read one).</summary>
+        internal static ResponseFacts Of(HttpResponseMessage? resp, string? body)
+        {
+            if (resp == null) return OfStatus(0, body);
+            try
+            {
+                return new ResponseFacts(
+                    ((int)resp.StatusCode).ToString(),
+                    HeaderValue(resp, "Retry-After"),
+                    Ascii(resp.Content?.Headers?.ContentType?.MediaType, 40),
+                    Length(resp, body),
+                    Headers(resp),
+                    BodyHead(body));
+            }
+            catch { return new ResponseFacts(((int)resp.StatusCode).ToString(), Nothing, Nothing, Nothing, NoHeaders, null); }
+        }
+
+        /// <summary>A transport failure: no response at all, so the status becomes the exception
+        /// TYPE — §5.2's "discriminates E1/E2/E3/E5/E6 without asking the user". The exception's
+        /// MESSAGE is never logged: on this path it can quote a URL.</summary>
+        internal static ResponseFacts OfTransport(Exception? ex) =>
+            new(ex == null ? Nothing : ex.GetType().Name, Nothing, Nothing, Nothing, NoHeaders, null);
+
+        /// <summary>A failure discovered after the response object is gone — the parse failure below
+        /// the retry loop. The status is the one that was kept; the header-derived fields read
+        /// <c>-</c> because §10.1 forbids paying for them on the success path, which is where this
+        /// response was still a success.</summary>
+        internal static ResponseFacts OfStatus(int status, string? body) =>
+            new(status <= 0 ? Nothing : status.ToString(), Nothing, Nothing,
+                body == null ? Nothing : Encoding.UTF8.GetByteCount(body).ToString(),
+                NoHeaders, BodyHead(body));
+
+        private static string Length(HttpResponseMessage resp, string? body)
+        {
+            var declared = resp.Content?.Headers?.ContentLength;
+            if (declared is { } n) return n.ToString();
+            return body == null ? Nothing : Encoding.UTF8.GetByteCount(body).ToString();
+        }
+
+        // §5.2's "other headers": the proxy / interstitial detectors, plus a presence-only flag for
+        // Set-Cookie (its value is a session token and has no place in a report).
+        private static string Headers(HttpResponseMessage resp) =>
+            $"via:{HeaderValue(resp, "Via")} srv:{HeaderValue(resp, "Server")} " +
+            $"xrl:{RateLimitHeaders(resp)} set-cookie:{(Has(resp, "Set-Cookie") ? "yes" : "no")}";
+
+        private static bool Has(HttpResponseMessage resp, string name)
+        {
+            try { return resp.Headers.NonValidated.Contains(name); } catch { return false; }
+        }
+
+        /// <summary>The header <b>as the server sent it</b>. Read through <c>NonValidated</c> on
+        /// purpose: the typed accessors re-render a parsed header, so <c>Server: HTTP server
+        /// (unknown)</c> comes back as three product tokens and is rebuilt as
+        /// <c>HTTP,server,(unknown)</c> — a diagnostic that quietly rewrites its evidence. It also
+        /// means a header this app has no parser for is still logged verbatim.</summary>
+        private static string HeaderValue(HttpResponseMessage resp, string name)
+        {
+            try
+            {
+                return resp.Headers.NonValidated.TryGetValues(name, out var values)
+                    ? Quoted(string.Join(",", values))
+                    : Nothing;
+            }
+            catch { return Nothing; }
+        }
+
+        /// <summary>`X-RateLimit-*` with its NAME as well as its value: which of the family a
+        /// provider sends is itself the signal, and there is no agreed spelling to assume.</summary>
+        private static string RateLimitHeaders(HttpResponseMessage resp)
+        {
+            try
+            {
+                var joined = string.Join(",", resp.Headers.NonValidated
+                    .Where(h => h.Key.StartsWith("x-ratelimit", StringComparison.OrdinalIgnoreCase))
+                    .Take(3)
+                    .Select(h => h.Key + "=" + string.Join("/", h.Value)));
+                return Quoted(joined);
+            }
+            catch { return Nothing; }
+        }
+    }
+
+    // ---- the line ------------------------------------------------------------------------------
+
+    /// <summary>§10.1's fields, in the order AC 1 lists them. Pure: no I/O, no clock, no HTTP —
+    /// everything it renders was decided by its caller.</summary>
+    internal static string Line(Call call, int attempt, ResponseFacts facts, TimeSpan elapsed,
+        int burst60, string addressFamily = UnknownAddressFamily)
+    {
+        var line = new StringBuilder(320)
+            .Append("tr provider=").Append(Ascii(call.Provider, 24))
+            .Append(" ep=").Append(Ascii(call.Endpoint, 80))
+            .Append(" dir=").Append(Ascii(call.Source, 12)).Append("->").Append(Ascii(call.Target, 12))
+            .Append(" attempt=").Append(attempt).Append('/').Append(call.MaxAttempts)
+            .Append(" cid=").Append(Ascii(call.Cid, 8))
+            .Append(" status=").Append(Ascii(facts.Status, 32))
+            .Append(" elapsed=").Append((long)elapsed.TotalMilliseconds).Append("ms")
+            .Append(" retry-after=").Append(Ascii(facts.RetryAfter, MaxHeaderChars))
+            .Append(" ct=").Append(Ascii(facts.ContentType, MaxHeaderChars))
+            .Append(" len=").Append(Ascii(facts.Len, 12))
+            // Already sanitised (and already quoted where §10.1 quotes) by ResponseFacts: running
+            // it through Ascii again would strip the quotes back off.
+            .Append(" hdrs=[").Append(facts.Hdrs ?? $"via:{Nothing} srv:{Nothing} xrl:{Nothing} set-cookie:no").Append(']')
+            .Append(" bytes=").Append(call.RequestBytes)
+            .Append(" lines=").Append(call.RequestLines)
+            .Append(" burst60=").Append(burst60)
+            .Append(" ipv=").Append(Ascii(addressFamily, 2));
+
+        // `body` is the last field and an OPTIONAL one: it appears for a markup body and for
+        // nothing else, so its absence is itself information (the provider answered JSON).
+        if (!string.IsNullOrEmpty(facts.Body))
+            line.Append(" body=\"").Append(facts.Body).Append('"');
+
+        return line.ToString();
+    }
+
+    /// <summary>Host + path, and there is no parameter that could add the rest. The query carries
+    /// the user's text in <c>q=</c>, and this is the single function that turns a request's address
+    /// into text (I11).</summary>
+    internal static string Endpoint(Uri? uri)
+    {
+        if (uri == null) return Nothing;
+        try { return Ascii(uri.Host + uri.AbsolutePath, 80); }
+        catch { return Nothing; }
+    }
+
+    /// <summary>
+    /// The one door a response body can walk through, and it is deliberately <b>narrower</b> than
+    /// §4.3's <see cref="ProviderErrorMapper.LooksLikeHtml"/>: only step 2 (the body really starts
+    /// with markup), never step 1 (the content-type claimed something non-JSON).
+    ///
+    /// <para>The reason is I11, not tidiness. The provider's own answer <b>contains the user's
+    /// text</b> — the original and the translation both — so a proxy that relabels it
+    /// <c>text/plain</c> would, under the wider rule, walk that text straight into a report the
+    /// user pastes to Discord. Markup is the server's page and nobody's sentence. Passing
+    /// <c>resp: null</c> is how the wider rule's step 1 is skipped while its tested implementation
+    /// is reused.</para>
+    /// </summary>
+    internal static string? BodyHead(string? body)
+    {
+        if (string.IsNullOrEmpty(body)) return null;
+        try
+        {
+            if (!ProviderErrorMapper.LooksLikeHtml(resp: null, body)) return null;
+            var head = ProviderErrorMapper.DeTaggedHead(body, MaxBodyChars);
+            head = head[..FirstEcho(head)].TrimEnd();
+            if (head.Length == 0) return null;
+            var safe = Ascii(head, MaxBodyChars, allowSpaces: true);
+            return safe == Nothing ? null : safe;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Where a body head stops being the server's prose and starts being an echo of the request.
+    /// The gate above keeps the provider's JSON out; this covers the other way user text can reach
+    /// a page — an interstitial or proxy error that quotes the URL it refused, which carries the
+    /// sentence in <c>q=</c> and percent-escaped. Google's own /sorry/ page does not do this, but
+    /// "the page we have seen does not" is not a rule, and I11 has to hold for the page we have not
+    /// seen. Cutting at the first <c>q=</c>, <c>://</c> or <c>%XX</c> keeps the sentence that
+    /// identifies the block and drops everything after it.
+    /// </summary>
+    private static int FirstEcho(string head)
+    {
+        for (int i = 0; i < head.Length; i++)
+        {
+            char c = head[i];
+            if (c == '%' && i + 2 < head.Length && IsHex(head[i + 1]) && IsHex(head[i + 2])) return i;
+            if (c == ':' && i + 2 < head.Length && head[i + 1] == '/' && head[i + 2] == '/') return i;
+            if ((c == 'q' || c == 'Q') && i + 1 < head.Length && head[i + 1] == '='
+                && (i == 0 || !char.IsLetterOrDigit(head[i - 1]))) return i;
+        }
+        return head.Length;
+    }
+
+    private static bool IsHex(char c) =>
+        (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+
+    // ---- emission ------------------------------------------------------------------------------
+
+    /// <summary>One line for an attempt that ended on a real response.</summary>
+    internal static void Emit(Call call, int attempt, TimeSpan elapsed, int burst60,
+        HttpResponseMessage resp, string? body) =>
+        Write(() => Line(call, attempt, ResponseFacts.Of(resp, body), elapsed, burst60));
+
+    /// <summary>One line for an attempt that ended in a transport exception.</summary>
+    internal static void Emit(Call call, int attempt, TimeSpan elapsed, int burst60, Exception transport) =>
+        Write(() => Line(call, attempt, ResponseFacts.OfTransport(transport), elapsed, burst60));
+
+    /// <summary>One line for an attempt whose response is already gone — the parse failure.</summary>
+    internal static void EmitStatus(Call call, int attempt, TimeSpan elapsed, int burst60,
+        int status, string? body) =>
+        Write(() => Line(call, attempt, ResponseFacts.OfStatus(status, body), elapsed, burst60));
+
+    // Logging must never be the thing that breaks a feature — Logging.cs:89 keeps that property for
+    // the WRITE, and this keeps it for the BUILD. A diagnostic that can cost a translation is not a
+    // diagnostic.
+    private static void Write(Func<string> build)
+    {
+        try { Logging.Warn(build()); }
+        catch { /* best-effort, exactly like the writer underneath it */ }
+    }
+
+    /// <summary>The body of a failed response, for the log and for nothing else. Never throws and
+    /// never blocks the failure it is describing: an unreadable body simply has no <c>body=</c>.</summary>
+    internal static async Task<string?> SafeBodyAsync(HttpResponseMessage resp, CancellationToken ct)
+    {
+        try { return await resp.Content.ReadAsStringAsync(ct); }
+        catch { return null; }
+    }
+
+    // ---- rendering primitives --------------------------------------------------------------------
+
+    /// <summary>Every value that reaches the line goes through here: bounded, printable ASCII, one
+    /// line. A header carrying a newline would otherwise split one event into two, and a quote
+    /// would end the <c>body="…"</c> field early.</summary>
+    private static string Ascii(string? value, int maxChars, bool allowSpaces = false)
+    {
+        if (string.IsNullOrEmpty(value)) return Nothing;
+
+        var text = new StringBuilder(Math.Min(value!.Length, maxChars));
+        foreach (var c in value)
+        {
+            if (text.Length >= maxChars) break;
+            if (c == '"' || c == '\\') continue;                 // would break the quoted field
+            if (c == ' ' && !allowSpaces) { text.Append('_'); continue; }
+            text.Append(c >= ' ' && c <= '~' ? c : '.');         // one line, ASCII-safe
+        }
+
+        var s = text.ToString().Trim();
+        return s.Length == 0 ? Nothing : s;
+    }
+
+    /// <summary>A header value that may contain spaces, quoted the way §10.1 writes it
+    /// (<c>srv:"HTTP server (unknown)"</c>) so the line stays trivially parseable.</summary>
+    private static string Quoted(string? value)
+    {
+        var s = Ascii(value, MaxHeaderChars, allowSpaces: true);
+        return s.Contains(' ') ? "\"" + s + "\"" : s;
+    }
+}
+
+/// <summary>
+/// <c>burst60</c>: how many requests were issued in the trailing window. It is what turns the log
+/// into evidence for <c>analyse…</c> §2.3's volume model — "the app was making 37 requests a minute
+/// when Google started refusing" is a measurement; "it felt like a lot" is not.
+///
+/// <para>Counted for <b>every</b> request, success or failure: counting only the failures would
+/// describe the incident and not the behaviour that caused it. That makes this the one thing a
+/// successful request pays for, so it is a lock and a queue of timestamps and nothing else.</para>
+/// </summary>
+internal sealed class BurstCounter
+{
+    // A hard ceiling on what a pathological minute can allocate. Reaching it means the number is
+    // already saying "far too many"; losing precision above it costs nothing.
+    private const int Cap = 4096;
+
+    private readonly object _gate = new();
+    private readonly Queue<DateTimeOffset> _hits = new();
+    private readonly TimeSpan _window;
+
+    internal BurstCounter(int windowSeconds = RequestLog.BurstWindowSeconds) =>
+        _window = TimeSpan.FromSeconds(windowSeconds);
+
+    /// <summary>Records one issued request and returns the trailing-window count including it. The
+    /// clock is the caller's (IS-6-shaped), so a test needs no wall clock.</summary>
+    internal int Note(DateTimeOffset now)
+    {
+        lock (_gate)
+        {
+            if (_hits.Count < Cap) _hits.Enqueue(now);
+            return Trimmed(now);
+        }
+    }
+
+    /// <summary>The count without recording anything.</summary>
+    internal int Count(DateTimeOffset now)
+    {
+        lock (_gate) return Trimmed(now);
+    }
+
+    private int Trimmed(DateTimeOffset now)
+    {
+        var cutoff = now - _window;
+        while (_hits.Count > 0 && _hits.Peek() < cutoff) _hits.Dequeue();
+        return _hits.Count;
+    }
+}
