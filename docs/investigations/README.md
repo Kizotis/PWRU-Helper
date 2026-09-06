@@ -46,8 +46,14 @@ Evidence convention used throughout: **[CONFIRMED]** = read in code/config with 
 | [`02-traduction/benchmark-fournisseurs.md`](02-traduction/benchmark-fournisseurs.md) | Mary (TR+MR) — dated benchmark: official APIs, free endpoints, local models (Bergamot measured locally), .NET libraries, cost scenarios | **done** (659 lines, 60 sources) — see the Phase 1 incident note |
 | [`02-traduction/experimentations.md`](02-traduction/experimentations.md) | Amelia (QD) — probe design, smoke-test result, decision request for the Burst run | **done** (smoke: 5×200, no `Retry-After`; Burst awaits owner decision) |
 
-### Phase 2 — Synthesis & arbitration (planned)
-`SYNTHESE.md` (Paige) · `02-traduction/architecture-cible.md` (Winston, CA).
+### Phase 2 — Synthesis & arbitration (launched 2026-09-06 on the owner's go, after his 5 decisions)
+| File | Owner | Status |
+|------|-------|--------|
+| [`02-traduction/architecture-cible.md`](02-traduction/architecture-cible.md) | Winston (CA) — typed errors, shared persisted `ProviderGate`, `ChainTranslator`, providers (Google dict-chrome-ex default, Edge, gtx, DeepL, Azure, Bergamot prototype), chains, persistent shared cache, LIVE back-off, observability, testability, settings, startup position | **done, approved by Winston** (1232 lines, 16 invariants, 9 [UNKNOWN]s for the prototype, OQ-A–D for the owner) |
+| [`02-traduction/plan-migration.md`](02-traduction/plan-migration.md) | Winston (CA) — ordered, reversible increments + validation + story cut for Phase 3 | **done** (257 lines, 8 increments + track P, 39 stories in 9 epics) |
+| [`02-traduction/ux-mode-degrade.md`](02-traduction/ux-mode-degrade.md) | Sally (CU) — provider status states, copy deck per error kind, keys/settings UX (DeepL + Azure + offline), flows, P1 expectation copy | **done** (555 lines, 8 states, 12 open questions) |
+| [`01-demarrage/recommandations.md`](01-demarrage/recommandations.md) (FINAL) + checklist update | Amelia — ranked recommendations, SignPath action plan (MIT stays, PR #49 to close), validation plan | **done** (399 lines FINAL; MSI-as-default-download ranked #3; 9-step SignPath plan) |
+| [`SYNTHESE.md`](SYNTHESE.md) | Paige (WD + VD) — per problem: top-3 causes with evidence, quick wins vs structural, effort, risks, decisions; Mermaid polish of the architecture | wave 2 — in progress |
 
 ### Phase 3 — Stories (planned) · Phase 4 — Implementation (owner's go only)
 
@@ -139,3 +145,12 @@ Ground rule 2 and the Phase 1 briefs reserved any traffic to Google's translate 
 
 ### Phase 2 (on the owner's go)
 Paige (WD/VD): `SYNTHESE.md` — per problem: top-3 causes with evidence, quick wins vs structural, effort, risks, decisions. Winston (CA): `02-traduction/architecture-cible.md` (provider abstraction + ordered fallback chain, typed error classification, shared circuit breaker with persisted state, rate ceiling, `Retry-After`/backoff+jitter, persistent shared cache, LIVE cadence back-off and honest auto-stop, retry-after-recovery for burned rows, diagnostic logging, testability seam) and `02-traduction/plan-migration.md`; Sally (CU): provider-status indicator, degraded-mode messages, key/provider settings UX; `01-demarrage/recommandations.md` finalised from the research + measurements.
+
+### Owner's decisions (2026-09-06, Phase 2 go)
+| # | Decision | Owner's choice |
+|---|----------|----------------|
+| 1 | Google Burst probe | Skipped (address already 429; nothing more sent from this connection). |
+| 2 | Endpoint switch to `clients5.google.com/translate_a/t?client=dict-chrome-ex` | **Yes, coupled with the hardening** (persisted circuit breaker + rate ceiling + logging ship together). |
+| 3 | Code signing route | **SignPath Foundation** (free, requires an OSI licence → the app stays **MIT**; PR #49 "CC BY-NC" is to be closed by the owner). |
+| 4 | Bergamot offline fallback | **Yes, as a Phase 2 candidate with a measured prototype** before any commitment (lazy-load on first fallback, unload on idle, downstream of the slang glossary). |
+| 5 | Azure AI Translator F0 as a second user-key slot | **Yes, alongside DeepL.** |

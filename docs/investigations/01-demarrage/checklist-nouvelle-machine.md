@@ -1,6 +1,6 @@
 # 01 — Installing PWRU Helper on a new machine: checklist
 
-_Phase 1 · author: Amelia (BMAD Senior Software Engineer) · baseline `4759712` (main, v0.14.0) · 2026-09-06._
+_Phase 1, **updated in Phase 2** (2026-09-06) to reflect the owner's decisions and the first measurements · author: Amelia (BMAD Senior Software Engineer) · baseline `4759712` (main, v0.14.0)._
 
 Two audiences, deliberately separated:
 
@@ -8,6 +8,11 @@ Two audiences, deliberately separated:
 - **Part B — for the owner (Kizotis), reproducing a slow machine.** What to capture, what to run, what to send back.
 
 Everything here follows from `hypotheses-matrice.md`; where a step exists because of a specific hypothesis, the ID is given so the advice can be revised (or dropped) when the measurements land. **Nothing in Part A is a workaround for a confirmed bug — the causes are still under investigation. It is placement and expectation advice that is correct regardless.**
+
+> **What changed in Phase 2** (see [`recommandations.md`](recommandations.md), now FINAL):
+> - **Code signing is decided: SignPath Foundation**, free, which keeps the app **MIT**. It is **not in place yet** — the application has not been submitted and approval takes *weeks*. Until then, and for some weeks after the first signed release, users still see the "unknown publisher" warning. Part A says so honestly.
+> - **The first data point exists.** On one measured machine, the first two launches of a brand-new build cost **2.2–2.5 s before the app runs a single instruction**; from the third launch that drops to **15–42 ms**. The app's own startup is a flat ~1.5 s that never varies. That is the basis of the expectation line in **A4**. **[MEASURED]** — `mesures-resultats-dev-box.md` §3–§4.
+> - **Part B now carries the exact commands** to run, because `tools/diagnostics/` exists and is documented in [`tools/diagnostics/README.md`](../../../tools/diagnostics/README.md).
 
 ---
 
@@ -22,10 +27,12 @@ Everything here follows from `hypotheses-matrice.md`; where a step exists becaus
 | Needs admin | no | yes, once, to install |
 | Start-menu / desktop shortcut | no | yes |
 | Updating | download the new exe, replace the old one | run the new installer; it replaces the old version |
-| Windows "unknown publisher" warning | yes (the app is not code-signed yet) | yes |
+| Windows "unknown publisher" warning | yes (the app is not code-signed yet — see below) | yes |
 | Best if… | you want zero install, or no admin rights | you want it to behave like a normal installed app |
 
 **Recommendation: the MSI, if you can.** It puts the exe in `Program Files`, which is never synced to OneDrive and does not carry the "downloaded from the internet" mark — two of the things that can make the first launch slow (hypotheses **F1** and **S1**).
+
+> **About the "unknown publisher" warning — where things stand.** PWRU Helper will be code-signed through **SignPath Foundation**, the free programme for open-source projects; that is decided, and it is why the app stays under the **MIT** licence. It is **not done yet**: the project still has to be submitted and approved, which takes weeks. And even once it is signed, Windows builds a publisher's reputation gradually — Microsoft's own guidance says it can take *several weeks and hundreds of clean installs* — so the warning will fade rather than vanish overnight. Signing is also expected to reduce, not eliminate, the first-launch wait described in **A4**: Windows still checks a file it has never seen. Anyone who tells you a certificate makes the warning disappear the next day is wrong. **[CONFIRMED — `recommandations.md` §4]**
 
 ## A2. If you use the portable exe: where to put it
 
@@ -53,17 +60,29 @@ Either:
 - right-click `PWRUHelper.exe` → **Properties** → tick **Unblock** at the bottom → OK, **or**
 - in PowerShell: `Unblock-File "C:\Tools\PWRU Helper\PWRUHelper.exe"`
 
-If Windows shows a blue **"Windows protected your PC"** screen the first time: click **More info** → **Run anyway**. This is expected for an app without a code-signing certificate; it is not a sign that anything is wrong. (See the project README for why the app is not signed yet.)
+If Windows shows a blue **"Windows protected your PC"** screen the first time: click **More info** → **Run anyway**. This is expected for an app without a code-signing certificate; it is not a sign that anything is wrong. (See the box in **A1** for where code signing stands.)
+
+**Unblocking is also the single most useful thing to try if your launches are slow.** Removing that "downloaded from the internet" mark takes the file out of scope for *both* Windows checks that can hold it — the reputation lookup and the cloud check. Time a launch before and after; if it gets noticeably faster, please tell us (A7), because that is a real result.
 
 ## A4. What to expect on the first launch
 
-- **The first launch after installing — and the first launch after every update — is slower than the ones after it.** Often noticeably: several seconds with nothing on screen. This is Windows checking a file it has never seen before, plus the app unpacking a few internal components. **Every release is a brand-new file as far as Windows is concerned**, so the check happens again after each update. (**D2**, **D3**, **E1**)
-- **The second launch is much faster.** If it is not, that is worth reporting — see A7.
-- The window is "always on top" by default, and there is no splash screen: between the double-click and the window appearing you will see nothing at all. That is expected.
+**The expectation line** (Sally's copy, `../02-traduction/ux-mode-degrade.md` §3.8 — use these exact words here and in the README):
+
+> **The first launch after downloading — and after every update — can take up to about 10 seconds, with nothing on screen.** Windows checks a file it has never seen before. Later launches are fast (about a second). Every update is a brand-new file as far as Windows is concerned, so the check happens again after each one.
+
+Why, and what we actually measured:
+
+- **Every release is a brand-new file as far as Windows is concerned**, so Windows checks it before letting it start, and that check happens again after each update. (**D2**, **D3**, **E1**)
+- On the one machine we have measured end to end, that check cost **about 2.2–2.5 seconds on each of the first two launches of a new version, then dropped to about 0.02 seconds** from the third launch onwards — same file, same folder, nothing else changed. The app's own startup is a steady ~1.5 seconds on top of that, and it does not vary. **[MEASURED — `mesures-resultats-dev-box.md` §3]** On slower or busier machines the check can take longer; Microsoft's own documentation allows Windows to hold an unknown program for up to 10 seconds by default. **[CONFIRMED]**
+- **The second launch is much faster.** **If the second launch is still slow, that is the interesting case** — please report it (see A7). That is the difference between "Windows is checking a new file", which is normal, and something we need to fix.
+- There is **no splash screen, and there cannot usefully be one**: most of the wait happens *before* the app is allowed to start, so there is nothing running that could draw anything. Between the double-click and the window appearing you will see nothing at all. That is expected.
+- The window is "always on top" by default.
 
 ## A5. Optional: a Windows Defender exclusion — read this before doing it
 
 **This is optional, and it has a real security cost. Do not do it just because it makes the app start faster.**
+
+**Try A2 (where the file lives), A3 (`Unblock-File`) and the MSI first.** Those cost nothing and remove the same delay if it is the one we think it is. Only reach for an exclusion if those have been tried and the launches are still consistently slow.
 
 If your launches are consistently slow and you understand and accept the trade-off, you can tell Windows Defender not to scan the app. In an **administrator** PowerShell:
 
@@ -98,6 +117,15 @@ Please include:
 4. Windows version (`Win + R` → `winver`).
 5. Whether you have any antivirus other than Windows Defender.
 6. The **About** tab → **Copy error report** button, pasted into your message.
+
+**Even better, if you are willing (about 2 minutes, no admin, nothing is uploaded):** run the two diagnostic scripts from `tools/diagnostics/` and send back what lands in `%USERPROFILE%\PWRU-Diagnostics`. The full instructions and the privacy note are in [`tools/diagnostics/README.md`](../../../tools/diagnostics/README.md). Run them **before** you open the new version manually — the first launch of a new download is the one that matters.
+
+```
+powershell -ExecutionPolicy Bypass -File "C:\path\to\tools\diagnostics\Get-MachineSheet.ps1" -ExePath "C:\where\you\keep\PWRUHelper.exe"
+powershell -ExecutionPolicy Bypass -File "C:\path\to\tools\diagnostics\Measure-Startup.ps1" -ExePath "C:\where\you\keep\PWRUHelper.exe" -Runs 3
+```
+
+The app will open and close three times — that is normal, and you should not click anything while it runs.
 
 ---
 
@@ -134,17 +162,46 @@ A fast machine is not a control unless it is documented the same way. **Capture 
 | Proxy configuration | `netsh winhttp show proxy` (not a P1 item under answer (a), but one line and it feeds the *other* startup issue) |
 | Monitor count and per-monitor scaling | Display settings (**R6**) |
 
-## B2. What to run
+## B2. What to run — the exact commands
 
-**Amelia-QD's script** (`tools/diagnostics/`, `mesures-protocole.md`) is the intended vehicle — it should collect §B1 and perform the timed launches below. Until it exists, the timing part by hand:
+The scripts now exist: `tools/diagnostics/Get-MachineSheet.ps1`, `Measure-Startup.ps1`, `Probe-GoogleTranslate.ps1`, documented in [`tools/diagnostics/README.md`](../../../tools/diagnostics/README.md). They are read-only, upload nothing, need **no admin**, and write into `%USERPROFILE%\PWRU-Diagnostics`. `Measure-Startup.ps1` reports **`pre_process_ms`** (launch requested → the process exists: antivirus scan-on-execute, SmartScreen / Smart App Control lookup, loading a 180 MB unsigned image — *the app's code has not started yet*), **`in_process_ms`** (process start → first window) and **`total_ms`**.
 
-1. **The split.** Record a timestamp, launch, then read `(Get-Process PWRUHelper).StartTime` and the moment `MainWindowHandle` becomes non-zero.
-   `t_pre` = process start − launch timestamp · `t_in` = window handle − process start. **Report both, never only the total.**
-2. **Two launch paths, same file** (**M2**): once with `Invoke-Item` / `Start-Process -Verb Open` (ShellExecute — the real double-click, including MOTW and SmartScreen) and once with plain `Start-Process` (direct `CreateProcess`, which skips the shell reputation gate).
-   *If ShellExecute is slow and CreateProcess is fast, the cost is SmartScreen (**S1**). If both are slow, it is Defender or the loader (**D1**/**D2**).* This is the cheapest decisive test in the whole investigation.
-3. **Cold and warm, ≥ 3 times each** (**M3**): after a reboot, then close and relaunch immediately. Run-to-run noise on the owner's box is ±400 ms — a single sample proves nothing.
-4. **New build vs second launch** (**M4**): on a machine that has never run that exact build, time the first launch and the one right after. This is *the* Block-At-First-Sight and self-extraction signal.
-5. **Optional, one machine, consented:** launch with networking disconnected. **If it gets faster offline, D2 (cloud/BAFS) is confirmed** — the cloud query is failing fast instead of waiting out its timeout.
+**Use a copy of the exe that was actually downloaded from GitHub.** A locally built file carries no Mark-of-the-Web, so it can never exercise SmartScreen or Block-at-First-Sight — that is exactly why the dev-box run could not settle **S1** (`mesures-resultats-dev-box.md` §4.4).
+
+Replace `<D>` with the folder holding the scripts and `<EXE>` with the full path to the exe under test.
+
+```powershell
+# 0. State snapshot FIRST — before any timed launch (it records %TEMP%\.net\PWRUHelper as it is now)
+powershell -ExecutionPolicy Bypass -File "<D>\Get-MachineSheet.ps1" -ExePath "<EXE>"
+
+# 1. M4 — first launch of a brand-new build vs the ones after it. THE Block-at-First-Sight signal.
+#    Run this before the machine has ever opened that exact build.
+powershell -ExecutionPolicy Bypass -File "<D>\Measure-Startup.ps1" -ExePath "<EXE>" -Runs 3 -Note "new build, first launches"
+
+# 2. M2 — the same file two ways. Shell = the real double-click (MOTW + SmartScreen apply).
+#    Direct = raw CreateProcess, which skips the shell reputation gate.
+powershell -ExecutionPolicy Bypass -File "<D>\Measure-Startup.ps1" -ExePath "<EXE>" -Runs 3 -LaunchMode Shell  -Note "shell"
+powershell -ExecutionPolicy Bypass -File "<D>\Measure-Startup.ps1" -ExePath "<EXE>" -Runs 3 -LaunchMode Direct -Note "direct"
+
+# 3. E1/D3 — force a re-extraction of the 5 native DLLs (~8 MB) before each run
+powershell -ExecutionPolicy Bypass -File "<D>\Measure-Startup.ps1" -ExePath "<EXE>" -Runs 3 -ClearExtractionCache -Note "extraction cleared"
+
+# 4. S1 — remove the Mark-of-the-Web, then repeat step 2. Same file, same hash, no MOTW.
+Unblock-File "<EXE>"
+powershell -ExecutionPolicy Bypass -File "<D>\Measure-Startup.ps1" -ExePath "<EXE>" -Runs 3 -Note "after Unblock-File"
+
+# 5. M3 — cold: reboot, then run step 1 again before opening anything else.
+```
+
+How to read it:
+
+1. **Always report `pre_process_ms` and `in_process_ms`, never only the total.** Every prior benchmark measured only the total, which is why P1 stayed open. A big `pre_process_ms` means the cost is outside the app (security software / reputation); a big `in_process_ms` means it is the app plus its file I/O (**M1**).
+2. **Shell slow + Direct fast ⇒ SmartScreen (S1). Both slow ⇒ Defender or the loader (D1/D2).** Cheapest decisive test in the whole investigation (**M2**).
+3. **Cold and warm, ≥ 3 runs each** (**M3**). Run-to-run noise on the owner's box is ±400 ms; a single sample proves nothing.
+4. **First launch of a new hash vs the second** (**M4**) is the Block-at-First-Sight and self-extraction signal. Measured on the dev box: **2163 ms then 2528 ms, then 15–42 ms from the third launch** (`mesures-resultats-dev-box.md` §3).
+5. **Optional, one machine, consented:** launch with networking disconnected. **If it gets faster offline, D2 (cloud/BAFS) is confirmed** — the cloud query is failing fast instead of waiting out its timeout (**M5**).
+
+> `Probe-GoogleTranslate.ps1` belongs to P2, not P1. If you run it, use `-Smoke` only. `-Burst` / `-Variant` deliberately provoke Google into rate-limiting your **public IP address**, which affects every device on the connection, including the app itself.
 
 ## B3. Optional deeper captures (only if B2 leaves it unexplained)
 
@@ -173,11 +230,15 @@ Run each on one machine, one variable at a time, timing 3 cold launches before a
 
 ## B5. What to send back for each machine
 
-1. The completed machine sheet (B1).
-2. The timing table: `t_pre` / `t_in` for cold ×3 and warm ×3, for both launch paths (B2 steps 1–3).
-3. The new-build first-vs-second launch pair (B2 step 4).
+Everything lands in `%USERPROFILE%\PWRU-Diagnostics`. Send:
+
+1. `machine-sheet-<PC>-<date>.txt` / `.json` — the completed machine sheet (B1).
+2. All `startup-<PC>-<timestamp>.csv` / `.txt` files — one row per launch, `pre_process_ms` / `in_process_ms` / `total_ms`, with the `-Note` label identifying the condition (B2 steps 1–4).
+3. The new-build first-vs-second launch pair (B2 step 1), explicitly called out.
 4. Results of whichever A/B tests were run (B4), with before/after numbers.
 5. If captured: the Defender performance report, the `startup-trace.log`, or the zipped WPR trace.
+
+The fields to diff between a fast and a slow machine — and between before and after the signed release — are listed in [`recommandations.md`](recommandations.md) §7.3, and the numbers that would count as success are in §7.4.
 
 ## B6. What NOT to conclude
 
@@ -187,4 +248,4 @@ Run each on one machine, one variable at a time, timing 3 cold launches before a
 
 ---
 
-_Part A is drafted so it can be lifted into the README once Phase 2 confirms which items survive. Part B feeds `mesures-protocole.md` (Amelia-QD) and, through it, `hypotheses-matrice.md` §4._
+_Part A survived Phase 2 and is cleared to be lifted into the README — it is quick wins §3.1–§3.4 of [`recommandations.md`](recommandations.md) (FINAL). The expectation wording in **A4** is Sally's, verbatim from [`../02-traduction/ux-mode-degrade.md`](../02-traduction/ux-mode-degrade.md) §3.8; keep the two in sync. Part B is the "reproduce a slow machine" procedure referenced by `recommandations.md` §7, and it feeds `mesures-protocole.md` and `hypotheses-matrice.md` §4._
