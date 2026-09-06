@@ -37,13 +37,13 @@ Evidence convention used throughout: **[CONFIRMED]** = read in code/config with 
 | [`01-demarrage/hypotheses-matrice.md`](01-demarrage/hypotheses-matrice.md) | Amelia (forensic) — every P1 lead with probability / verification / fix / cost, ranked top-5, decision tree | **done** (267 lines, 26 hypotheses) |
 | [`01-demarrage/trace-instrumentation.md`](01-demarrage/trace-instrumentation.md) | Amelia (forensic) — in-process high-resolution trace PLAN (not applied) | **done** (362 lines) |
 | [`01-demarrage/recommandations.md`](01-demarrage/recommandations.md) | Amelia (forensic) — DRAFT quick wins vs structural; finalised in Phase 2 | **draft done** (136 lines) |
-| [`01-demarrage/checklist-nouvelle-machine.md`](01-demarrage/checklist-nouvelle-machine.md) | Amelia (forensic) — end-user + owner checklists | **done** (190 lines) |
+| [`01-demarrage/checklist-nouvelle-machine.md`](01-demarrage/checklist-nouvelle-machine.md) | Amelia (forensic) — end-user + owner checklists | **done** (251 lines, updated in Phase 2) |
 | [`01-demarrage/recherche-environnement-et-profiling.md`](01-demarrage/recherche-environnement-et-profiling.md) | Mary (TR) — sourced research: Defender BAFS/cloud timeout, SmartScreen, Smart App Control, signing (OV/EV/Azure Artifact Signing), .NET single-file extraction, WPF startup, OneDrive FOD, profiling recipes | **done** (408 lines, 59 sources, 4 local measurements) |
 | [`01-demarrage/mesures-protocole.md`](01-demarrage/mesures-protocole.md) + [`tools/diagnostics/`](../../tools/diagnostics/) | Amelia (QD) — reproducible protocol, `Measure-Startup.ps1` (pre-process vs in-process split), `Get-MachineSheet.ps1`, `Probe-GoogleTranslate.ps1` | **done** (3 scripts + README, parse-checked, run end-to-end here) |
 | [`01-demarrage/mesures-resultats-dev-box.md`](01-demarrage/mesures-resultats-dev-box.md) | Amelia (QD) — first data point: this dev box, fresh-hash cold run + warm runs | **done** (fresh hash: pre-process 2.2–2.5 s, in-process ~1.5 s flat; warm pre-process ≈ 20 ms) |
 | [`02-traduction/analyse-implementation-actuelle.md`](02-traduction/analyse-implementation-actuelle.md) | Amelia (forensic) — symptom→code proof, LIVE request-volume model incl. 429 storm, amplifiers, seams for Phase 2 | **done** (463 lines, 15 open questions) |
 | [`02-traduction/mecanismes-de-blocage-google.md`](02-traduction/mecanismes-de-blocage-google.md) | Mary (TR) — sourced: what `gtx` is, what the throttle is keyed on, block durations, ToS, evidence-backed mitigations | **done** (474 lines, 36 sources, 5 open items) |
-| [`02-traduction/benchmark-fournisseurs.md`](02-traduction/benchmark-fournisseurs.md) | Mary (TR+MR) — dated benchmark: official APIs, free endpoints, local models (Bergamot measured locally), .NET libraries, cost scenarios | **done** (659 lines, 60 sources) — see the Phase 1 incident note |
+| [`02-traduction/benchmark-fournisseurs.md`](02-traduction/benchmark-fournisseurs.md) | Mary (TR+MR) — dated benchmark: official APIs, free endpoints, local models (Bergamot measured locally), .NET libraries, cost scenarios | **done** (661 lines, 60 sources) — see the Phase 1 incident note |
 | [`02-traduction/experimentations.md`](02-traduction/experimentations.md) | Amelia (QD) — probe design, smoke-test result, decision request for the Burst run | **done** (smoke: 5×200, no `Retry-After`; Burst awaits owner decision) |
 
 ### Phase 2 — Synthesis & arbitration (launched 2026-09-06 on the owner's go, after his 5 decisions)
@@ -52,10 +52,13 @@ Evidence convention used throughout: **[CONFIRMED]** = read in code/config with 
 | [`02-traduction/architecture-cible.md`](02-traduction/architecture-cible.md) | Winston (CA) — typed errors, shared persisted `ProviderGate`, `ChainTranslator`, providers (Google dict-chrome-ex default, Edge, gtx, DeepL, Azure, Bergamot prototype), chains, persistent shared cache, LIVE back-off, observability, testability, settings, startup position | **done, approved by Winston** (1232 lines, 16 invariants, 9 [UNKNOWN]s for the prototype, OQ-A–D for the owner) |
 | [`02-traduction/plan-migration.md`](02-traduction/plan-migration.md) | Winston (CA) — ordered, reversible increments + validation + story cut for Phase 3 | **done** (257 lines, 8 increments + track P, 39 stories in 9 epics) |
 | [`02-traduction/ux-mode-degrade.md`](02-traduction/ux-mode-degrade.md) | Sally (CU) — provider status states, copy deck per error kind, keys/settings UX (DeepL + Azure + offline), flows, P1 expectation copy | **done** (555 lines, 8 states, 12 open questions) |
-| [`01-demarrage/recommandations.md`](01-demarrage/recommandations.md) (FINAL) + checklist update | Amelia — ranked recommendations, SignPath action plan (MIT stays, PR #49 to close), validation plan | **done** (399 lines FINAL; MSI-as-default-download ranked #3; 9-step SignPath plan) |
-| [`SYNTHESE.md`](SYNTHESE.md) | Paige (WD + VD) — per problem: top-3 causes with evidence, quick wins vs structural, effort, risks, decisions; Mermaid polish of the architecture | wave 2 — in progress |
+| [`01-demarrage/recommandations.md`](01-demarrage/recommandations.md) (FINAL) + checklist update | Amelia — ranked recommendations, SignPath action plan (MIT stays, PR #49 to close), validation plan | **done** (403 lines FINAL; MSI-as-default-download ranked #3; 9-step SignPath plan) |
+| [`SYNTHESE.md`](SYNTHESE.md) | Paige (WD + MG + VD) — French owner summary + per problem: top-3 causes with evidence, quick wins vs structural, effort, risks, decisions, incident, risks, next steps, document map; 6 Mermaid blocks rendered (2 fixed in place); validation record appended | **done, validated** (507 lines, 28 claims spot-checked, 23/23 links) |
 
-### Phase 3 — Stories (planned) · Phase 4 — Implementation (owner's go only)
+### Phase 3 — Stories (on the owner's go)
+John (CE + IR): epics/stories from `02-traduction/plan-migration.md` §story cut (39 stories, 9 epics) with acceptance criteria drawn from `ux-mode-degrade.md` §7 and `architecture-cible.md` §11; implementation-readiness check across architecture ↔ UX ↔ plan. Amelia (SP + CS): sprint plan and the first stories prepared with full context. Test plan: TEA module (`bmad-tea`) if it runs headless, else Amelia (QA) — including the multi-machine / multi-network validation from `01-demarrage/recommandations.md` §7 and `plan-migration.md` "Validation". Output under `_bmad-output/` per BMAD convention (gitignored) — mirrored as a summary here.
+
+### Phase 4 — Implementation (owner's go only, story by story: Amelia DS then CR)
 
 ## Environment facts recorded by the orchestrator
 - Dev/owner machine account is Azure AD-joined (`AzureAD+…` owner on files) → corporate GPO/EDR/proxy policies are plausible on this box; to be captured in the per-machine sheet.
@@ -154,3 +157,12 @@ Paige (WD/VD): `SYNTHESE.md` — per problem: top-3 causes with evidence, quick 
 | 3 | Code signing route | **SignPath Foundation** (free, requires an OSI licence → the app stays **MIT**; PR #49 "CC BY-NC" is to be closed by the owner). |
 | 4 | Bergamot offline fallback | **Yes, as a Phase 2 candidate with a measured prototype** before any commitment (lazy-load on first fallback, unload on idle, downstream of the slang glossary). |
 | 5 | Azure AI Translator F0 as a second user-key slot | **Yes, alongside DeepL.** |
+
+---
+
+## Phase 2 — Closure by the orchestrator (Winston, 2026-09-06)
+
+- **Architecture approved** by Winston as written: 16 invariants (I1–I16), the two architect's concerns resolved without redesign (`RequestPriority{Interactive,Background}` reserve so LIVE cannot starve the Translator tab; the cache entry records its producing provider so Bergamot output is dropped when the offline setting is off), ru/auto merge evaluated and rejected with arithmetic, per-line fallback capped at 8.
+- **`SYNTHESE.md` validated** (Paige: 28 claims spot-checked, 23/23 links, six diagrams rendered). It is the entry point for the owner and any contributor; this README stays the index.
+- **Pending owner questions carried to Phase 3** (from `architecture-cible.md` §15.3): **OQ-A** batching fallback if newlines are lost on `translate_a/t` (per-line ≈2× volume vs revisiting the declined multi-`q=`); **OQ-B** whether a paused LIVE loop keeps capturing/OCR-ing (architecture says no); **OQ-C** LLM write-path tier parked or revisited after increment 5; **OQ-D** close PR #49 (CC BY-NC) — prerequisite for SignPath.
+- **Owner's personal to-do** (`SYNTHESE.md` §7.2): close PR #49 · apply to SignPath Foundation · run the three `tools/diagnostics/` scripts on one slow, Defender-only machine with a **downloaded** exe (before/after `Unblock-File`, portable vs MSI) · answer OQ-A–C · send nothing more to Google from this connection · say "go" for Phase 3.

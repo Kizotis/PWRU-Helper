@@ -175,31 +175,31 @@ flowchart TD
     SPLIT -->|"both ≈ equal, both large"| BOTH["Two causes stacked —<br/>walk both branches"]
 
     PRE --> SHELL{"Invoke-Item (ShellExecute) slow<br/>but Start-Process (CreateProcess) fast?"}
-    SHELL -->|yes| S1LEAF["**S1 — SmartScreen / MOTW**<br/>verify: Zone.Identifier present;<br/>Unblock-File then re-time;<br/>MSI install is unaffected"]
+    SHELL -->|yes| S1LEAF["S1 — SmartScreen / MOTW<br/>verify: Zone.Identifier present;<br/>Unblock-File then re-time;<br/>MSI install is unaffected"]
     SHELL -->|no, both slow| AV{"Defender path-exclusion for the exe<br/>makes it fast?"}
 
     AV -->|yes| WHICH{"Which half of Defender?"}
     AV -->|no| CLOUDLESS{"Launch with the network<br/>disconnected: faster?"}
 
     WHICH --> FIRST{"First launch of THIS hash on THIS machine<br/>slow, second launch fast?"}
-    FIRST -->|yes| D2LEAF["**D2 — Block At First Sight / cloud check**<br/>confirm: Get-MpPreference<br/>DisableBlockAtFirstSeen = 0;<br/>toggling it removes the delay"]
-    FIRST -->|"no — every launch is slow"| D1LEAF["**D1 — local real-time scan**<br/>confirm: Get-MpPerformanceReport<br/>names PWRUHelper.exe with a scan duration"]
+    FIRST -->|yes| D2LEAF["D2 — Block At First Sight / cloud check<br/>confirm: Get-MpPreference<br/>DisableBlockAtFirstSeen = 0;<br/>toggling it removes the delay"]
+    FIRST -->|"no — every launch is slow"| D1LEAF["D1 — local real-time scan<br/>confirm: Get-MpPerformanceReport<br/>names PWRUHelper.exe with a scan duration"]
 
     CLOUDLESS -->|"yes — faster offline"| D2LEAF
     CLOUDLESS -->|no| FILE{"Exe attributes show Offline /<br/>RecallOnDataAccess, or the path is<br/>under a OneDrive root?"}
-    FILE -->|yes| F1LEAF["**F1 — OneDrive Files On-Demand hydration**<br/>fix: 'Always keep on this device',<br/>or move the exe off Desktop/Downloads"]
+    FILE -->|yes| F1LEAF["F1 — OneDrive Files On-Demand hydration<br/>fix: 'Always keep on this device',<br/>or move the exe off Desktop/Downloads"]
     FILE -->|no| OSCHK{"HVCI / memory integrity ON,<br/>and OFF on the fast machines?"}
-    OSCHK -->|yes| O2LEAF["**O2 — VBS/HVCI process-creation overhead**<br/>environmental finding, document it"]
+    OSCHK -->|yes| O2LEAF["O2 — VBS/HVCI process-creation overhead<br/>environmental finding, document it"]
     OSCHK -->|no| UNEX["Unexplained pre-process time —<br/>escalate to a WPR/ETW trace<br/>(kernel process + file I/O providers)"]
 
-    IN --> TEMP{"%TEMP%\\.net\\PWRUHelper\\&lt;hash&gt;<br/>missing before the slow launch,<br/>present before the fast one?"}
-    TEMP -->|yes| E1LEAF["**E1 + D3 — self-extraction & its scan**<br/>fix: DOTNET_BUNDLE_EXTRACT_BASE_DIR (R3),<br/>or native libs beside the exe for the MSI (R4)"]
+    IN --> TEMP{"%TEMP%\.net\PWRUHelper\&lt;hash&gt;<br/>missing before the slow launch,<br/>present before the fast one?"}
+    TEMP -->|yes| E1LEAF["E1 + D3 — self-extraction & its scan<br/>fix: DOTNET_BUNDLE_EXTRACT_BASE_DIR (R3),<br/>or native libs beside the exe for the MSI (R4)"]
     TEMP -->|no| TRACE{"Where does the trace put the time?"}
 
-    TRACE -->|"process start → first managed mark"| R1LEAF["**R1 — runtime/host init**<br/>~900 ms is the floor.<br/>Much more than that ⇒ back to the PRE branch:<br/>the host is being scanned, not slow"]
-    TRACE -->|"InitializeComponent ≫ 250 ms"| R2LEAF["**R2 — BAML/XAML parse**<br/>compare against the 206–233 ms baseline;<br/>if it scales with the machine, research fonts/theme/DPI (R5)"]
-    TRACE -->|"after ApplySettings → first render"| R3LEAF["**R3 — first layout of ~140 buttons**<br/>cross-check LastTab in settings.json;<br/>retest with LastTab = 4 (About)"]
-    TRACE -->|"Logging / Load* / Settings marks"| A1LEAF["**A1/A2/A3 — app file I/O**<br/>expected ≤ 50 ms total.<br/>If seconds ⇒ check %APPDATA% redirection (F2)"]
+    TRACE -->|"process start → first managed mark"| R1LEAF["R1 — runtime/host init<br/>~900 ms is the floor.<br/>Much more than that ⇒ back to the PRE branch:<br/>the host is being scanned, not slow"]
+    TRACE -->|"InitializeComponent ≫ 250 ms"| R2LEAF["R2 — BAML/XAML parse<br/>compare against the 206–233 ms baseline;<br/>if it scales with the machine, research fonts/theme/DPI (R5)"]
+    TRACE -->|"after ApplySettings → first render"| R3LEAF["R3 — first layout of ~140 buttons<br/>cross-check LastTab in settings.json;<br/>retest with LastTab = 4 (About)"]
+    TRACE -->|"Logging / Load* / Settings marks"| A1LEAF["A1/A2/A3 — app file I/O<br/>expected ≤ 50 ms total.<br/>If seconds ⇒ check %APPDATA% redirection (F2)"]
 
     BOTH --> PRE
     BOTH --> IN

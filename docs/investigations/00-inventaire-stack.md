@@ -353,7 +353,7 @@ flowchart TD
     B --> C{"Mutex 'PWRUHelper.SingleInstance'<br/>App.xaml.cs:17"}
     C -- "already running" --> C2["MessageBox + Shutdown<br/>App.xaml.cs:20-23"]
     C -- "new" --> D["DispatcherUnhandledException hooked<br/>App.xaml.cs:28"]
-    D --> E["DISK: Logging.Info session marker<br/>%AppData%\\PWRUHelper\\logs\\log.txt<br/>App.xaml.cs:32"]
+    D --> E["DISK: Logging.Info session marker<br/>%AppData%\PWRUHelper\logs\log.txt<br/>App.xaml.cs:32"]
     E --> F["StartupUri MainWindow.xaml<br/>App.xaml:5 + Theme.xaml merged"]
     F --> G["Field initialisers<br/>DISK: SettingsService.Load (+ Save if migrating)<br/>MainWindow.xaml.cs:50"]
     G --> H["ctor: BuildTranslator :82"]
