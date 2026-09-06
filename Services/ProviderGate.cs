@@ -164,7 +164,16 @@ internal sealed class ProviderGate
 
     private int _strikes;                     // consecutive opening failures; drives the doubling
     private int _badResponses;                // consecutive BadResponse; 3 of them open the gate
-    private DateTimeOffset? _blockedUntil;    // null = closed. MaxValue = until the key changes
+    // Two independent block timelines, because ruling E2-i gives them two different exits: the
+    // ACCOUNT-scoped one is the user's key (AuthFailed, QuotaExhausted — `ClearAuthBlock` lifts it),
+    // the IP-scoped one is the provider's own counter on the address this PC dials from
+    // (RateLimited, Blocked, and the soft rows — only time lifts it). One field could not express
+    // that: a 60-minute quota landing on a standing 30-minute 429 would swallow it, and a key save
+    // would then "lift a quota block" that is really the 429 window underneath — resuming exactly
+    // the hammering this epic exists to stop. What the gate enforces is <see cref="BlockedUntil"/>,
+    // whichever of the two runs longer.
+    private DateTimeOffset? _keyBlockedUntil;  // null = no account-scoped block. MaxValue = AuthFailed
+    private DateTimeOffset? _ipBlockedUntil;   // null = no IP-scoped block
     private TranslationErrorKind? _lastKind;
     private DateTimeOffset? _lastAt;
     private DateTimeOffset? _cleanSince;      // first success since the last failure; null = not clean
@@ -178,6 +187,20 @@ internal sealed class ProviderGate
     /// a crash — would otherwise leave the gate half-open, admitting nobody, for good.</summary>
     private static readonly TimeSpan ProbeTimeout =
         TimeSpan.FromSeconds(TranslationPolicy.RequestTimeoutSeconds);
+
+    /// <summary>The block the gate actually enforces: the later of the two timelines, or
+    /// <c>null</c> (closed) when neither stands. Read under <c>_lock</c> like the fields it reads.</summary>
+    private DateTimeOffset? BlockedUntil =>
+        _keyBlockedUntil is { } key
+            ? (_ipBlockedUntil is { } ip && ip > key ? ip : key)
+            : _ipBlockedUntil;
+
+    /// <summary>§5.3's two account-scoped rows — the only ones a new key can lift (ruling E2-i).
+    /// <c>AuthFailed</c> is "open until the key changes"; a <c>QuotaExhausted</c> is an allowance on
+    /// the account the key names. Everything else is the provider's counter on this connection's
+    /// address, or a dead endpoint, and no key the user types moves either.</summary>
+    private static bool IsKeyScoped(TranslationErrorKind kind) =>
+        kind is TranslationErrorKind.AuthFailed or TranslationErrorKind.QuotaExhausted;
 
     /// <param name="clock">The one source of "now" (IS-6). <c>ProviderGates</c> (E2.S2) passes its
     /// own clock into every gate it builds — they must share one, or a persisted
@@ -216,7 +239,7 @@ internal sealed class ProviderGate
                 return GateDecision.Probe;
             }
 
-            if (_blockedUntil is { } until)
+            if (BlockedUntil is { } until)
             {
                 if (now < until) return GateDecision.Open(until);
 
@@ -243,7 +266,8 @@ internal sealed class ProviderGate
             {
                 _probeOutstanding = false;
                 _strikes = 0;
-                _blockedUntil = null;
+                _keyBlockedUntil = null;         // a successful probe closes the gate outright,
+                _ipBlockedUntil = null;          // both timelines with it (§5.2)
                 _cleanSince = now;
                 return;
             }
@@ -254,7 +278,7 @@ internal sealed class ProviderGate
             // probe is. Without the guard, one such late 200 sets `cleanSince` at the start of a
             // 30-minute window; CleanResetMinutes later the probe's own failure runs DecayStrikes
             // first and re-opens at strike 1 for 60 s, erasing the whole escalation ladder.
-            if (_blockedUntil is null) _cleanSince ??= now;
+            if (BlockedUntil is null) _cleanSince ??= now;
             DecayStrikes(now);
         }
     }
@@ -297,21 +321,21 @@ internal sealed class ProviderGate
                     // stands and a stale in-flight 429 would otherwise end it — an AuthFailed
                     // MaxValue (AC 4: only ClearAuthBlock lifts it) or a 60-minute QuotaExhausted
                     // window (§15 R9). The strike is still counted either way.
-                    BlockUntil(window);
+                    BlockUntil(window, kind);
                     break;
 
                 case GateReaction.Quota:        // open for an hour, no strike escalation (§15 R9)
-                    BlockUntil(now + Honour(retryAt, TimeSpan.FromMinutes(_policy.QuotaOpenMinutes), now));
+                    BlockUntil(now + Honour(retryAt, TimeSpan.FromMinutes(_policy.QuotaOpenMinutes), now), kind);
                     break;
 
                 case GateReaction.Auth:         // dead credentials: no window can fix them
-                    _blockedUntil = DateTimeOffset.MaxValue;
+                    _keyBlockedUntil = DateTimeOffset.MaxValue;   // account-scoped: the key is the exit
                     break;
 
                 case GateReaction.SoftCooldown: // Unavailable, Timeout, Network, Unknown — no strike
                     // Small, but not optional: without it a DNS blip means the next LIVE tick
                     // re-hits the same dead provider 700 ms later.
-                    BlockUntil(now + Honour(retryAt, TimeSpan.FromSeconds(_policy.SoftCooldownSecs), now));
+                    BlockUntil(now + Honour(retryAt, TimeSpan.FromSeconds(_policy.SoftCooldownSecs), now), kind);
                     break;
 
                 case GateReaction.SoftStrike:   // BadResponse: 3 consecutive open the gate
@@ -319,7 +343,7 @@ internal sealed class ProviderGate
                     if (_badResponses >= _policy.BadResponseStrikesToOpen)
                     {
                         _badResponses = 0;
-                        BlockUntil(now + Honour(retryAt, TimeSpan.FromSeconds(_policy.OpenBaseSeconds), now));
+                        BlockUntil(now + Honour(retryAt, TimeSpan.FromSeconds(_policy.OpenBaseSeconds), now), kind);
                     }
                     break;
             }
@@ -331,8 +355,13 @@ internal sealed class ProviderGate
             // probe to every caller in turn, with no cooldown between them: the breaker off in the
             // one state it was entered to manage. A failed probe therefore always leaves a future
             // block; the shortest one the policy has is the right floor.
-            if (wasProbe && _blockedUntil is { } b && b <= now)
-                BlockUntil(now + TimeSpan.FromSeconds(_policy.SoftCooldownSecs));
+            //
+            // The hint goes through Honour here too: §5.5 parses a Retry-After on EVERY non-success
+            // response, and this arm is the one place a row could otherwise drop one — a failed
+            // probe on the first or second BadResponse sets no window of its own, so a flat 5 s
+            // would silently discard a "come back in ten minutes" the server just sent.
+            if (wasProbe && BlockedUntil is { } b && b <= now)
+                BlockUntil(now + Honour(retryAt, TimeSpan.FromSeconds(_policy.SoftCooldownSecs), now), kind);
 
             _lastKind = kind;
             _lastAt = now;
@@ -341,22 +370,38 @@ internal sealed class ProviderGate
     }
 
     /// <summary>
-    /// The user re-saved this provider's key, so the two blocks a key can cause — <c>AuthFailed</c>
-    /// (§5.3: open until the key changes) and <c>QuotaExhausted</c> (cleared when the key is
-    /// re-saved) — are lifted. <c>ProviderGates.ClearAuthBlock(id)</c> (E2.S2) forwards here from the
-    /// key-save handler. It clears the gate whatever opened it: it is a per-provider object and the
-    /// user asking for that provider again is an explicit "try now", which is also the only escape
-    /// hatch from a wrong <c>MaxValue</c>.
+    /// The user re-saved this provider's key. <b>Ruling E2-i</b> (which supersedes E2.S1's D7 "it
+    /// clears the gate whatever opened it"): a new key clears only what depends on the key — the two
+    /// <i>account-scoped</i> rows of §5.3, <c>AuthFailed</c> ("open until the key changes") and
+    /// <c>QuotaExhausted</c> ("cleared when the key is re-saved"). A <c>RateLimited</c> or
+    /// <c>Blocked</c> window is <i>IP-scoped</i> — it is a counter on the provider's side, keyed to
+    /// the address this PC dials from, and no key the user types can move it; a soft cooldown is a
+    /// dead endpoint or a DNS blip, which a key cannot fix either. Clearing those would turn a
+    /// key-save into "resume hammering the provider that just said stop", which is the one thing
+    /// this whole epic exists to prevent.
+    ///
+    /// <para>Which is why the two timelines exist: this clears the <b>account-scoped</b> one and
+    /// leaves the other exactly where it was. A 429 window that a later 401 hid underneath a
+    /// <c>MaxValue</c> is still standing when the key save lifts that <c>MaxValue</c>, and the gate
+    /// stays open for the rest of it — a single field could not tell those two apart, and the user
+    /// would have bought the provider a fresh round of requests it had already refused. The strike
+    /// ladder is left alone for the same reason: it is the IP-scoped evidence, and it ages out
+    /// through <c>CleanResetMinutes</c> of clean operation.</para>
+    ///
+    /// <para><c>ProviderGates.ClearAuthBlock(id)</c> (E2.S2) forwards here from the key-save
+    /// handler.</para>
     /// </summary>
     internal void ClearAuthBlock()
     {
         lock (_lock)
         {
-            _blockedUntil = null;
-            _strikes = 0;
-            _badResponses = 0;
+            if (_keyBlockedUntil is null) return;   // nothing a key could have caused
+
+            _keyBlockedUntil = null;
+            if (BlockedUntil is not null) return;   // an IP-scoped window still stands (E2-i)
+
             _probeOutstanding = false;
-            _cleanSince = _clock();
+            _cleanSince = _clock();                 // the gate is closed: a clean run starts here
         }
     }
 
@@ -373,10 +418,10 @@ internal sealed class ProviderGate
             // paused app never makes. Reading the clock is not a side effect: no probe is taken,
             // no state is written.
             var state = _probeOutstanding && _clock() - _probeStartedAt < ProbeTimeout ? GateState.HalfOpen
-                      : _blockedUntil is null ? GateState.Closed
+                      : BlockedUntil is null ? GateState.Closed
                       : GateState.Open;         // still Open once the window elapses — until a caller
                                                 // takes the probe, which is what makes it exactly one
-            return new GateSnapshot(state, _blockedUntil, _strikes, _lastKind);
+            return new GateSnapshot(state, BlockedUntil, _strikes, _lastKind);
         }
     }
 
@@ -394,8 +439,8 @@ internal sealed class ProviderGate
     }
 
     /// <summary>
-    /// Opens until <paramref name="candidate"/>, but <b>never shortens</b> a block that already
-    /// stands. Used by the three rows that do not escalate. The case is not hypothetical: two
+    /// Opens until <paramref name="candidate"/> on <paramref name="kind"/>'s own timeline, but
+    /// <b>never shortens</b> a block that already stands there. The case is not hypothetical: two
     /// requests are in flight (the LIVE batch and the Translator tab share the gate, I9), the first
     /// comes back 429 and opens the gate for 30 minutes, the second times out a second later — and
     /// a plain assignment would replace those 30 minutes with a 5-second cooldown and hand a
@@ -403,9 +448,19 @@ internal sealed class ProviderGate
     /// one. Every row goes through here since ruling E2-f: the last exemption — an escalating row
     /// carrying an explicit <c>Retry-After</c> — went away when the hint became a floor rather than
     /// the server's last word.
+    ///
+    /// <para>Which timeline it lands on is ruling E2-i (see <see cref="IsKeyScoped"/>), and the two
+    /// never shorten each other: the gate enforces the later of them, so a 60-minute quota does not
+    /// erase the 30-minute 429 window it covers, and lifting the quota hands the rest of that
+    /// window back rather than the whole provider.</para>
     /// </summary>
-    private void BlockUntil(DateTimeOffset candidate) =>
-        _blockedUntil = _blockedUntil is { } standing && standing > candidate ? standing : candidate;
+    private void BlockUntil(DateTimeOffset candidate, TranslationErrorKind kind)
+    {
+        if (IsKeyScoped(kind))
+            _keyBlockedUntil = _keyBlockedUntil is { } key && key > candidate ? key : candidate;
+        else
+            _ipBlockedUntil = _ipBlockedUntil is { } ip && ip > candidate ? ip : candidate;
+    }
 
     /// <summary>
     /// A <c>Retry-After</c> is <b>a floor, never a shortcut</b> (ruling E2-f, which supersedes

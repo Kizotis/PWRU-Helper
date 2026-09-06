@@ -22,8 +22,11 @@ internal static class ProviderIds
     internal const string Bergamot = "bergamot";
 
     /// <summary>Every id, in the chain order of §8.1 — for the E7 status list and for the tests that
-    /// pin the set. It is not the chain itself: composition is E3's.</summary>
-    internal static readonly string[] All =
+    /// pin the set. It is not the chain itself: composition is E3's. Read-only by type and not just
+    /// by convention: a <c>static readonly string[]</c> is mutable static state, which is the R4 /
+    /// R-08 class this whole story is about containing, and one sorted array in one test would leak
+    /// across the assembly.</summary>
+    internal static readonly IReadOnlyList<string> All = new[]
     {
         GoogleDict, Edge, GoogleGtx, DeepL, Azure, Bergamot,
     };
@@ -121,6 +124,11 @@ internal static class ProviderGates
     /// call sites is not this story — the entry point is. A provider that has never had a gate has
     /// nothing to clear, and a poll-shaped API must not create one, so this does <b>not</b> go
     /// through <see cref="For"/>.
+    ///
+    /// <para>Routing only: <b>which</b> blocks a key may lift is ruling E2-i and lives in
+    /// <see cref="ProviderGate.ClearAuthBlock"/> — the account-scoped rows (<c>AuthFailed</c>,
+    /// <c>QuotaExhausted</c>) and no other. Saving a DeepL key never touches Azure's gate, and it
+    /// never lifts DeepL's own 429 window either.</para>
     /// </summary>
     internal static void ClearAuthBlock(string providerId)
     {
@@ -151,16 +159,22 @@ internal static class ProviderGates
     /// events out of <c>Services/</c>, and nothing outside <c>Services/</c> may set this — the UI
     /// polls. Unwired today, like <c>GateOutcome.Wait</c> and <c>RequestPriority</c> in E2.S1: this
     /// story adds no persistence and no logging (I11).
+    /// <para>The arguments are what both consumers need and no more: the provider <b>id</b> (a gate
+    /// does not know its own — the registry is the only thing that does), the state it came
+    /// <b>from</b>, and the whole snapshot it landed on, which carries the new state, the reason
+    /// (<c>LastKind</c>), the strikes and the <c>blockedUntil</c>. That is exactly E2.S6's
+    /// <c>OnTransition(from, to, kind, strikes, blockedUntil)</c> and exactly what E2.S4 needs to
+    /// decide whether a transition is one of the four §5.2 edges worth a write.</para>
     /// </summary>
-    internal static Action<string, GateSnapshot>? TransitionHook;
+    internal static Action<string, GateState, GateSnapshot>? TransitionHook;
 
     /// <summary>Announce a transition to whatever E2.S4/E2.S6 installed. Exception-free by contract:
     /// a save or a log line must never be able to fail a translation.</summary>
-    internal static void NoteTransition(string providerId, GateSnapshot snapshot)
+    internal static void NoteTransition(string providerId, GateState from, GateSnapshot to)
     {
         var hook = TransitionHook;                  // read once: it can be replaced concurrently
         if (hook == null) return;
-        try { hook(providerId, snapshot); } catch { /* observability must not break the request */ }
+        try { hook(providerId, from, to); } catch { /* observability must not break the request */ }
     }
 
     /// <summary>

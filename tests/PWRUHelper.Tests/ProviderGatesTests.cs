@@ -24,8 +24,11 @@ public class ProviderGatesTests : GatesTestBase
 
     private sealed class FakeClock
     {
-        // A fixed instant, not "now": nothing in this file may depend on when it runs.
-        public DateTimeOffset Now { get; private set; } = new(2026, 9, 6, 12, 0, 0, TimeSpan.Zero);
+        // A fixed instant, and deliberately one the wall clock cannot be: the case that proves
+        // ResetForTests puts the WALL clock back compares against DateTimeOffset.UtcNow with a
+        // one-minute tolerance, so a fake pinned at today's date would let that assertion pass on a
+        // run that restored nothing. A leaked clock has to be visibly not-now.
+        public DateTimeOffset Now { get; private set; } = new(2001, 1, 1, 12, 0, 0, TimeSpan.Zero);
         public DateTimeOffset Read() => Now;
         public void AdvanceMinutes(double m) => Now += TimeSpan.FromMinutes(m);
     }
@@ -85,7 +88,7 @@ public class ProviderGatesTests : GatesTestBase
         Assert.Equal(
             new[] { "google-dict", "edge", "google-gtx", "deepl", "azure", "bergamot" },
             ProviderIds.All);
-        Assert.Equal(ProviderIds.All.Length, ProviderIds.All.Distinct().Count());
+        Assert.Equal(ProviderIds.All.Count, ProviderIds.All.Distinct().Count());
     }
 
     // ---- AC 2: the three seams ----------------------------------------------------------------
@@ -145,7 +148,7 @@ public class ProviderGatesTests : GatesTestBase
         using (var temp = new TempGateState())
         {
             ProviderGates.Clock = new FakeClock().Read;
-            ProviderGates.TransitionHook = (_, _) => { };
+            ProviderGates.TransitionHook = (_, _, _) => { };
             Assert.Equal(temp.Path, ProviderGates.StatePath);
 
             ProviderGates.ResetForTests();
@@ -154,7 +157,7 @@ public class ProviderGatesTests : GatesTestBase
             Assert.Null(ProviderGates.TransitionHook);
         }
 
-        // The wall clock is back: "now" is a real instant again, not the fixture's 2026-09-06 12:00.
+        // The wall clock is back: "now" is a real instant again, not the fixture's 2001-01-01 12:00.
         var drift = (ProviderGates.Clock() - DateTimeOffset.UtcNow).Duration();
         Assert.True(drift < TimeSpan.FromMinutes(1), $"the registry clock is still a fake ({drift})");
     }
@@ -179,6 +182,29 @@ public class ProviderGatesTests : GatesTestBase
 
         Assert.Equal(GateState.Closed, deepl.Snapshot().State);   // the only exit from MaxValue
         Assert.Equal(standing, azure.Snapshot().BlockedUntil);    // a neighbour's 429 is untouched
+    }
+
+    [Fact]
+    public void ClearAuthBlock_does_not_lift_a_window_a_429_opened()
+    {
+        // T6, second half, as ruling E2-i settles it: a key save clears the ACCOUNT-scoped blocks
+        // (AuthFailed, QuotaExhausted) and nothing else. A RateLimited window is a counter on the
+        // provider's side keyed to this connection's address — no key the user types moves it, and
+        // clearing it would turn "I saved my key" into "resume hammering the provider that just
+        // said stop", which is the bug this whole epic exists to remove.
+        var clock = new FakeClock();
+        ProviderGates.Clock = clock.Read;
+
+        var gate = ProviderGates.For(ProviderIds.DeepL);
+        gate.ReportFailure(TranslationErrorKind.RateLimited);
+        var standing = gate.Snapshot().BlockedUntil;
+
+        ProviderGates.ClearAuthBlock(ProviderIds.DeepL);
+
+        var after = ProviderGates.Snapshot(ProviderIds.DeepL)!;
+        Assert.Equal(GateState.Open, after.State);
+        Assert.Equal(standing, after.BlockedUntil);
+        Assert.Equal(1, after.Strikes);           // the IP-scoped evidence stands too
     }
 
     [Fact]
@@ -233,15 +259,25 @@ public class ProviderGatesTests : GatesTestBase
     {
         // E2.S4 hangs the debounced save here and E2.S6 the log line. It is not an event and not a
         // callback list (ruling R-2), and observability may never fail a translation.
+        // It also carries everything both consumers need and nothing they would have to keep their
+        // own shadow copy of: the id (a gate does not know its own), the state it came FROM, and the
+        // snapshot it landed on — new state, reason, strikes, blockedUntil. That is E2.S6's
+        // OnTransition(from, to, kind, strikes, blockedUntil) with the id in front of it.
         var seen = new List<string>();
-        ProviderGates.TransitionHook = (id, _) => { seen.Add(id); throw new InvalidOperationException("disk full"); };
+        ProviderGates.TransitionHook = (id, from, to) =>
+        {
+            seen.Add($"{id} {from}->{to.State} {to.LastKind}");
+            throw new InvalidOperationException("disk full");
+        };
 
-        ProviderGates.NoteTransition(ProviderIds.DeepL, new GateSnapshot(GateState.Open, null, 1, null));
+        ProviderGates.NoteTransition(ProviderIds.DeepL, GateState.Closed,
+            new GateSnapshot(GateState.Open, null, 1, TranslationErrorKind.RateLimited));
 
-        Assert.Equal(new[] { ProviderIds.DeepL }, seen);
+        Assert.Equal(new[] { "deepl Closed->Open RateLimited" }, seen);
 
         ProviderGates.TransitionHook = null;
-        ProviderGates.NoteTransition(ProviderIds.DeepL, new GateSnapshot(GateState.Closed, null, 0, null));
+        ProviderGates.NoteTransition(ProviderIds.DeepL, GateState.Open,
+            new GateSnapshot(GateState.Closed, null, 0, null));
     }
 
     // ---- AC 3 / T4: the guard that keeps the suite off the developer's own state ---------------
@@ -257,6 +293,13 @@ public class ProviderGatesTests : GatesTestBase
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "PWRUHelper", "provider-state.json");
 
+        // The assertion that can actually fail, and the one LoggingTests:95 makes: a redirect is
+        // installed for the WHOLE run and this case is not the thing installing it. Asserting the
+        // path inside a `using (new TempGateState())` would only prove the line above it ran; the
+        // failure mode T4 exists to stop is a future E2.S4 case that never opens one.
+        Assert.NotNull(ProviderGates.PathOverride);
+        Assert.NotEqual(Path.GetFullPath(real), Path.GetFullPath(ProviderGates.StatePath));
+
         using (var temp = new TempGateState())
         {
             Assert.Equal(temp.Path, ProviderGates.StatePath);
@@ -265,6 +308,61 @@ public class ProviderGatesTests : GatesTestBase
                 "TempGateState must own a real, throwaway directory for E2.S4 to write into");
         }
 
-        Assert.Null(ProviderGates.PathOverride);   // and the override is handed back on Dispose
+        // …and Dispose hands the run-wide redirect back, not the real path.
+        Assert.Equal(TestGateStateRedirect.Path, ProviderGates.PathOverride);
+    }
+
+    [Fact]
+    public void Every_test_class_that_touches_the_registry_joins_this_collection()
+    {
+        // R4 / IS-5, as a scan rather than as a convention: static state plus xUnit's default
+        // per-collection parallelism is risk R-08, and the day someone writes a gate case in a class
+        // without [Collection("Gates")] the failure is a flake in a DIFFERENT file. The repo already
+        // owns this shape (TranslationErrorsTests.No_production_source_names_Kind_Cancelled reads the
+        // sources); this is the same idea pointed at the test tree.
+        var root = TestSourceRoot();
+        var offenders = new List<string>();
+        var joined = new List<string>();
+
+        foreach (var file in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
+        {
+            var name = Path.GetFileName(file);
+            // The two files that ARE the seam, plus anything under bin/obj.
+            if (name is "GatesCollection.cs" or "TempGateState.cs" or "TestGateStateRedirect.cs") continue;
+            if (file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}") ||
+                file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")) continue;
+
+            var text = File.ReadAllText(file);
+            // Code only: a `//` or `///` mention of the type is prose, and three files legitimately
+            // name it in a comment to point the reader at the registry.
+            var code = string.Join("\n", text.Split('\n').Select(l =>
+            {
+                var cut = l.IndexOf("//", StringComparison.Ordinal);
+                return cut >= 0 ? l[..cut] : l;
+            }));
+
+            if (!code.Contains("ProviderGates.", StringComparison.Ordinal)) continue;
+
+            if (code.Contains("[Collection(\"Gates\")]", StringComparison.Ordinal)) joined.Add(name);
+            else offenders.Add(name);
+        }
+
+        Assert.True(offenders.Count == 0,
+            "these test files touch ProviderGates without joining the non-parallel Gates collection: "
+            + string.Join(", ", offenders));
+        // …and the scan itself is not vacuous: it must at least have found this file.
+        Assert.Contains("ProviderGatesTests.cs", joined);
+    }
+
+    /// <summary>The test project's source directory, walked up from the assembly location the way
+    /// <c>TranslationErrorsTests</c> walks up to the repo root.</summary>
+    private static string TestSourceRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "PWRUHelper.Tests.csproj")))
+            dir = dir.Parent;
+
+        Assert.NotNull(dir);
+        return dir!.FullName;
     }
 }

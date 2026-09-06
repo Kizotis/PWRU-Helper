@@ -288,6 +288,125 @@ public class ProviderGateTests
         Assert.Equal(GateOutcome.Allow, gate.TryEnter(RequestPriority.Interactive).Outcome);
     }
 
+    // ---- ruling E2-i: what a key save may lift, and what it may not ---------------------------
+    //
+    // E2.S1's deviation D7 had ClearAuthBlock clear the gate whatever opened it. Ruling E2-i
+    // replaces it: a new key clears only what depends on the key — the ACCOUNT-scoped rows of §5.3
+    // (`AuthFailed`, `QuotaExhausted`). A `RateLimited` / `Blocked` window is IP-scoped (a counter
+    // on the provider's side, keyed to the address this PC dials from) and a soft cooldown is a
+    // dead endpoint or a DNS blip; no key the user types moves either, and clearing them would make
+    // "I saved my key" mean "resume hammering the provider that just said stop".
+
+    [Theory]
+    [InlineData(TranslationErrorKind.RateLimited)]
+    [InlineData(TranslationErrorKind.Blocked)]
+    public void A_key_save_cannot_lift_an_IP_scoped_block(TranslationErrorKind kind)
+    {
+        var (gate, _) = NewGate();
+        gate.ReportFailure(kind);
+        var standing = gate.Snapshot().BlockedUntil;
+
+        gate.ClearAuthBlock();
+
+        var snap = gate.Snapshot();
+        Assert.Equal(GateState.Open, snap.State);
+        Assert.Equal(standing, snap.BlockedUntil);
+        Assert.Equal(1, snap.Strikes);            // the ladder the 429s built is IP-scoped too
+        Assert.Equal(standing, OpenUntil(gate.TryEnter(RequestPriority.Interactive)));
+    }
+
+    [Theory]
+    [InlineData(TranslationErrorKind.Unavailable)]
+    [InlineData(TranslationErrorKind.Timeout)]
+    [InlineData(TranslationErrorKind.Network)]
+    [InlineData(TranslationErrorKind.Unknown)]
+    public void A_key_save_cannot_lift_a_soft_cooldown(TranslationErrorKind kind)
+    {
+        // Five seconds is five seconds: a dead endpoint is not a credentials problem.
+        var (gate, clock) = NewGate();
+        gate.ReportFailure(kind);
+
+        gate.ClearAuthBlock();
+
+        Assert.Equal(clock.Now + TimeSpan.FromSeconds(TranslationPolicy.SoftCooldownSecs),
+                     gate.Snapshot().BlockedUntil);
+    }
+
+    [Fact]
+    public void A_key_save_cannot_lift_a_bad_response_block()
+    {
+        var (gate, clock) = NewGate();
+        for (var i = 0; i < TranslationPolicy.BadResponseStrikesToOpen; i++)
+            gate.ReportFailure(TranslationErrorKind.BadResponse);
+
+        gate.ClearAuthBlock();
+
+        Assert.Equal(clock.Now + Base, gate.Snapshot().BlockedUntil);
+    }
+
+    [Fact]
+    public void A_key_save_lifts_an_auth_block_and_hands_back_the_429_window_underneath_it()
+    {
+        // The case that makes two timelines necessary rather than one field plus a reason. A 429
+        // opens a 60 s window; a 401 then covers it with MaxValue. The key save must lift the
+        // MaxValue — it is the only exit AC 4 gives — WITHOUT also buying the provider the seconds
+        // it had already refused: E2-i says a key never lifts an IP-scoped window. So the gate
+        // stays open for the rest of the 429's own window, and closes when that window elapses.
+        var (gate, clock) = NewGate();
+        gate.ReportFailure(TranslationErrorKind.RateLimited);
+        var ipWindow = clock.Now + Base;
+        gate.ReportFailure(TranslationErrorKind.AuthFailed);        // the 401 covers it
+        Assert.Equal(DateTimeOffset.MaxValue, gate.Snapshot().BlockedUntil);
+
+        gate.ClearAuthBlock();
+
+        Assert.Equal(GateState.Open, gate.Snapshot().State);
+        Assert.Equal(ipWindow, gate.Snapshot().BlockedUntil);       // …the 429's own, still standing
+        Assert.Equal(ipWindow, OpenUntil(gate.TryEnter(RequestPriority.Interactive)));
+
+        clock.Advance(Base);                                        // and it is a window, not a wall
+        Assert.Equal(GateOutcome.Probe, gate.TryEnter(RequestPriority.Interactive).Outcome);
+    }
+
+    [Fact]
+    public void A_key_save_lifts_an_auth_block_a_stale_429_landed_on()
+    {
+        // The mirror image, and the reason the two timelines never shorten each other: here the 429
+        // arrives AFTER the 401 (a request that was already in flight, I9). What must never happen
+        // is that stale 429 taking ownership of the MaxValue and leaving the user's new key with
+        // nothing to lift — a state with no exit at all, which is what AC 4 forbids.
+        var (gate, clock) = NewGate();
+        gate.ReportFailure(TranslationErrorKind.AuthFailed);
+        gate.ReportFailure(TranslationErrorKind.RateLimited);       // the stale request lands
+        Assert.Equal(DateTimeOffset.MaxValue, gate.Snapshot().BlockedUntil);
+        clock.Advance(Base);                                        // the 429's own window elapses
+
+        gate.ClearAuthBlock();
+
+        // The MaxValue is gone and only the elapsed 429 window is left, so the gate answers the way
+        // it answers any elapsed window: one probe, and a success on it closes the gate.
+        Assert.Equal(GateOutcome.Probe, gate.TryEnter(RequestPriority.Interactive).Outcome);
+        gate.ReportSuccess();
+        Assert.Equal(GateState.Closed, gate.Snapshot().State);
+        Assert.Equal(GateOutcome.Allow, gate.TryEnter(RequestPriority.Interactive).Outcome);
+    }
+
+    [Fact]
+    public void A_key_save_on_a_closed_gate_changes_nothing()
+    {
+        // The key-save handler fires whether or not the provider ever failed. Nothing to lift means
+        // nothing to touch.
+        var (gate, clock) = NewGate();
+        gate.ReportFailure(TranslationErrorKind.RateLimited);
+        TakeProbe(gate, clock);
+        gate.ReportSuccess();                     // a successful probe closes it and clears the strikes
+        var before = gate.Snapshot();
+
+        gate.ClearAuthBlock();
+
+        Assert.Equal(before, gate.Snapshot());
+    }
+
     // ---- TP-GATE-10 / 11: the rows that must NOT escalate -------------------------------------
 
     [Theory]
@@ -474,6 +593,15 @@ public class ProviderGateTests
         quotaShort.ReportFailure(TranslationErrorKind.QuotaExhausted, clockD.Now + TimeSpan.FromMinutes(45));
         Assert.Equal(clockD.Now + quotaWindow, quotaShort.Snapshot().BlockedUntil);
 
+        // The other half of `max(OpenCapMinutes, the kind's own window)`, and the only place it is
+        // observable: a row whose own window is FAR below the cap still clamps to the cap, not to
+        // its own 5 s. A 503 saying "come back in a day" therefore buys 30 minutes — the breaker's
+        // ceiling — and not a day. Worth pinning as the ruling's own arithmetic, because the number
+        // it produces (a 30-minute pause on a row that takes no strike) is one E2.S7 may want back.
+        var (softLong, clockE) = NewGate();
+        softLong.ReportFailure(TranslationErrorKind.Unavailable, clockE.Now + TimeSpan.FromDays(1));
+        Assert.Equal(clockE.Now + Cap, softLong.Snapshot().BlockedUntil);
+
         var (auth, clockC) = NewGate();
         auth.ReportFailure(TranslationErrorKind.AuthFailed, clockC.Now + TimeSpan.FromSeconds(30));
         Assert.Equal(DateTimeOffset.MaxValue, auth.Snapshot().BlockedUntil);  // no window to override
@@ -512,8 +640,12 @@ public class ProviderGateTests
 
         Assert.Equal(DateTimeOffset.MaxValue, auth.Snapshot().BlockedUntil);
         Assert.Equal(1, auth.Snapshot().Strikes);                   // counted, just not obeyed yet
-        auth.ClearAuthBlock();                                      // still the only way out
-        Assert.Equal(GateState.Closed, auth.Snapshot().State);
+        auth.ClearAuthBlock();                                      // still the only way out of MaxValue
+        // …but only out of MaxValue: ruling E2-i (which supersedes E2.S1's D7) says a key never
+        // lifts an IP-scoped window, and the stale 429 opened one of its own underneath. The gate
+        // therefore reads Open for the rest of that 60 s, and the strike stays counted.
+        Assert.Equal(GateState.Open, auth.Snapshot().State);
+        Assert.Equal(1, auth.Snapshot().Strikes);
 
         var (quota, clockQ) = NewGate();
         quota.ReportFailure(TranslationErrorKind.QuotaExhausted);

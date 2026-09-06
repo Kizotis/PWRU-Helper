@@ -9,13 +9,16 @@ namespace PWRUHelper.Tests;
 /// a fake clock. Everything that touches <c>ProviderGates</c> joins this collection, exactly as
 /// everything that touches the WPF host joins <c>WpfCollection</c> (<c>StaTestHost.cs:73-74</c>).
 ///
-/// <para>Two non-parallel collections is the accepted, bounded cost of two static facades (CI-5).
-/// <b>Do not change the runner's default parallelism to work around it</b> — the suite must stay
-/// green with no <c>xunit.runner.json</c> at all, which is this story's definition of done.</para>
+/// <para>A second non-parallel collection is the accepted, bounded cost of a second static facade
+/// (CI-5). <b>Do not change the runner's default parallelism to work around it</b> — the suite must
+/// stay green with no <c>xunit.runner.json</c> at all, which is this story's definition of done.</para>
 ///
-/// <para><c>DisableParallelization</c> also keeps this collection from running beside any other one;
-/// it costs nothing (these cases are pure arithmetic) and it means a future test that reaches
-/// <c>ProviderGates</c> without joining the collection is a bug this file can still survive.</para>
+/// <para><c>DisableParallelization</c> also keeps this collection from running beside any other one
+/// (<c>WpfCollection</c> does not set it, so "two non-parallel collections" would overstate what is
+/// there); it costs nothing — these cases are pure arithmetic — and it means a future test that
+/// reaches <c>ProviderGates</c> without joining the collection is a bug this file can still survive.
+/// <c>ProviderGatesTests.Every_test_class_that_touches_the_registry_joins_this_collection</c> is what
+/// stops that bug from being written in the first place.</para>
 /// </summary>
 [CollectionDefinition("Gates", DisableParallelization = true)]
 public class GatesCollection { }
@@ -28,14 +31,32 @@ public class GatesCollection { }
 /// </summary>
 public abstract class GatesTestBase : IDisposable
 {
-    protected GatesTestBase() => ProviderGates.ResetForTests();
+    protected GatesTestBase() => Reset();
+
+    /// <summary>Derived teardown. Override this rather than <c>Dispose</c>: re-declaring
+    /// <c>IDisposable</c> on a derived class would re-map the interface and xUnit would then call
+    /// the derived method <i>instead</i> of this one, silently skipping the reset — a leaked fake
+    /// clock that makes the next case pass or fail depending on what ran before it.</summary>
+    protected virtual void DisposeCore() { }
 
     public void Dispose()
     {
         // After, as well as before: a case that leaves a fake clock or a temp path behind would
         // otherwise reach whatever runs next — including a case in another collection, since only
         // this collection is serialised, not the whole assembly.
-        ProviderGates.ResetForTests();
+        DisposeCore();
+        Reset();
         GC.SuppressFinalize(this);
+    }
+
+    /// <summary>`ResetForTests` puts the process back where it started — which includes a null
+    /// <c>PathOverride</c>, i.e. the developer's real <c>%AppData%</c>. That is right for the
+    /// production contract and wrong for a test run, so the assembly-wide redirect is re-applied
+    /// immediately: between the two there is no instant in which a gate case can reach the real
+    /// file. A case that wants its own file still opens a <see cref="TempGateState"/>.</summary>
+    private static void Reset()
+    {
+        ProviderGates.ResetForTests();
+        ProviderGates.PathOverride = TestGateStateRedirect.Path;
     }
 }

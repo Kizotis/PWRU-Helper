@@ -26,11 +26,13 @@ public interface ITranslator
 /// </summary>
 public class TranslationService : ITranslator
 {
-    /// <summary>How this endpoint names itself in the diagnostic log. Deliberately `google-gtx` and
-    /// not `google`: it is the id this provider KEEPS once E2.S2 introduces `ProviderIds` and E3
-    /// adds the other Google endpoints, so a field report from today still reads correctly after
-    /// the rename. That registry is where this constant moves.</summary>
-    private const string ProviderId = "google-gtx";
+    /// <summary>How this endpoint names itself in the diagnostic log — and, from E2.S5, which gate
+    /// it consults. Deliberately `google-gtx` and not `google`: it is the id this provider KEEPS
+    /// once E3 adds the other Google endpoints, so a field report from today still reads correctly
+    /// after the rename. It is <b>not spelled here</b>: E2.S2 moved the spelling to
+    /// <see cref="ProviderIds"/>, because a second spelling of an id is not a typo that fails
+    /// loudly — it is a silently duplicated gate.</summary>
+    private const string ProviderId = ProviderIds.GoogleGtx;
 
     private static readonly HttpClient Http = CreateClient();
 

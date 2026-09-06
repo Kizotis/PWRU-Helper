@@ -96,12 +96,12 @@ internal static class UserMessages
     /// <summary>401, or 403 while a key was sent. "About" — not "Settings": the key box is on the
     /// About tab, and the sentence this replaces sent the user to a tab that has never existed in
     /// this app.
-    /// <para><b>"Keys only" is what this sentence assumes, not what the mapper guarantees.</b>
-    /// §4.2 row 5 is <c>if (code == 401) return AuthFailed;</c> — unconditional on
-    /// <c>keyWasSent</c>, unlike rows 6/7/8 for 403 — so a 401 on the keyless Google path (an
-    /// authenticating proxy, a captive portal) sends a user who has never typed a key to an empty
-    /// key box. Recorded in E1.S6's review: the fix belongs in the mapper rule, not in this
-    /// sentence, and it is E6's when a second keyed provider makes the row worth reopening.</para></summary>
+    /// <para><b>"Keys only" is now what the mapper guarantees too.</b> Row 5 used to be
+    /// <c>if (code == 401) return AuthFailed;</c>, unconditional on <c>keyWasSent</c> unlike rows
+    /// 6/7/8 for 403, so a 401 on the keyless Google path (an authenticating proxy, a captive
+    /// portal) sent a user who has never typed a key to an empty key box. Ruling <b>E2-g</b> closed
+    /// it in E2.S2: <c>ProviderErrorMapper</c> guards 401 on <c>keyWasSent</c> and a keyless 401 is
+    /// <c>Blocked</c>. The item E1.S6's review recorded for E6 is done — nothing to reopen.</para></summary>
     public const string AuthFailed = "Your API key was refused — check it in About, or clear it";
 
     /// <summary>Not reachable yet: nothing raises this Kind until the chain has gates (E2.S3).

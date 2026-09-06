@@ -29,7 +29,9 @@ internal sealed class TempGateState : IDisposable
 
     public void Dispose()
     {
-        ProviderGates.PathOverride = null;
+        // Back to the run-wide redirect, never to null: null is the developer's real %AppData%, and
+        // the point of this pair is that no instant of a test run resolves there.
+        ProviderGates.PathOverride = TestGateStateRedirect.Path;
         try { _dir.Delete(recursive: true); } catch { /* the test already made its point */ }
     }
 }
