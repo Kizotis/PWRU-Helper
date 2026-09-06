@@ -71,7 +71,7 @@ development_status:
   e1-s4-html-abuse-page-sniffing: ready-for-dev
   e1-s5-per-request-diagnostic-log: ready-for-dev
   e1-s6-friendly-kind-switch: ready-for-dev
-  e1-s7-translation-policy: review
+  e1-s7-translation-policy: done
   epic-1-retrospective: optional
 
   # ---- Release A.1 · increment 1 · ONE RELEASE WITH EPIC 3 ----------------------

@@ -2,6 +2,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using PWRUHelper.Services;
 using Xunit;
 
@@ -52,13 +53,20 @@ public class TranslationPolicyTests
 
         foreach (var f in fields)
         {
-            var i = Array.FindIndex(lines, l => System.Text.RegularExpressions.Regex.IsMatch(l, $@"\b{f.Name}\b\s*="));
-            Assert.True(i >= 0, $"{f.Name} was not found in TranslationPolicy.cs — did the declaration move onto two lines?");
+            // The DECLARATION line, found by name on the first line that is not itself a comment —
+            // deliberately not `Name\s*=`, so splitting a declaration across two lines (name on one,
+            // initializer on the next) keeps this green instead of failing on formatting. Comment
+            // lines are skipped because the class summary and the section headers name members too.
+            var i = Array.FindIndex(lines, l => !l.TrimStart().StartsWith("//")
+                                                && Regex.IsMatch(l, $@"\b{Regex.Escape(f.Name)}\b"));
+            Assert.True(i >= 0, $"{f.Name} was not found in a declaration line of TranslationPolicy.cs");
 
             // The grade may sit at the end of the declaration or in the comment block directly
-            // above it; both read the same way to a human, so both count.
+            // above it; both read the same way to a human, so both count. The declaration runs to
+            // its ';' — a member spread over several lines carries its grade on any of them.
             var block = lines[i];
             for (int j = i - 1; j >= 0 && lines[j].TrimStart().StartsWith("//"); j--) block = lines[j] + "\n" + block;
+            for (int j = i; j + 1 < lines.Length && !lines[j].Contains(';'); j++) block += "\n" + lines[j + 1];
 
             var found = Grades.Where(g => block.Contains(g, StringComparison.Ordinal)).ToList();
             Assert.True(found.Count == 1,
@@ -87,8 +95,8 @@ public class TranslationPolicyTests
         // The constants that replaced a literal, checked where they land rather than where they are
         // declared — a wrong reference would be invisible in the assertions above.
         var timeout = TimeSpan.FromSeconds(TranslationPolicy.RequestTimeoutSeconds);
-        Assert.Equal(timeout, ClientOf(new TranslationService(new FakeHandler()))!.Timeout);
-        Assert.Equal(timeout, ClientOf(new DeepLTranslator("k:fx", new FakeHandler()))!.Timeout);
+        Assert.Equal(timeout, ClientOf(new TranslationService(new FakeHandler())).Timeout);
+        Assert.Equal(timeout, ClientOf(new DeepLTranslator("k:fx", new FakeHandler())).Timeout);
 
         var capacity = typeof(CachingTranslator).GetConstructors().Single()
                                                 .GetParameters().Single(p => p.Name == "capacity");
@@ -123,9 +131,15 @@ public class TranslationPolicyTests
         t.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly)
          .ToList();
 
-    private static HttpClient? ClientOf(object provider) =>
-        provider.GetType().GetField("_http", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(provider)
-            as HttpClient;
+    /// <summary>The private client a provider built for its injected handler. Asserts rather than
+    /// returning null, so a renamed field reads as "the seam moved", not as a NullReferenceException
+    /// at the call site.</summary>
+    private static HttpClient ClientOf(object provider)
+    {
+        var field = provider.GetType().GetField("_http", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.True(field != null, $"{provider.GetType().Name} has no private _http field — the test seam moved");
+        return Assert.IsType<HttpClient>(field!.GetValue(provider));
+    }
 
     /// <summary>The policy file itself: the grades live in comments, which reflection cannot see.
     /// Walks up from the test output to the repo root, like TranslationErrorsTests' source scan.</summary>
