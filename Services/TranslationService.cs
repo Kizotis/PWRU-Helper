@@ -267,9 +267,14 @@ public class TranslationService : ITranslator
                 if (!transient)
                     // A real, non-retryable error — report it as-is instead of retrying and then
                     // mislabeling it as "no Internet". The HTTP code stays in the message because
-                    // the message is now the log's, not the player's: since E1.S6 a 403 renders as
-                    // Blocked's sentence and a 400 (Unknown) is the one case that still falls
-                    // through to this text, which is exactly what §4.4 wants Unknown to do.
+                    // the message is now the log's, not the player's — for MOST of the statuses
+                    // that reach here. Since E1.S6 a 403 renders as Blocked's sentence, a 401 as
+                    // AuthFailed's and a 456 as QuotaExhausted's; every OTHER non-transient status
+                    // (400 and 404 in practice, but the branch is only guarded by
+                    // `!(429 || >= 500)`, so 402/405/409/410/422/451 too) classifies Unknown and
+                    // still shows this text — HTTP code included — to the player. That is what
+                    // §4.4 wants Unknown to do: it is the one Kind nobody has a rule for yet, and
+                    // hiding what the provider said is what would make it unreportable.
                     throw new TranslationException(kind,
                         $"Translation service error (HTTP {code}). Please try again later.", retryAt);
                 if (code == 429 && attempt == 2)

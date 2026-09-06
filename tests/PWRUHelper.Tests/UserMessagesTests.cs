@@ -1,5 +1,6 @@
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Reflection;
 using System.Text.RegularExpressions;
@@ -21,9 +22,12 @@ namespace PWRUHelper.Tests;
 /// </summary>
 public class UserMessagesTests
 {
-    // The one Kind that must never reach a surface, held as a value so the rest of this file can
-    // skip it without matching on its name — the same discipline the production scan enforces
-    // (TP-MAP-17) and the same shape ProviderErrorMapperTests uses.
+    // The one Kind that must never reach a surface. TP-MAP-17's scan excludes tests/
+    // (TranslationErrorsTests.ProductionSources), so a test file MAY name the token and
+    // ProviderErrorMapperTests:25 does the same thing for the same reason — production cannot, and
+    // a test that avoided the name too would be asserting on a member nobody could read. It is
+    // named exactly once, here, and every use below compares against this VALUE, so no assertion
+    // in this file depends on the spelling.
     private const TranslationErrorKind UserCancelled = TranslationErrorKind.Cancelled;
 
     // ---- AC: every Kind that can reach a player has exactly one sentence ---------------------
@@ -57,23 +61,23 @@ public class UserMessagesTests
     /// </summary>
     [Theory]
     [InlineData(TranslationErrorKind.RateLimited,
-        "The translation service asked us to slow down — try again in a moment.")]
+        "The translation service asked us to slow down — try again in a moment")]
     [InlineData(TranslationErrorKind.Blocked,
-        "The translation service is refusing requests from your connection right now.")]
+        "The translation service is refusing requests from your connection right now")]
     [InlineData(TranslationErrorKind.Unavailable,
-        "The translation service is down right now — try again shortly.")]
+        "The translation service is down right now — try again shortly")]
     [InlineData(TranslationErrorKind.Timeout,
-        "The translation service took too long to answer — try again shortly.")]
+        "The translation service took too long to answer — try again shortly")]
     [InlineData(TranslationErrorKind.Network,
-        "No internet connection — nothing can be translated until it is back.")]
+        "No internet connection — nothing can be translated until it is back")]
     [InlineData(TranslationErrorKind.BadResponse,
-        "The translation service sent something we could not read — try again shortly.")]
+        "The translation service sent something we could not read — try again shortly")]
     [InlineData(TranslationErrorKind.QuotaExhausted,
-        "Your free translation quota is used up for this month.")]
+        "Your free translation quota is used up for this month")]
     [InlineData(TranslationErrorKind.AuthFailed,
-        "Your API key was refused — check it in About, or clear it.")]
+        "Your API key was refused — check it in About, or clear it")]
     [InlineData(TranslationErrorKind.AllProvidersPaused,
-        "All engines are paused — nothing you need to do; it retries on its own.")]
+        "All engines are paused — nothing you need to do; it retries on its own")]
     public void Friendly_renders_one_fixed_sentence_per_kind(TranslationErrorKind kind, string expected)
     {
         // The provider's own message is deliberately something else: what the user reads must come
@@ -95,6 +99,59 @@ public class UserMessagesTests
             "Translation service error (HTTP 418). Please try again later.");
 
         Assert.Equal("Translation service error (HTTP 418). Please try again later.", MainWindow.Friendly(ex));
+    }
+
+    /// <summary>
+    /// The price of the pass-through above, paid once: `Unknown` hands the PROVIDER's message to
+    /// the player, so that message may never carry anything of the user's. They are fixed literals
+    /// today (the only interpolation any of them takes is the HTTP status code), but "I read them
+    /// and they looked fine" is not a guard — this drives both providers with a sentinel user text
+    /// and a sentinel API key through every failure a message can come out of, and asserts neither
+    /// survives into `ex.Message` or into what `Friendly` renders.
+    ///
+    /// Only non-retried statuses are used, so the case costs no backoff.
+    /// </summary>
+    [Fact]
+    public async Task No_provider_message_the_player_can_read_carries_the_users_text_or_a_key()
+    {
+        const string sentinel = "секретное SENTINEL сообщение";
+        const string sentinelKey = "SENTINEL-api-key-0000:fx";
+        var body = $"{{\"error\":\"{sentinel}\",\"key\":\"{sentinelKey}\"}}";
+
+        var raised = new List<TranslationException>();
+
+        // Google, keyless. 400/404 are the Unknown pass-through — the one Kind whose provider
+        // message the player actually reads — and 401/403 are the other non-retried statuses.
+        foreach (var status in new[] { HttpStatusCode.BadRequest, HttpStatusCode.NotFound,
+                                       HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden })
+            raised.Add(await Assert.ThrowsAsync<TranslationException>(
+                () => new TranslationService(new FakeHandler().Respond(status, body))
+                          .TranslateAsync(sentinel, "ru", "en")));
+
+        // A 200 whose body is not the provider's shape, and a transport failure: the two messages
+        // that are built where the body and the exception are both in scope.
+        raised.Add(await Assert.ThrowsAsync<TranslationException>(
+            () => new TranslationService(new FakeHandler().Respond(HttpStatusCode.OK, body, "text/plain"))
+                      .TranslateAsync(sentinel, "ru", "en")));
+        raised.Add(await Assert.ThrowsAsync<TranslationException>(
+            () => new TranslationService(new FakeHandler().Throws(new HttpRequestException(sentinel)))
+                      .TranslateAsync(sentinel, "ru", "en")));
+
+        // DeepL, with a key actually set — the provider whose messages are about the key.
+        foreach (var status in new[] { HttpStatusCode.Unauthorized, (HttpStatusCode)456,
+                                       HttpStatusCode.BadRequest })
+            raised.Add(await Assert.ThrowsAsync<TranslationException>(
+                () => new DeepLTranslator(sentinelKey, new FakeHandler().Respond(status, body))
+                          .TranslateAsync(sentinel, "ru", "en")));
+
+        Assert.Equal(9, raised.Count);   // non-vacuity: every branch above produced a message
+        foreach (var ex in raised)
+        {
+            Assert.DoesNotContain("SENTINEL", ex.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("секретное", ex.Message, StringComparison.Ordinal);
+            // …and the same for what the surface renders, which is the thing that actually matters.
+            Assert.DoesNotContain("SENTINEL", MainWindow.Friendly(ex), StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     /// <summary>
@@ -173,9 +230,55 @@ public class UserMessagesTests
                     $"a copy-deck sentence contains \"{b}\": {s}");
 
             Assert.False(Regex.IsMatch(s, @"\b[45]\d\d\b"), $"a copy-deck sentence names a status code: {s}");
-            Assert.True(s.Length <= 80, $"a copy-deck sentence is {s.Length} chars, over the overlay's 80: {s}");
+            Assert.True(s.Length <= 80, $"a copy-deck sentence is {s.Length} chars, over §3's 80: {s}");
             Assert.Equal(s.Trim(), s);
-            Assert.EndsWith(".", s);
+            // No terminal punctuation: every one of today's six call sites JOINS this text into a
+            // longer line, none renders it alone. The composed cases are pinned below.
+            Assert.DoesNotContain(s[^1], ".!?;:,");
+        }
+    }
+
+    // ---- the sentences as the six surfaces actually render them -------------------------------
+
+    /// <summary>
+    /// The gap every layer of this story's review found: nine cases pinned the bare sentence and
+    /// nothing pinned a COMPOSED string, so the deck could be correct and every surface still read
+    /// badly. It did — with the deck's own full stop these came out as
+    /// "Live stopped after repeated errors (…shortly.)." and "⚠ …shortly. — your text is kept".
+    ///
+    /// The wrappers are copied here as literals rather than invoked, because four of the six live
+    /// in `async void`-ish UI paths that need a window; if a wrapper is ever edited, this test
+    /// keeps saying what the old one produced and the pin at the bottom of the file is what
+    /// catches the drift for the two AC-2 ones.
+    /// </summary>
+    [Fact]
+    public void Every_surface_reads_as_a_sentence_once_the_wrapper_is_applied()
+    {
+        foreach (var s in Sentences())
+        {
+            var composed = new[]
+            {
+                $"Failed: {s}",                                     // Translate.cs:106
+                $"({s})",                                           // Live.cs:281, Ocr.cs:298
+                $"Live hiccup ({s}) — retrying…",                   // Live.cs:238
+                $"Live stopped after repeated errors ({s}).",       // Live.cs:235
+                $"OCR failed: {s}",                                 // Ocr.cs:248
+                $"⚠ {s} — your text is kept, press Enter to retry.",// CompactOverlay.xaml.cs:142
+            };
+
+            foreach (var line in composed)
+            {
+                Assert.DoesNotContain("..", line);       // no doubled stop
+                Assert.DoesNotContain(".)", line);       // no stop inside an inline parenthetical
+                Assert.DoesNotContain(". —", line);      // no stop before a continuing clause
+                Assert.DoesNotContain("((", line);       // I4's marker, not doubled by the deck
+                Assert.DoesNotContain("  ", line);
+            }
+
+            // The feed row is the one surface with a hard budget of its own: it is a row in a
+            // 360 px overlay list, and a batch failure stamps EVERY row in the batch with it.
+            Assert.True($"({s})".Length <= 110,
+                $"a feed row is {$"({s})".Length} chars, over the 110 the feed can carry: ({s})");
         }
     }
 
@@ -250,12 +353,35 @@ public class UserMessagesTests
 
     // ---- helpers -----------------------------------------------------------------------------
 
-    private static List<string> Sentences() =>
-        typeof(UserMessages)
+    /// <summary>
+    /// Every sentence in the table, read by reflection so a new one is covered by the house rules
+    /// the day it is added — and cross-checked against what the LOOKUP can actually return, which
+    /// is the part that was missing. `IsLiteral` sees only `const`: a sentence added as
+    /// `static readonly` (the natural shape the moment one is composed rather than typed) or as a
+    /// property would have escaped all five house-rule tests at once, and the old
+    /// `Assert.True(count >= 9)` floor could never have noticed because the nine existing consts
+    /// keep it green forever. An equality against the enum-driven set is the guard that cannot rot
+    /// that way: it fails if the scan stops seeing a sentence AND if a const is ever unreachable
+    /// through `Sentence`.
+    /// </summary>
+    private static List<string> Sentences()
+    {
+        var byReflection = typeof(UserMessages)
             .GetFields(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly)
             .Where(f => f.IsLiteral && f.FieldType == typeof(string))
             .Select(f => (string)f.GetRawConstantValue()!)
             .ToList();
+
+        var byLookup = Enum.GetValues<TranslationErrorKind>()
+            .Select(UserMessages.Sentence)
+            .Where(s => s != null)
+            .Select(s => s!)
+            .ToList();
+
+        Assert.Equal(byLookup.OrderBy(x => x, StringComparer.Ordinal),
+                     byReflection.OrderBy(x => x, StringComparer.Ordinal));
+        return byReflection;
+    }
 
     private static string ServiceSource(string name) => RepoFile(Path.Combine("Services", name));
 

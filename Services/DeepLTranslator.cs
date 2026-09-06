@@ -131,7 +131,11 @@ public class DeepLTranslator : ITranslator
                 // switches in step (E6).
                 var message = code switch
                 {
-                    401 or 403 => "DeepL rejected the API key — check it in Settings.",
+                    // "About", not "Settings": this app has never had a Settings tab, and although
+                    // this literal is now the log's account rather than the player's, the log is
+                    // pasted to Discord by design (I11's premise) — a human still reads it and
+                    // still cannot find the tab. E1.S6's review: the last of the fifteen.
+                    401 or 403 => "DeepL rejected the API key — check it in About.",
                     456 => "DeepL free quota is used up for this month.",
                     429 => "DeepL is rate-limiting right now — try again shortly.",
                     _ => $"DeepL service error (HTTP {code}).",

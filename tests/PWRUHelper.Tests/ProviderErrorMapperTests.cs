@@ -275,9 +275,10 @@ public class ProviderErrorMapperTests
         Assert.Equal(3, fake.Requests);
     }
 
-    /// <summary>A Google timeout is a Timeout, and the sentence it carries is the one
-    /// <c>Friendly()</c> renders today for a raw TaskCanceledException — so nothing the user reads
-    /// changes. A timeout is not retried, exactly as before.</summary>
+    /// <summary>A Google timeout is a Timeout, and it carries the sentence it has always carried.
+    /// Since E1.S6 that sentence is the LOG's account only: what the player reads is the Timeout
+    /// Kind's copy-deck sentence from <c>UserMessages</c>, pinned in <c>UserMessagesTests</c>. This
+    /// case pins the Kind and the no-retry decision. A timeout is not retried, exactly as before.</summary>
     [Fact]
     public async Task A_Google_timeout_is_a_Timeout_with_todays_wording()
     {
