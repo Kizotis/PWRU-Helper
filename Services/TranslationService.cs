@@ -27,9 +27,6 @@ public class TranslationService : ITranslator
 {
     private static readonly HttpClient Http = CreateClient();
 
-    // The text travels in the GET query string; keep well under typical URL limits.
-    private const int MaxQueryBytes = 1500;
-
     private readonly HttpClient _http;
 
     public TranslationService() : this(null) { }
@@ -57,7 +54,7 @@ public class TranslationService : ITranslator
     {
         var c = new HttpClient(handler ?? CreatePooledHandler())
         {
-            Timeout = TimeSpan.FromSeconds(12),
+            Timeout = TimeSpan.FromSeconds(TranslationPolicy.RequestTimeoutSeconds),
         };
         // A browser-like UA avoids the endpoint occasionally rejecting the request.
         c.DefaultRequestHeaders.Add("User-Agent",
@@ -76,12 +73,12 @@ public class TranslationService : ITranslator
         text = text.Trim();
         if (text.Length == 0) return "";
 
-        if (Encoding.UTF8.GetByteCount(text) <= MaxQueryBytes)
+        if (Encoding.UTF8.GetByteCount(text) <= TranslationPolicy.MaxQueryBytes)
             return await RequestAsync(text, source, target, ct);
 
         // Too long for one request: translate sentence-sized chunks and stitch back.
         var sb = new StringBuilder();
-        foreach (var chunk in ChunkText(text, MaxQueryBytes))
+        foreach (var chunk in ChunkText(text, TranslationPolicy.MaxQueryBytes))
             sb.Append(await RequestAsync(chunk, source, target, ct));
         return sb.ToString();
     }
@@ -100,7 +97,7 @@ public class TranslationService : ITranslator
             return new List<string> { await SafeOne(lines[0]) };
 
         var joined = string.Join("\n", lines);
-        if (Encoding.UTF8.GetByteCount(joined) <= MaxQueryBytes)
+        if (Encoding.UTF8.GetByteCount(joined) <= TranslationPolicy.MaxQueryBytes)
         {
             try
             {

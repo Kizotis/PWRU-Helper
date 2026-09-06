@@ -21,7 +21,7 @@ public class CachingTranslator : ITranslator
     private readonly Dictionary<string, LinkedListNode<KeyValuePair<string, string>>> _map;
     private readonly LinkedList<KeyValuePair<string, string>> _order = new();   // front = most-recently-used
 
-    public CachingTranslator(ITranslator inner, int capacity = 500)
+    public CachingTranslator(ITranslator inner, int capacity = TranslationPolicy.CacheCapacityToday)
     {
         _inner = inner;
         _capacity = Math.Max(1, capacity);

@@ -45,7 +45,7 @@ public class DeepLTranslator : ITranslator
     private static HttpClient CreateClient(HttpMessageHandler? handler = null) =>
         new(handler ?? CreatePooledHandler())
         {
-            Timeout = TimeSpan.FromSeconds(12),
+            Timeout = TimeSpan.FromSeconds(TranslationPolicy.RequestTimeoutSeconds),
         };
 
     // Free-tier keys carry a ":fx" suffix and must use the free host.
