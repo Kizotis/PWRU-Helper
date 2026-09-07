@@ -258,7 +258,22 @@ internal static class TranslationChains
     /// was expected to widen that list instead; routing it here is strictly the smaller change,
     /// because the next reference from outside still has to be a decision.</para>
     /// </summary>
-    internal static void OnKeySaved(string providerId) => ProviderGates.ClearAuthBlock(providerId);
+    /// <remarks>
+    /// <b>The file is read first, and that ordering is the whole of the method.</b> A
+    /// <c>QuotaExhausted</c> window IS persisted — only the <c>AuthFailed</c> sentinel is dropped
+    /// (E2-a) — and the registry reads <c>provider-state.json</c> on the first <c>TryEnter</c>,
+    /// i.e. on the first translation of the session (I10). A user who opens the app to fix a
+    /// credential and presses Save before translating anything therefore meets a gate nothing has
+    /// seeded yet: <c>ClearAuthBlock</c> returns at its own <c>_keyBlockedUntil is null</c> guard,
+    /// clears nothing and records nothing — so the load that follows seeds the OLD key's window
+    /// onto the NEW key, and the way out is the button that was just pressed. Loading here is
+    /// still after first paint (this runs from a click, never from the ctor), so I10 holds.
+    /// </remarks>
+    internal static void OnKeySaved(string providerId)
+    {
+        ProviderGates.EnsureLoaded();
+        ProviderGates.ClearAuthBlock(providerId);
+    }
 
     /// <summary>
     /// Is this pair one <see cref="BuildWrite"/> would actually build a tier from? One predicate,

@@ -326,6 +326,58 @@ public class ChainCompositionTests : GatesTestBase
         Assert.Equal(otherProvidersWindow, dict.Snapshot().BlockedUntil); // another provider: untouched
     }
 
+    /// <summary>
+    /// AC 6's ordering trap, found in review — the one that made the fix a two-line method. The
+    /// block a corrected key most often has to lift is the one that came back from disk, and the
+    /// registry reads <c>provider-state.json</c> on the FIRST <c>TryEnter</c>: on the first
+    /// translation of the session, not at startup (I10). Pressing Save before translating anything
+    /// therefore reaches a gate nothing has seeded — <c>ClearAuthBlock</c> clears nothing, records
+    /// nothing, and the load that follows puts the old key's quota window on the new key. So the
+    /// facade loads the file before it clears, and the block never comes back.
+    /// </summary>
+    [Fact]
+    public void TP_SET_09_A_key_saved_before_the_first_request_lifts_the_block_the_file_was_holding()
+    {
+        using var temp = new TempGateState();
+        var until = ProviderGates.Clock() + TimeSpan.FromMinutes(45);   // the OLD key's quota window
+        File.WriteAllText(temp.Path, $$"""
+            { "version": 1, "providers": { "azure": {
+                "blockedUntil": null,
+                "keyBlockedUntil": "{{until:o}}",
+                "strikes": 0,
+                "lastKind": "QuotaExhausted",
+                "lastAt": null,
+                "cleanSince": null } } }
+            """);
+
+        // The state the About tab is actually in: the app is up, nothing has translated, so nothing
+        // has read the file yet.
+        Assert.Null(ProviderGates.Snapshot(ProviderIds.Azure)?.BlockedUntil);
+
+        TranslationChains.OnKeySaved(ProviderIds.Azure);
+
+        // …and the first request of the session may not resurrect it.
+        ProviderGates.EnsureLoaded();
+        Assert.Null(ProviderGates.Snapshot(ProviderIds.Azure)?.BlockedUntil);
+        Assert.Equal(GateOutcome.Allow,
+            ProviderGates.For(ProviderIds.Azure).TryEnter(RequestPriority.Interactive).Outcome);
+    }
+
+    /// <summary>E2-i names <b>two</b> account-scoped rows and the case above drives one of them.
+    /// This is the other: a quota is spent by the KEY, so a new key is a new allowance and its
+    /// block goes with it (§15 R9's hour is what covers the same key trying again).</summary>
+    [Fact]
+    public void TP_SET_09_A_quota_block_is_account_scoped_too_and_a_new_key_lifts_it()
+    {
+        var azure = ProviderGates.For(ProviderIds.Azure);
+        azure.ReportFailure(TranslationErrorKind.QuotaExhausted);
+        Assert.NotNull(azure.Snapshot().BlockedUntil);
+
+        TranslationChains.OnKeySaved(ProviderIds.Azure);
+
+        Assert.Null(azure.Snapshot().BlockedUntil);
+    }
+
     /// <summary>The other half of E2-i, on the SAME provider: a 429 window is the provider counting
     /// requests from this IP, and pasting a new key does not move it.</summary>
     [Fact]
@@ -582,8 +634,9 @@ public class ChainCompositionTests : GatesTestBase
         Assert.Contains("_readOnceTranslator, ct)", ocr, StringComparison.Ordinal);
 
         // Both chains are assigned in the ctor body — never back in a field initializer, where they
-        // would run BEFORE _settings and read a null — and _readTranslator stays readonly so no
-        // handler can swap the LIVE chain for an Interactive one later.
+        // would run BEFORE _settings and read a null. `readonly` is gone since E6.S3 (see below):
+        // what stops a handler swapping the LIVE chain for an Interactive one is now the
+        // occurrence count at the bottom of this case, not the compiler.
         //
         // The line lost its `new CachingTranslator(…)` in E4.S4: the builder returns the chain
         // already wrapped in the decorator that carries the shared store, so this file names a chain

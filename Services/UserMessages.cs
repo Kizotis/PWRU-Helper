@@ -286,9 +286,13 @@ internal static class UserMessages
     public static string AzureNeedsARegion()
         => "Azure also needs the region your resource is in — pick or type it, then Save";
 
-    /// <summary>The other half of the pair, for a region typed with no key behind it.</summary>
+    /// <summary>The other half of the pair, for a region left behind with no key. It has to name
+    /// the WAY OUT as well as the problem (§1's second principle): the user who empties the key box
+    /// to stop paying for Azure meets this sentence, and "paste it above" alone would be an answer
+    /// to a question they did not ask — a refusal with no exit is the R-01 lockout in miniature.
+    /// Emptying the region box is that exit, and the pair then clears.</summary>
     public static string AzureNeedsAKey()
-        => "Azure also needs your key — paste it above, then Save";
+        => "Azure also needs your key — paste it above, or clear the region box to stop using Azure";
 
     /// <summary>A key or region pasted with a control character inside it (a line break picked up
     /// from the portal). Trim only reaches the ends, an HTTP header may carry neither, and the

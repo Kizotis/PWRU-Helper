@@ -2,6 +2,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
+using System.Windows;
 using System.Windows.Controls;
 using PWRUHelper.Services;
 using Xunit;
@@ -272,6 +273,72 @@ public class AzureSettingsTests
         });
     }
 
+    /// <summary>
+    /// The <c>Theme.xaml</c> deviation, at BOTH poles — the condition on which it was accepted.
+    /// The dark <c>ComboBox</c> template gained a <c>PART_EditableTextBox</c> because WPF looks
+    /// that name up and, not finding it, renders an editable combo that silently refuses the
+    /// keyboard. It is <c>Collapsed</c> by default and swapped with the selection presenter by an
+    /// <c>IsEditable</c> trigger, so <b>every existing combo must render exactly as it did</b>:
+    /// part collapsed, presenter visible. The editable one is the mirror image, and its text box
+    /// has to be reachable by the keyboard and writable or the free-text region is dead on arrival
+    /// while every assert on <c>SelectedItem</c> still passes.
+    /// </summary>
+    [Fact]
+    public void The_editable_text_part_is_visible_on_the_editable_combo_and_collapsed_on_every_other()
+    {
+        using var temp = new TempSettings("""{ "SettingsVersion": 3 }""");
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+
+            foreach (var plain in new[] { window.FromCombo, window.ToCombo, window.OcrTargetCombo,
+                                          window.OcrFilterCombo, window.CaptureBackendCombo })
+            {
+                Assert.False(plain.IsEditable);
+                Assert.Equal(Visibility.Collapsed, Part<TextBox>(plain, "PART_EditableTextBox").Visibility);
+                Assert.Equal(Visibility.Visible, Part<ContentPresenter>(plain, "selection").Visibility);
+            }
+
+            var combo = window.AzureRegionCombo;
+            Assert.True(combo.IsEditable);
+            var box = Part<TextBox>(combo, "PART_EditableTextBox");
+            Assert.Equal(Visibility.Visible, box.Visibility);
+            Assert.Equal(Visibility.Collapsed, Part<ContentPresenter>(combo, "selection").Visibility);
+            Assert.True(box.Focusable);       // the caret can get there…
+            Assert.False(box.IsReadOnly);     // …and what is typed stays
+        });
+    }
+
+    /// <summary>
+    /// The nastiest shape of the free-text case, and the reason the restore is asserted twice: a
+    /// stored region that is a strict PREFIX of a seeded one. <c>westus</c> is a real Azure region
+    /// and <c>westus2</c> is one of the nine, so a restore that let the combo's text search finish
+    /// the word would hand the next Save a region the user never stored — silently repointing a
+    /// working key at the wrong endpoint, with the About tab showing the substitution as if it
+    /// were the saved value.
+    /// </summary>
+    [Fact]
+    public void A_region_that_prefixes_a_seeded_one_is_restored_as_typed_not_completed()
+    {
+        using var temp = new TempSettings($$"""
+        { "AzureApiKey": "{{RealLookingKey}}", "AzureRegion": "westus", "SettingsVersion": 3 }
+        """);
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+
+            Assert.Null(window.AzureRegionCombo.SelectedItem);      // NOT westus2
+            Assert.Equal("westus", window.AzureRegionCombo.Text);
+            Assert.Equal(UserMessages.AzureKeySetStatus("westus"), window.AzureStatus.Text);
+        });
+
+        // …and nothing wrote the completed value back over the stored one.
+        using var saved = JsonDocument.Parse(File.ReadAllText(temp.Path));
+        Assert.Equal("westus", saved.RootElement.GetProperty("AzureRegion").GetString());
+    }
+
     /// <summary>One of the nine takes the seeded item, which is what <c>SelectTag</c> is for.</summary>
     [Fact]
     public void A_seeded_region_is_restored_as_a_selected_item()
@@ -305,13 +372,15 @@ public class AzureSettingsTests
         StaTestHost.Run(() =>
         {
             var window = new MainWindow();
-            var before = WriteChainOf(window);
+            var before = Chains(window);
 
             window.AzureKeyBox.Password = RealLookingKey;
             Save(window);
 
             Assert.Equal(UserMessages.AzureNeedsARegion(), window.AzureStatus.Text);
-            Assert.Same(before, WriteChainOf(window));
+            // NOTHING was rebuilt — all four references are the ones the constructor made.
+            var after = Chains(window);
+            for (var i = 0; i < before.Length; i++) Assert.Same(before[i], after[i]);
         });
 
         using var saved = JsonDocument.Parse(File.ReadAllText(temp.Path));
@@ -319,8 +388,15 @@ public class AzureSettingsTests
                      && stored.GetString()!.Length > 0);
     }
 
-    /// <summary>AC 5's other pole: a complete pair is saved, lower-cased, and the chain is rebuilt
-    /// so the key takes effect on the very next translation.</summary>
+    /// <summary>
+    /// AC 5's other pole, and AC 6's "rebuilds <b>both</b> chains" where it is actually owed — at
+    /// the handler. A complete pair is saved lower-cased, and all four references are new: the
+    /// write chain (where an Azure key is used today), the two read translators and
+    /// <c>_readChain</c> (because <c>UseKeyForReading</c> may already be on from a previous
+    /// session, and because a rebuild that forgot <c>_readChain</c> would leave the LIVE pause
+    /// check answering for a chain nothing translates through — I9 makes that invisible to every
+    /// behaviour test, so it is asserted by identity here).
+    /// </summary>
     [Fact]
     public void AC5_A_complete_pair_is_saved_lower_cased_and_takes_effect_at_once()
     {
@@ -329,17 +405,56 @@ public class AzureSettingsTests
         StaTestHost.Run(() =>
         {
             var window = new MainWindow();
-            var before = WriteChainOf(window);
+            var before = Chains(window);
 
             window.AzureKeyBox.Password = "  " + RealLookingKey + "  ";
             window.AzureRegionCombo.Text = "  FranceCentral  ";
             Save(window);
 
-            Assert.NotSame(before, WriteChainOf(window));
+            var after = Chains(window);
+            Assert.Equal(before.Length, after.Length);
+            for (var i = 0; i < before.Length; i++)
+                Assert.NotSame(before[i], after[i]);
         });
 
         using var saved = JsonDocument.Parse(File.ReadAllText(temp.Path));
         Assert.Equal(RealLookingKey, saved.RootElement.GetProperty("AzureApiKey").GetString());
+        Assert.Equal("francecentral", saved.RootElement.GetProperty("AzureRegion").GetString());
+    }
+
+    /// <summary>
+    /// The review finding at the OTHER writer of the same field. <c>AzureRegionCombo_Changed</c>
+    /// persists a picked region on the spot (T6), and until the review it stopped there — so a
+    /// player with a saved key who corrected their region (<c>ux</c> §5 flow (c).4 calls a wrong
+    /// region "the likely mistake") got <c>settings.json</c> holding the new one, a write chain
+    /// still calling the old one (the region is baked into <c>AzureTranslator</c> when the tier is
+    /// built) and a status line naming the old one, until they restarted. The file, the chain and
+    /// the line that reports them must agree.
+    /// </summary>
+    [Fact]
+    public void Picking_a_region_rebuilds_the_chains_and_the_status_line_it_just_changed()
+    {
+        using var temp = new TempSettings($$"""
+        { "AzureApiKey": "{{RealLookingKey}}", "AzureRegion": "westeurope", "SettingsVersion": 3 }
+        """);
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+            Assert.Equal(UserMessages.AzureKeySetStatus("westeurope"), window.AzureStatus.Text);
+            var before = Chains(window);
+
+            // As the user does it: pick one of the nine, which raises SelectionChanged for real
+            // rather than through a reflected handler call.
+            window.AzureRegionCombo.SelectedItem = window.AzureRegionCombo.Items
+                .OfType<ComboBoxItem>().First(i => (string)i.Tag == "francecentral");
+
+            Assert.Equal(UserMessages.AzureKeySetStatus("francecentral"), window.AzureStatus.Text);
+            var after = Chains(window);
+            for (var i = 0; i < before.Length; i++) Assert.NotSame(before[i], after[i]);
+        });
+
+        using var saved = JsonDocument.Parse(File.ReadAllText(temp.Path));
         Assert.Equal("francecentral", saved.RootElement.GetProperty("AzureRegion").GetString());
     }
 
@@ -369,6 +484,32 @@ public class AzureSettingsTests
         Assert.Equal("", saved.RootElement.GetProperty("AzureRegion").GetString());
     }
 
+    /// <summary>
+    /// AC 6's facade, pinned at <b>every</b> key-save handler — the review finding this story's own
+    /// work turned into a one-line fix. An <c>AuthFailed</c> block is <c>MaxValue</c> and
+    /// <c>ClearAuthBlock</c> is its only exit (TP-GATE-09), and it is not persisted (E2-a), so a
+    /// handler that saves a key without routing through <see cref="TranslationChains.OnKeySaved"/>
+    /// leaves the user's corrected key doing nothing until they restart the app. DeepL's Save had
+    /// exactly that shape until the Azure one landed the facade beside it.
+    ///
+    /// <para>Asserted in source rather than at the gate, deliberately: this file is the WPF
+    /// collection and never names <c>ProviderGates</c> (the behaviour is
+    /// <c>ChainCompositionTests</c>' TP-SET-09, in the Gates collection).</para>
+    /// </summary>
+    [Fact]
+    public void Every_key_save_handler_lifts_that_provider_account_scoped_block()
+    {
+        var translate = Code(File.ReadAllText(RepoFile("MainWindow.Translate.cs")));
+
+        foreach (var (handler, providerId) in new[]
+                 {
+                     ("DeepLSaveKey_Click", "ProviderIds.DeepL"),
+                     ("AzureSaveKey_Click", "ProviderIds.Azure"),
+                 })
+            Assert.Contains($"TranslationChains.OnKeySaved({providerId});",
+                            Body(translate, $"private void {handler}("), StringComparison.Ordinal);
+    }
+
     // =============================================================================================
     //  AC 7 — I11
     // =============================================================================================
@@ -392,15 +533,31 @@ public class AzureSettingsTests
 
     // ---- helpers ---------------------------------------------------------------------------------
 
+    /// <summary>A named piece of a control's applied template — the template has to be applied
+    /// first, because nothing here is ever shown on screen.</summary>
+    private static T Part<T>(Control control, string name) where T : class
+    {
+        control.ApplyTemplate();
+        var part = control.Template.FindName(name, control) as T;
+        Assert.True(part != null, $"'{name}' is missing from {control.GetType().Name}'s template");
+        return part!;
+    }
+
     private static void Save(MainWindow window) =>
         typeof(MainWindow)
             .GetMethod("AzureSaveKey_Click", BindingFlags.Instance | BindingFlags.NonPublic)!
             .Invoke(window, new object?[] { window, null });
 
-    private static object WriteChainOf(MainWindow window) =>
-        typeof(MainWindow)
-            .GetField("_writeTranslator", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .GetValue(window)!;
+    /// <summary>The four chain references a key save has to replace — write, LIVE read, read-once,
+    /// and the <c>ChainTranslator</c> the LIVE pause check asks. Read by identity, because "both
+    /// chains were rebuilt" is a statement about objects and nothing about behaviour can see it
+    /// (every rebuild resolves the same process-global gates — I9).</summary>
+    private static object[] Chains(MainWindow window) =>
+        new[] { "_writeTranslator", "_readTranslator", "_readOnceTranslator", "_readChain" }
+            .Select(f => typeof(MainWindow)
+                .GetField(f, BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(window)!)
+            .ToArray();
 
     private static string Code(string text) => string.Join("\n", text.Split('\n').Select(l =>
     {

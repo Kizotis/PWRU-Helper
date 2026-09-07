@@ -24,7 +24,8 @@ public partial class MainWindow : Window
 
     // True while the UI is being built or restored, i.e. whenever a control change does NOT mean
     // "the user chose this". Change handlers (SaveOcrFilterSettings, CaptureBackend_Changed,
-    // SquadUppercase_Changed) fire as a side effect of setting a slider / combo / tick, and would
+    // SquadUppercase_Changed, AzureRegionCombo_Changed) fire as a side effect of setting a slider /
+    // combo / tick — and an EDITABLE combo raises SelectionChanged the same way — and would
     // then write that transient UI state back to disk — clobbering the very settings we're loading.
     //
     // It starts TRUE and is only cleared at the end of ApplySettings, because XAML LOADING ITSELF
@@ -134,7 +135,9 @@ public partial class MainWindow : Window
         // both of which have cost this codebase a bug:
         //   · _settings is a field initializer (:65) and therefore already loaded, while a chain in
         //     a field initializer of its own would run BEFORE it and read a null. That is why
-        //     _readTranslator lost its initializer; it stays readonly so no handler can reassign it.
+        //     _readTranslator lost its initializer. It is no longer readonly either (E6.S3: a key
+        //     save rebuilds the read chain), so the guarantee is now RebuildReadChains() being the
+        //     only other writer — see the field comments above.
         //   · InitializeComponent() fires change handlers (see _restoringSettings above), so
         //     anything a handler could reach must already exist by the time it runs.
         // Nothing here touches a control, and nothing here reads provider-state.json OR

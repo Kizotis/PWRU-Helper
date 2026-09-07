@@ -80,6 +80,7 @@ public class StartupSettingsTests
     public void Starting_the_app_does_not_overwrite_the_saved_azure_key_and_region()
     {
         using var settings = new TempSettings(AzureSettings);
+        var beforeStartup = settings.Read();
 
         StaTestHost.Run(() =>
         {
@@ -89,6 +90,13 @@ public class StartupSettingsTests
             Assert.Null(window.AzureRegionCombo.SelectedItem);           // free text: no item matches
             Assert.Equal("norwayeast", window.AzureRegionCombo.Text);
         });
+
+        // TP-SET-05's own wording is "the file on disk is byte-identical", and the stronger assert
+        // is worth the strictness: a clobbering handler that happened to write the SAME values back
+        // would satisfy every value assert below while proving the guard did not hold. Starting the
+        // app must not write settings.json at all — this file is already at the current version, so
+        // no migration is owed either (AC 2).
+        Assert.Equal(beforeStartup, settings.Read());
 
         using var saved = JsonDocument.Parse(File.ReadAllText(settings.Path));
         Assert.Equal("0123456789abcdef0123456789abcdef",

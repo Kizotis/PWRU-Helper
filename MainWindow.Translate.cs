@@ -239,6 +239,12 @@ public partial class MainWindow
     {
         _settings.DeepLApiKey = (DeepLKeyBox.Password ?? "").Trim();
         SettingsService.Save(_settings);
+        // The same line the Azure save makes below, and DeepL needs it just as badly (E6.S3
+        // review): an AuthFailed block is MaxValue and ClearAuthBlock is its ONLY exit, so a
+        // refused key used to disable DeepL for the rest of the session — pasting the corrected
+        // one changed nothing until the app was restarted. Ruling E2-a: no state may lock the
+        // user out without a way back. E2-i bounds it to this key's own account-scoped rows.
+        TranslationChains.OnKeySaved(ProviderIds.DeepL);
         // Apply immediately: a corrected key takes effect on the very next translation. What is
         // rebuilt is the CHAIN — the cache store behind it is TranslationChains' and outlives this
         // line (§8.2, E4.S4), so the session's accumulated translations survive the save. That was
@@ -275,8 +281,29 @@ public partial class MainWindow
     private void AzureRegionCombo_Changed(object sender, SelectionChangedEventArgs e)
     {
         if (_restoringSettings) return;
-        _settings.AzureRegion = ReadAzureRegion();
+
+        // An editable combo raises this for every item the user arrows past in the open list AND
+        // for every keystroke that moves the type-ahead match — so the handler must be free when
+        // nothing actually changed, or one interaction is a burst of settings.json writes and
+        // chain rebuilds on the UI thread, against the one requirement the whole product has
+        // (nothing may lag the game).
+        var region = ReadAzureRegion();
+        if (region == _settings.AzureRegion) return;
+
+        _settings.AzureRegion = region;
         SettingsService.Save(_settings);
+
+        // …and then the app must actually USE what it just wrote down. The region is baked into
+        // AzureTranslator when the tier is built, so persisting alone would leave settings.json
+        // saying `francecentral`, the running chain still calling `westeurope` and the status line
+        // naming a third thing — until a restart. Divergence between the file, the chain and the
+        // line that reports them is the failure class this whole story is about, so the handler
+        // ends where the Save button does: both chains rebuilt, one status line refreshed. The
+        // gate is deliberately NOT cleared here — lifting an account-scoped block is what pressing
+        // Save means (AC 6, ruling E2-i), not what brushing a dropdown means.
+        _writeTranslator = BuildWriteChain();
+        RebuildReadChains();
+        UpdateEngineStatusUi();
     }
 
     /// <summary>The region as the app will store it. <c>SelectedTag</c> returns null for typed
