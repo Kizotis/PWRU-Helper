@@ -13,18 +13,40 @@ namespace PWRUHelper.Services;
 /// </summary>
 public class DeepLTranslator : ITranslator
 {
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(12) };
+    private static readonly HttpClient Http = CreateClient();
 
+    private readonly HttpClient _http;
     private readonly string _key;
     private readonly string _endpoint;
 
-    public DeepLTranslator(string apiKey)
+    public DeepLTranslator(string apiKey) : this(apiKey, null) { }
+
+    /// <summary>Test seam: a handler builds a private client — same timeout as the shared one — so
+    /// the status mapping and the parser can be exercised offline; the app passes nothing and keeps
+    /// the shared static client. Nothing disposes the private client: production never takes this
+    /// path, and a test handler owns no sockets.</summary>
+    internal DeepLTranslator(string apiKey, HttpMessageHandler? handler = null)
     {
         _key = (apiKey ?? "").Trim();
         _endpoint = FreeKey(_key)
             ? "https://api-free.deepl.com/v2/translate"
             : "https://api.deepl.com/v2/translate";
+        _http = handler == null ? Http : CreateClient(handler);
     }
+
+    /// <summary>Same reasoning as TranslationService: a process-lifetime client needs its pooled
+    /// connections recycled, or a stale one is never replaced. `internal` so the lifetime can be
+    /// pinned by a test without reflecting into HttpClient's private fields.</summary>
+    internal static SocketsHttpHandler CreatePooledHandler() =>
+        new() { PooledConnectionLifetime = TimeSpan.FromMinutes(2) };
+
+    // One factory for both paths, so a test client differs from the production one by its handler
+    // and nothing else.
+    private static HttpClient CreateClient(HttpMessageHandler? handler = null) =>
+        new(handler ?? CreatePooledHandler())
+        {
+            Timeout = TimeSpan.FromSeconds(TranslationPolicy.RequestTimeoutSeconds),
+        };
 
     // Free-tier keys carry a ":fx" suffix and must use the free host.
     internal static bool FreeKey(string key) => key.TrimEnd().EndsWith(":fx", StringComparison.Ordinal);
@@ -50,14 +72,15 @@ public class DeepLTranslator : ITranslator
         // response is malformed — throw so the Google fallback (see FallbackTranslator) takes over.
         // (Previously we padded the missing slots with the untranslated source lines, but that
         // bypassed the fallback AND cached raw Russian source as if it were a translation.)
-        throw new TranslationException("DeepL returned an unexpected response.");
+        throw new TranslationException(TranslationErrorKind.BadResponse,
+            "DeepL returned an unexpected response.");
     }
 
     private async Task<List<string>> RequestAsync(IReadOnlyList<string> texts, string source,
         string target, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(_key))
-            throw new TranslationException("No DeepL API key set.");
+            throw new TranslationException(TranslationErrorKind.AuthFailed, "No DeepL API key set.");
 
         var form = new List<KeyValuePair<string, string>>();
         foreach (var t in texts) form.Add(new KeyValuePair<string, string>("text", t));
@@ -72,42 +95,76 @@ public class DeepLTranslator : ITranslator
         // Header auth is DeepL's recommended scheme (keeps the key out of the body/logs).
         req.Headers.TryAddWithoutValidation("Authorization", "DeepL-Auth-Key " + _key);
 
-        HttpResponseMessage resp;
+        string json;
+        // The send AND the body read sit in the same try: a failure while reading the response used
+        // to escape raw, past the TranslationException contract the FallbackTranslator and the LIVE
+        // loop are written against. (With HttpClient's default ResponseContentRead the body is
+        // already buffered by SendAsync, so that escape is defensive today — but the contract is
+        // the point, not the odds.)
         try
         {
-            resp = await Http.SendAsync(req, ct);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (OperationCanceledException)
-        {
-            // On .NET 8 an HttpClient timeout surfaces as a TaskCanceledException (a subclass of
-            // OperationCanceledException) with the caller's ct NOT cancelled. Turn it into a
-            // TranslationException so the Google fallback kicks in instead of the raw OCE bubbling
-            // up past the FallbackTranslator (which correctly refuses to swallow real cancellations).
-            throw new TranslationException("DeepL timed out — check your connection or try again.");
-        }
-        catch (HttpRequestException)
-        {
-            throw new TranslationException("Couldn't reach DeepL. Check your Internet connection.");
-        }
+            using var resp = await _http.SendAsync(req, ct);
 
-        using (resp)
-        {
             if (!resp.IsSuccessStatusCode)
             {
                 int code = (int)resp.StatusCode;
-                throw new TranslationException(code switch
+                // The single classification point (§4.2). A key is always sent on this path (the
+                // empty-key case threw above), so the mapper reads 403 as a rejected key and not
+                // as a bot block. No bodyHead: DeepL signals an exhausted allowance with its own
+                // 456, so row 6's envelope test has nothing to read here — Azure (E6) is the
+                // provider that will pass one. Every sentence below is unchanged.
+                // The mapper's caller contract, honoured rather than only quoted: row 1 answers
+                // with the cancel Kind whenever the token is cancelled, and the throw below would
+                // hand it to a TranslationException — the one construction TranslationErrors.cs
+                // forbids. Checking here (the token can be cancelled between the response arriving
+                // and this line) means row 1 cannot fire and a cancel can only leave as an OCE.
+                ct.ThrowIfCancellationRequested();
+
+                var kind = ProviderErrorMapper.Classify(resp, bodyHead: null, transport: null,
+                    keyWasSent: true, ct);
+                // The sentence below is no longer what the player reads: E1.S6 made Friendly()
+                // render one sentence per Kind from Services/UserMessages.cs, and this message is
+                // now the LOG's account of what DeepL said. That defuses the two-switch trap this
+                // warning was about — a bodyHead-driven QuotaExhausted can no longer arrive on
+                // screen as "check the API key". It can still make the log disagree with the Kind
+                // beside it, so whoever starts passing a bodyHead here still owns keeping the two
+                // switches in step (E6).
+                var message = code switch
                 {
-                    401 or 403 => "DeepL rejected the API key — check it in Settings.",
+                    // "About", not "Settings": this app has never had a Settings tab, and although
+                    // this literal is now the log's account rather than the player's, the log is
+                    // pasted to Discord by design (I11's premise) — a human still reads it and
+                    // still cannot find the tab. E1.S6's review: the last of the fifteen.
+                    401 or 403 => "DeepL rejected the API key — check it in About.",
                     456 => "DeepL free quota is used up for this month.",
                     429 => "DeepL is rate-limiting right now — try again shortly.",
                     _ => $"DeepL service error (HTTP {code}).",
-                });
+                };
+                throw new TranslationException(kind, message,
+                    ProviderErrorMapper.RetryAfter(resp, DateTimeOffset.UtcNow));
             }
 
-            var json = await resp.Content.ReadAsStringAsync(ct);
-            return Parse(json);
+            json = await resp.Content.ReadAsStringAsync(ct);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex) when (ex is OperationCanceledException or HttpRequestException)
+        {
+            // The OCE trap: on .NET 8 an HttpClient timeout is a TaskCanceledException with the
+            // caller's ct NOT cancelled. The filter above takes every real cancellation, so the
+            // mapper sees only the timeout — and says so, which is what makes the Google fallback
+            // kick in instead of a raw OCE bubbling up past the FallbackTranslator.
+            // Same contract as the status branch: the filter above ran one statement ago, and a
+            // token cancelled since then would make Classify answer with the cancel Kind.
+            ct.ThrowIfCancellationRequested();
+            throw new TranslationException(
+                ProviderErrorMapper.Classify(resp: null, bodyHead: null, transport: ex,
+                    keyWasSent: true, ct),
+                ex is HttpRequestException
+                    ? "Couldn't reach DeepL. Check your Internet connection."
+                    : "DeepL timed out — check your connection or try again.");
+        }
+
+        return Parse(json);
     }
 
     /// <summary>Pull the ordered translations out of a DeepL JSON response.</summary>
@@ -124,7 +181,12 @@ public class DeepLTranslator : ITranslator
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
         {
-            throw new TranslationException("DeepL returned an unexpected response.");
+            // §4.2 row 12: a success whose body is not the provider's shape. The parser is what
+            // DETECTS that — the mapper only names it — and this method has no HttpResponseMessage
+            // to hand it, so the Kind is stated here and pinned against Classify by
+            // ProviderErrorMapperTests (a 200 with an unparseable body ⇒ BadResponse).
+            throw new TranslationException(TranslationErrorKind.BadResponse,
+                "DeepL returned an unexpected response.");
         }
     }
 

@@ -216,3 +216,24 @@ Paige (WD/VD): `SYNTHESE.md` — per problem: top-3 causes with evidence, quick 
 - **Implementation order for E1**: S1 → S2 → S7 → S3 → S4 → S5 → S6 (S7 pulled forward; S4 depends on it).
 
 **Mission status:** Phases 0–3 complete. **Phase 4 (implementation, story by story, Amelia DS then CR) starts only on the owner's explicit go.**
+
+---
+
+## Phase 4 — Implementation (owner's go given 2026-09-06: "go pour la Phase 4, ne t'arrête pas")
+
+Continuous execution, story by story: Amelia **DS** (test-first, one commit) then Amelia **CR** (fix-or-record, story → `done`). Code lives on `feature/p2-a0-testable-foundation` (worktree `.claude/worktrees/p4-code`), **stacked on this docs branch** so the stories can cite these documents; the PR retargets to `main` when PR #54 merges. One PR per release cut (A.0 = E1). Stops only on an owner-dependent block (first known: E3.S1/S2 network captures U1/U2 from a connection the owner designates — never the dev box).
+
+| Story | DS commit | CR verdict / commit | Tests | Notes |
+|---|---|---|---|---|
+| E1.S1 HTTP handler seam | `1f94439` | approve-with-fixes · `1a62eb6` | 256 → 268 green, 2 s | 11 review fixes (UA pin, public ctor restored, no reflection); 9 items recorded for E1.S3+. PR line: shared clients now on `SocketsHttpHandler` with `PooledConnectionLifetime = 2 min` — the only behaviour-adjacent change of increment 0. |
+| E1.S2 typed translation errors | `77e5c9e` | approve-with-fixes · `3c754ae` | → 281 | `TranslationErrorKind` + `TranslationException(kind, message, retryAt, providerId)`; source-scan guard bans a `Cancelled` exception in production (review made it worktree-proof); DeepL 5xx → `Unavailable`. |
+| E1.S7 `TranslationPolicy` | `7a8310a` | approve · `d239fea` | → 287 | Every policy constant graded in one place; retry constants left unwired for E1.S3 (ruling). |
+| E1.S3 `ProviderErrorMapper` | `3ec06be` | approve-with-fixes · `e55204b` | → 329 | §4.2 classifier; four deferred items closed; **every OCE catch filtered** (the August-accepted bug is gone); rulings: batch timeout propagates (no per-line fan-out), bad JSON does not fan out, `Retry-After` parsed, cancel member resolved by cached name. Recorded: no-network now auto-stops LIVE after 5 ticks (accepted for A.0, replaced by the paused state in E4); three failure sentences changed vs main. |
+| E1.S4 HTML abuse-page sniffing | `c958511` | approve · `d958ce2` | → 347 | Row-11 sniff before any JSON parse; precedence content-type → `<` sniff → body; linear de-tagger; 4 fixtures (3.4 KB), CI copy verified. |
+| E1.S5 per-request diagnostic log | `71a86ff` | approve-with-fixes · `76f6f7c` | → 382 | `RequestLog` one `key=value` line per failure under a `cid`; **I11 adversarial review found and closed a credential leak** (`auth_key=`/`Bearer` in an HTML error body); `LogSuppressor` storm valve; `BurstCounter` fix. Emission runs on the dispatcher (failure path only) — `HttpProviderCore` (E2.S5) adds `ConfigureAwait(false)`. |
+| E1.S6 `Friendly()` by `Kind` | `8c8b56f` | approve-with-fixes · `c2f29ce` | → 405, 5 s | `Services/UserMessages.cs` = Sally's deck; deviations D1 (no `{P}`), D2 (no "trying another engine"), D4 (no terminal stop so the six wrappers read as sentences) accepted until E7.S1; **D5 for Sally**: `QuotaExhausted`/`RateLimited`/`Blocked` deviate beyond D1–D3. |
+
+**Epic E1 / Release A.0 complete (2026-09-06):** 7 stories, 14 commits, 256 → 405 tests, no network in tests, no `%AppData%` writes. PR #55 marked ready for review (stacked on #54 — merge #54 first, GitHub retargets #55 to `main`).
+
+### Field data received during Phase 4
+- [`01-demarrage/mesures-resultats-machine-2.md`](01-demarrage/mesures-resultats-machine-2.md) — owner's personal machine (Defender-default, BAFS armed, MSI install, no MOTW): **known hash starts in ~1.1 s** (pre-process 3–29 ms); Google `gtx` healthy from that connection. Two follow-up runs requested (after reboot; fresh MOTW download).

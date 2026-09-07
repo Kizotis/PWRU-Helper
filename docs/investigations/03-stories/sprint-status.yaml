@@ -65,13 +65,13 @@ story_location: docs/investigations/03-stories/stories
 development_status:
   # ---- Release A.0 · increment 0 · may ship alone -------------------------------
   epic-1: in-progress
-  e1-s1-http-handler-seam: ready-for-dev
-  e1-s2-typed-translation-errors: ready-for-dev
-  e1-s3-provider-error-mapper: ready-for-dev
-  e1-s4-html-abuse-page-sniffing: ready-for-dev
-  e1-s5-per-request-diagnostic-log: ready-for-dev
-  e1-s6-friendly-kind-switch: ready-for-dev
-  e1-s7-translation-policy: ready-for-dev
+  e1-s1-http-handler-seam: done
+  e1-s2-typed-translation-errors: done
+  e1-s3-provider-error-mapper: done
+  e1-s4-html-abuse-page-sniffing: done
+  e1-s5-per-request-diagnostic-log: done
+  e1-s6-friendly-kind-switch: done
+  e1-s7-translation-policy: done
   epic-1-retrospective: optional
 
   # ---- Release A.1 · increment 1 · ONE RELEASE WITH EPIC 3 ----------------------
