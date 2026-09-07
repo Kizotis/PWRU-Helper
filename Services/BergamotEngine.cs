@@ -81,11 +81,18 @@ internal sealed class BergamotEngine : IBergamotEngine
     /// </summary>
     internal static IBergamotEngine Create(string configPath, Func<string?> nativeDirectory)
     {
-        // Assigned before the resolver can run, and on every Create: the runtime allows exactly ONE
-        // resolver per assembly for the life of the process, so the callback has to read a field
-        // rather than close over one instance's locator. In production there is one store and one
-        // directory; a second instance with a different one still wins from here on rather than
-        // being silently answered by the first instance's path.
+        // Assigned before the resolver can run: the runtime allows exactly ONE resolver per assembly
+        // for the life of the process, so the callback has to read a static rather than close over
+        // one instance's locator.
+        //
+        // What this write does NOT buy, stated because the obvious reading is wrong: it does not let
+        // a second instance re-point an ALREADY LOADED library. The runtime consults the resolver
+        // only until `bergamot` resolves, then caches the handle per (assembly, name) and never asks
+        // again — so the first successful directory is the process's directory. A FAILED load is not
+        // cached, which is the case that matters here: the store installing the engine mid-session
+        // and a later Create picking it up still works. In production there is one store and one
+        // directory, so the last-write-wins race between two Creates is theoretical; if E8.S3 ever
+        // gives two instances two directories, this is the line that has to become immutable.
         Volatile.Write(ref _nativeDirectory, nativeDirectory);
         EnsureResolver();
         return new BergamotEngine(new BlockingService(configPath));
@@ -93,39 +100,76 @@ internal sealed class BergamotEngine : IBergamotEngine
 
     private static Func<string?>? _nativeDirectory;
 
-    private static int _resolverInstalled;
+    private static readonly object ResolverSync = new();
+
+    private static bool _resolverInstalled;
 
     /// <summary>Install the DLL resolver, once per process. <see cref="NativeLibrary.SetDllImportResolver"/>
-    /// throws if it is called twice for the same assembly, so the latch is the contract and not an
-    /// optimisation — and the throw is swallowed for the one case that can still reach it: the
-    /// E8.S1 spike harness installs its own resolver in the same process, and its directory is as
-    /// good as ours.</summary>
+    /// throws <see cref="InvalidOperationException"/> if it is called twice for the same assembly,
+    /// so the latch is the contract and not an optimisation — and the throw is swallowed for the one
+    /// case that can still reach it: the E8.S1 spike harness installs its own resolver in the same
+    /// process, and its directory is as good as ours.
+    ///
+    /// <para>A <c>lock</c> rather than an <see cref="Interlocked"/> latch, and the difference is not
+    /// style: a latch claimed BEFORE the registration lets a second thread leave this method while
+    /// no resolver is installed yet, call <c>translator_initialize</c>, and take a
+    /// <see cref="DllNotFoundException"/> on a machine where the engine is correctly installed —
+    /// mapped to <c>Unavailable</c>, with a gate window on top. "Once per process" has to mean
+    /// "nobody proceeds until it is installed".</para>
+    /// </summary>
     private static void EnsureResolver()
     {
-        if (Interlocked.Exchange(ref _resolverInstalled, 1) == 1) return;
+        lock (ResolverSync)
+        {
+            if (_resolverInstalled) return;
+
+            try
+            {
+                NativeLibrary.SetDllImportResolver(typeof(BlockingService).Assembly, Resolve);
+            }
+            catch (InvalidOperationException)
+            {
+                // Someone in this process got there first (the spike harness). Theirs answers.
+            }
+
+            _resolverInstalled = true;
+        }
+    }
+
+    /// <summary>
+    /// <c>IntPtr.Zero</c> and <b>never a throw</b>, including out of the locator: returning zero
+    /// lets the runtime fall through to its own probing and raise the
+    /// <see cref="DllNotFoundException"/> the caller already maps to <c>Unavailable</c>. A resolver
+    /// that threw would surface a raw exception from inside a static runtime callback, which is the
+    /// one shape <see cref="BergamotTranslator"/> promises the chain it will never produce — and it
+    /// would be misclassified on the way out, because a store failing to answer where its files are
+    /// is not the engine misbehaving.
+    ///
+    /// <para><b>Obligation for E8.S3, written here so a dropped story cannot ship it silently
+    /// (the same reason the MPL notice is stated twice).</b> This loads a 21.4 MB native library by
+    /// absolute path out of a USER-WRITABLE directory, and <c>NativeLibrary.Load</c> on an absolute
+    /// path also resolves that library's own dependencies from beside it. Anything that can write
+    /// there gets code execution inside the app. The store that downloads <c>bergamot.dll</c> owes
+    /// it the treatment <c>UpdateService</c> already gives an installer — a trusted origin and a
+    /// verified hash before the first load — and this method is where that verification's result
+    /// has to be believed.</para>
+    /// </summary>
+    private static IntPtr Resolve(string name, System.Reflection.Assembly _, DllImportSearchPath? __)
+    {
+        if (!string.Equals(name, NativeLibraryName, StringComparison.Ordinal)) return IntPtr.Zero;
 
         try
         {
-            NativeLibrary.SetDllImportResolver(typeof(BlockingService).Assembly, (name, _, _) =>
-            {
-                if (!string.Equals(name, NativeLibraryName, StringComparison.Ordinal)) return IntPtr.Zero;
+            var dir = Volatile.Read(ref _nativeDirectory)?.Invoke();
+            if (string.IsNullOrEmpty(dir)) return IntPtr.Zero;
 
-                var dir = Volatile.Read(ref _nativeDirectory)?.Invoke();
-                if (string.IsNullOrEmpty(dir)) return IntPtr.Zero;
-
-                // IntPtr.Zero and never a throw: returning zero lets the runtime fall through to its
-                // own probing and raise the DllNotFoundException the caller already maps to
-                // Unavailable. A resolver that threw would surface a raw native exception from
-                // inside a static callback, which is the one shape BergamotTranslator promises the
-                // chain it will never produce.
-                return NativeLibrary.TryLoad(Path.Combine(dir, NativeFileName), out var handle)
-                    ? handle
-                    : IntPtr.Zero;
-            });
+            return NativeLibrary.TryLoad(Path.Combine(dir, NativeFileName), out var handle)
+                ? handle
+                : IntPtr.Zero;
         }
-        catch (InvalidOperationException)
+        catch (Exception)
         {
-            // Someone in this process got there first (the spike harness). Theirs answers.
+            return IntPtr.Zero;
         }
     }
 

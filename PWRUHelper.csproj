@@ -41,7 +41,16 @@
          `ExcludeAssets="native"` keeps the 21.4 MB `bergamot.dll` out of the build output and out
          of the single-file bundle, which is U7's whole answer — E8.S1 measured 0 B of exe growth
          and `%TEMP%\.net\PWRUHelper\<id>` still at its five WPF files, so §7.6 constraint 4's
-         self-extraction worry (the mechanism implicated in P1) is NOT re-armed. The DLL is
+         self-extraction worry (the mechanism implicated in P1) is NOT re-armed.
+
+         Read that 0 B for what it measured: E8.S1 held this package on the TEST csproj, where the
+         app exe could not grow whatever happened. What the spike proved is the NATIVE half — the
+         21.4 MB stays out and `%TEMP%\.net` does not re-arm — and that half carries over verbatim,
+         confirmed here: no `runtimes/` directory in any build output and no `runtimeTargets` entry
+         in `PWRUHelper.deps.json`. The MANAGED binding does now enter the bundle, deliberately (the
+         production seam does not compile without it) and measurably: 9,728 B. That is the whole
+         cost, against 21.4 MB avoided. `PrivateAssets` is NOT set on purpose — it would stop the
+         assembly flowing to the test project, where the build-output pin reads it. The DLL is
          downloaded beside the models by E8.S3's store and reached through
          NativeLibrary.SetDllImportResolver (Services/BergamotEngine.cs). `PublishFlagsTests` is
          untouched by design (CI-7): this changes no publish flag in any of the three build paths.

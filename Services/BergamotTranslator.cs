@@ -172,10 +172,18 @@ internal sealed class BergamotTranslator : ITranslator, IDisposable
         RequireInstalledPair(source, target);
 
         // One line is the per-line call, not a one-element batch: it is the cheaper of the two
-        // native shapes and it needs no markup round trip at all.
+        // native shapes and it needs no markup round trip at all. It also gets TranslateAsync's own
+        // guard, because the two entry points must not disagree about what a blank line costs: an
+        // OCR row the nickname split emptied is not a question about a translation, and answering
+        // it by loading 121 MiB would break the one rule (I10, AC 3) this class is built around.
         if (lines.Count == 1)
-            return await Task.Run(() => new List<string> { TranslateOne(lines[0], ct) }, ct)
+        {
+            var only = lines[0]?.Trim() ?? "";
+            if (only.Length == 0) return new List<string> { "" };
+
+            return await Task.Run(() => new List<string> { TranslateOne(only, ct) }, ct)
                 .ConfigureAwait(false);
+        }
 
         return await Task.Run(() => TranslateBatch(lines, ct), ct).ConfigureAwait(false);
     }
@@ -184,12 +192,23 @@ internal sealed class BergamotTranslator : ITranslator, IDisposable
     //  The lifetime — the capability only; E8.S4 owns WHEN (A-1(b))
     // =============================================================================================
 
-    /// <summary>Bring the engine up now. E8.S4's policy calls this on the first LIVE tick after the
-    /// user enabled the tier; nothing else may, and <b>nothing calls it at startup</b> (I10). It is
-    /// idempotent, and two concurrent first calls produce ONE engine — two would be 254 MiB.</summary>
+    /// <summary>
+    /// Bring the engine up now. E8.S4's policy calls this on the first LIVE tick after the user
+    /// enabled the tier; nothing else may, and <b>nothing calls it at startup</b> (I10). It is
+    /// idempotent, and two concurrent first calls produce ONE engine — two would be 254 MiB.
+    ///
+    /// <para><b>Two things E8.S4 has to know, because the signature hides both.</b> (1) It
+    /// <b>blocks</b>: it runs <c>translator_initialize</c> — 82 ms measured, §7.6 constraint 3
+    /// allows up to 500 — on the CALLING thread, and it waits on the same lock a frame in flight
+    /// holds. Call it from a dispatcher tick and it is the freeze every other member of this class
+    /// is shaped to avoid; the policy owns the <c>Task.Run</c>. (2) It <b>throws</b>
+    /// <see cref="TranslationException"/> and reports to the gate when the model is gone or the
+    /// engine will not come up — a lifetime hint with a typed failure and a soft window as side
+    /// effects, which a timer callback must catch rather than let escape.</para>
+    /// </summary>
     internal void Load()
     {
-        lock (_sync) { LoadLocked(); }
+        lock (_sync) { LoadLocked(CancellationToken.None); }
     }
 
     /// <summary>
@@ -200,21 +219,36 @@ internal sealed class BergamotTranslator : ITranslator, IDisposable
     /// <para><b>There is no timer here and there must not be.</b> "Kept loaded while LIVE runs,
     /// unloaded after LIVE stops plus an idle window" is E8.S4's policy, which is unit-testable
     /// precisely because it owns an injected clock and this class owns none.</para>
+    ///
+    /// <para><b>It blocks, and E8.S4 pays for it.</b> "Safe against a translate in flight" is
+    /// bought by waiting for that translate: this call sits on the lock for the length of the frame
+    /// the engine is inside. Never from the dispatcher — the policy owns the <c>Task.Run</c>, the
+    /// same way it owns the clock. It does not throw: see <see cref="SafeFree"/>.</para>
     /// </summary>
     internal void Unload()
     {
-        IBergamotEngine? engine;
         lock (_sync)
         {
-            engine = _engine;
+            var engine = _engine;
             Volatile.Write(ref _engine, null);
+            // INSIDE the lock, and that is the whole point. `translator_free` is a native call like
+            // the other two, and the binding is not documented thread-safe: freeing outside the lock
+            // would let it run beside a `translator_initialize` or a `translator_translate` that a
+            // waiting caller started the instant the field went null — which is exactly the
+            // serialisation this lock exists to provide, given away for a few milliseconds of
+            // latency on a path that is already tearing the engine down. It is also what makes
+            // "a translate racing an Unload never touches a freed handle" true rather than nearly
+            // true: the in-flight call holds this lock, so the free waits for it.
+            SafeFree(engine);
         }
-        // Outside the lock: freeing is the native side's business and it must not hold the lock a
-        // waiting translate is queued on any longer than the field swap needs. The field is already
-        // null, so nothing can reach this handle again.
-        engine?.Dispose();
     }
 
+    /// <summary><b>Not terminal, deliberately</b>, and E8.S4 is the one that has to know: this is
+    /// <see cref="Unload"/> under another name, so a translate arriving afterwards brings a fresh
+    /// engine up rather than throwing. That is what makes the load/unload cycle a capability instead
+    /// of a one-shot — but it means a discarded instance can still be made to allocate 121 MiB that
+    /// nothing holds a reference to unload again. Whoever retires this provider (E8.S5's chain
+    /// rebuild) must drop every reference to it in the same breath.</summary>
     public void Dispose() => Unload();
 
     // =============================================================================================
@@ -228,10 +262,18 @@ internal sealed class BergamotTranslator : ITranslator, IDisposable
         string answer;
         lock (_sync)
         {
-            var engine = LoadLocked();
+            // Again, and this one is not redundant: a caller that queued behind a whole frame can
+            // have been cancelled while it waited on this lock, and "we do not start one you
+            // cancelled" has to mean the 82 ms init as well as the translate.
+            ct.ThrowIfCancellationRequested();
+            var engine = LoadLocked(ct);
             ct.ThrowIfCancellationRequested();
             answer = Call(() => engine.Translate(text, false), ct);
         }
+
+        // §5.3's other half: without it the soft strike count is cumulative-for-ever instead of
+        // consecutive, and three BadResponses an hour apart would open a window on a healthy engine.
+        Gate.ReportSuccess();
 
         // The honest half of the cancellation contract (T4): the native call itself is not
         // cancellable, so what this class promises is "we do not start one you cancelled, and we
@@ -247,17 +289,26 @@ internal sealed class BergamotTranslator : ITranslator, IDisposable
         IReadOnlyList<string> answer;
         lock (_sync)
         {
-            var engine = LoadLocked();
+            ct.ThrowIfCancellationRequested();
+            var engine = LoadLocked(ct);
             ct.ThrowIfCancellationRequested();
             answer = Call(() => engine.TranslateBatch(lines), ct);
         }
 
-        ct.ThrowIfCancellationRequested();
-
         // I5. Not a pad, not a truncation, not a per-line retry: a BadResponse, which the gate
         // counts (three in a row open it) and the chain hands to the next tier.
-        if (answer is null || answer.Count != lines.Count)
-            throw Failure(TranslationErrorKind.BadResponse);
+        //
+        // A null ELEMENT is the same verdict and it has to be, even though the count is right: the
+        // read path substitutes the SOURCE line for a null answer, so letting one through would
+        // render the untranslated Russian as if it were the English — a wrong answer shown
+        // confidently, which is precisely what I5 exists to refuse.
+        if (answer is null || answer.Count != lines.Count || answer.Any(static l => l is null))
+            throw Reported(TranslationErrorKind.BadResponse);
+
+        // Reported before the discard check for the same reason the failure above is: the engine
+        // answered, and a cancel arriving afterwards is not evidence against it.
+        Gate.ReportSuccess();
+        ct.ThrowIfCancellationRequested();
 
         return answer.ToList();
     }
@@ -285,10 +336,12 @@ internal sealed class BergamotTranslator : ITranslator, IDisposable
         {
             throw;
         }
-        catch (TranslationException)
+        catch (TranslationException already)
         {
             // Already classified — a fake engine in a test, or a future wrapper that knows better
-            // than this method does. Re-mapping it would be a second, disagreeing classifier.
+            // than this method does. Re-mapping it would be a second, disagreeing classifier; the
+            // engine still has to go if the classification says it is gone.
+            RetireLocked(already.Kind);
             throw;
         }
         catch (Exception ex)
@@ -301,8 +354,30 @@ internal sealed class BergamotTranslator : ITranslator, IDisposable
                             or BadImageFormatException or TypeInitializationException
                 ? TranslationErrorKind.Unavailable
                 : TranslationErrorKind.BadResponse;
-            throw Failure(kind);
+            RetireLocked(kind);
+            throw Reported(kind);
         }
+    }
+
+    /// <summary>
+    /// A failure that says <b>the engine is gone</b> takes the handle with it. Without this the
+    /// dead <see cref="IBergamotEngine"/> stays in <see cref="_engine"/>, <see cref="LoadLocked"/>
+    /// keeps handing it to every later call, <see cref="IsLoaded"/> tells E8.S4 that 121 MiB is
+    /// resident and well, and the tier can never come back inside the session even though a fresh
+    /// <c>translator_initialize</c> is exactly the retry the gate's half-open window is about to ask
+    /// for. A <see cref="TranslationErrorKind.BadResponse"/> is the other case and keeps its engine:
+    /// the engine is there, it answered, it answered wrongly — three of those open the gate.
+    ///
+    /// <para>Called under <see cref="_sync"/>, which is why it may free here: nothing else can be
+    /// inside a native call while this runs.</para>
+    /// </summary>
+    private void RetireLocked(TranslationErrorKind kind)
+    {
+        if (kind != TranslationErrorKind.Unavailable) return;
+
+        var engine = _engine;
+        Volatile.Write(ref _engine, null);
+        SafeFree(engine);
     }
 
     /// <summary>
@@ -318,7 +393,7 @@ internal sealed class BergamotTranslator : ITranslator, IDisposable
     /// all. The sentence the player reads is rendered upstream by <c>UserMessages</c>, with
     /// "Offline engine" substituted from the provider id.</para>
     /// </summary>
-    private IBergamotEngine LoadLocked()
+    private IBergamotEngine LoadLocked(CancellationToken ct)
     {
         var existing = _engine;
         if (existing is not null) return existing;
@@ -327,28 +402,68 @@ internal sealed class BergamotTranslator : ITranslator, IDisposable
         // AND the model is present, so a missing model reaching this class is a race: the user
         // pressed Remove mid-session. It is reported to the gate for the same reason mode 2 is —
         // one 40-row frame must not ask forty times.
-        var directory = _modelDirectory();
-        var config = string.IsNullOrWhiteSpace(directory)
-            ? null
-            : Path.Combine(directory, ConfigFileName);
-        if (config is null || !File.Exists(config))
+        //
+        // The locator is E8.S3's code, called here: it is inside the try for the same reason the
+        // factory is. A store that throws an IOException while it stats its directory must not send
+        // a raw exception up the chain, where ProviderErrorMapper reads it as Unknown — and §4.1
+        // says Unknown in a field log is a bug report about the mapper.
+        string config;
+        try
+        {
+            var directory = _modelDirectory();
+            if (string.IsNullOrWhiteSpace(directory)) throw Reported(TranslationErrorKind.Unavailable);
+            config = Path.Combine(directory, ConfigFileName);
+            if (!File.Exists(config)) throw Reported(TranslationErrorKind.Unavailable);
+        }
+        catch (TranslationException) { throw; }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception)
+        {
             throw Reported(TranslationErrorKind.Unavailable);
+        }
 
         // Failure mode 2 — initialisation failed. Same Kind, same report: an engine that failed to
         // come up will fail again in 200 ms, and the gate's window is what stops the next line
         // paying for it.
-        IBergamotEngine engine;
+        //
+        // I3 AGAIN, and this catch is why the filter is worth writing where it "cannot fire": the
+        // factory is an injected seam and E8.S3's store will do file work inside it, so an
+        // OperationCanceledException CAN arrive here. Laundering a user cancel into a provider
+        // failure would open a soft window and make the chain skip a healthy tier — the same
+        // masquerade, running the other way.
+        IBergamotEngine? engine;
         try
         {
             engine = _engineFactory(config);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception)
         {
             throw Reported(TranslationErrorKind.Unavailable);
         }
 
+        // A factory that answers null did not initialise anything. Storing it would leave a class
+        // that believes it is loaded and NREs on the next line, mapped to BadResponse — a wrong
+        // Kind for an engine that never ran.
+        if (engine is null) throw Reported(TranslationErrorKind.Unavailable);
+
         Volatile.Write(ref _engine, engine);
         return engine;
+    }
+
+    /// <summary><c>translator_free</c> may not throw out of a teardown. If it ever does, the handle
+    /// is already unreachable and the memory is the native side's problem — what must not happen is
+    /// an exception escaping <see cref="Unload"/> or <see cref="IDisposable.Dispose"/>, which are
+    /// the two members E8.S4's policy and E8.S5's chain rebuild call from paths that have no
+    /// business handling one. It is the one native interaction outside <see cref="Call{T}"/>,
+    /// because there is no caller left to hand a typed failure to.</summary>
+    private static void SafeFree(IBergamotEngine? engine)
+    {
+        try { engine?.Dispose(); }
+        catch (Exception) { /* the handle is gone from this class either way */ }
     }
 
     /// <summary>

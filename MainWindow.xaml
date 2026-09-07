@@ -587,13 +587,27 @@
                         </StackPanel>
                         <TextBlock Text="A free helper for the Perfect World RU (pwonline.ru) community."
                                    Foreground="{StaticResource TextMutedBrush}" Margin="0,2,0,0" TextWrapping="Wrap"/>
-                        <!-- NFR10 / AC 3 (E7.S8): the application's own licence, stated in the app and
-                             not only in the repo. The MPL-2.0 half of that AC has nothing to declare
-                             while E8 does not ship — there is no offline engine, no models and no
-                             wrapper here — and inventing a licence block for an absent dependency
-                             would be the same kind of lie as a Chain line naming a tier the app
-                             cannot call. E8.S3 adds it beside this line when it lands. -->
+                        <!-- NFR10 / AC 3 (E7.S8), and E8.S2 is what changed the answer. The MPL-2.0 half
+                             of that AC had nothing to declare while E8 did not ship: no engine, no
+                             models, no wrapper. On this prototype branch the WRAPPER is here — the
+                             BergamotTranslatorSharp PackageReference is on PWRUHelper.csproj and its
+                             managed assembly goes into the shipped single-file exe — so the sentence
+                             below is no longer true on its own, and "E8.S3 places the block" is not an
+                             answer for a licence that is in the build TODAY. T8's whole point is that a
+                             dropped downstream story must not be able to ship an MPL-2.0 dependency
+                             with no notice, and a source comment is not a notice: it never reaches a
+                             user. E8.S3's fuller "Offline engine (optional)" block (§4.2) still lands
+                             beside this line and can then carry the model and native-DLL detail; this
+                             is the floor that cannot be dropped.
+
+                             The native engine and the ~30 MB models are NOT bundled — E8.S3's store
+                             downloads them on request — but they are MPL-2.0 too, so one sentence
+                             covers the three. File-level copyleft ships beside an MIT app without
+                             infecting it, and SignPath Foundation's requirement that the app itself
+                             stay OSI-licensed (MIT) is met. -->
                         <TextBlock Text="Free and open source, under the MIT licence."
+                                   Foreground="{StaticResource TextMutedBrush}" Margin="0,2,0,0" TextWrapping="Wrap"/>
+                        <TextBlock Text="The optional offline translation engine (Bergamot), its .NET wrapper and its model files are licensed under the MPL-2.0."
                                    Foreground="{StaticResource TextMutedBrush}" Margin="0,2,0,0" TextWrapping="Wrap"/>
 
                         <!-- updates -->

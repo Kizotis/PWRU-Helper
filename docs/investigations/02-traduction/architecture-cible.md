@@ -730,7 +730,17 @@ Architectural constraints, all load-bearing:
    > any more. What it protects is **I4 — nothing failed is ever cached** — so both failure modes **throw**
    > `TranslationException(Unavailable, …, providerId: bergamot)` and additionally **report to the provider's
    > gate**, which opens a soft window `ChainTranslator` skips the tier for. That is *stronger* than the
-   > placeholder: `CachingTranslator` is never handed a value at all. Neither mode sets `NotSent` —
+   > placeholder: `CachingTranslator` is never handed a value at all. **Every** failure reports, not only the
+   > two that happen before the engine is up: a loaded-but-broken engine with no breaker is re-asked on every
+   > LIVE tick, and the gate window is this provider's only "the engine is broken" cache (there is deliberately
+   > no `_initFailed` bool). Its pair is `ReportSuccess` on the success path, without which §5.3's soft strike
+   > count is cumulative-for-ever instead of consecutive. A failure that says the engine is *gone*
+   > (`Unavailable`) also drops the handle, so the tier can recover inside the session.
+   > **What this does not buy, and E8.S5 must know it:** a provider forbidden `TryEnter` (T3) never takes a
+   > half-open probe, and only a probe's success closes a gate — so once `bergamot` has reported a failure its
+   > `GateState` reads `Open` for the rest of the process even after the window elapses and the tier is being
+   > called again. The chain is correct (it skips only while `BlockedUntil > now`); E7's **chip** is what would
+   > read "paused" for a working tier. Neither mode sets `NotSent` —
    > `HttpProviderCore` stays its only writer (ruling E3-b), because the flag means "no request left the machine",
    > which is a statement about a request a local engine never makes. The I3 half is unchanged and is now written
    > in the code: no `HttpClient`, no timeout, so no OCE with a live token — and the `when (ct.IsCancellationRequested)`

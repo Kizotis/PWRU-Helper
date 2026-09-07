@@ -149,6 +149,7 @@ public class BergamotTranslatorTests : GatesTestBase
         var provider = Provider(factory, model);
 
         using var firstIsInsideTheLoad = new ManualResetEventSlim(false);
+        using var secondHasStarted = new ManualResetEventSlim(false);
         using var releaseTheLoad = new ManualResetEventSlim(false);
 
         // The winner of the race is held INSIDE the load, holding the lock, until the test has seen
@@ -161,9 +162,19 @@ public class BergamotTranslatorTests : GatesTestBase
         };
 
         var a = Task.Run(() => provider.TranslateAsync("привет", "ru", "en"));
-        var b = Task.Run(() => provider.TranslateAsync("пока", "ru", "en"));
+        var b = Task.Run(() =>
+        {
+            // Waiting for the FIRST caller to be inside the load before starting the second is what
+            // makes this a race instead of a coincidence. Without it a cold pool can schedule `b`
+            // after `a` has finished, and `Initialisations == 1` then passes for the trivial reason
+            // that the engine was already cached — the assertion holding while exercising nothing.
+            firstIsInsideTheLoad.Wait(TimeSpan.FromSeconds(10));
+            secondHasStarted.Set();
+            return provider.TranslateAsync("пока", "ru", "en");
+        });
 
         Assert.True(firstIsInsideTheLoad.Wait(TimeSpan.FromSeconds(10)), "the load never started");
+        Assert.True(secondHasStarted.Wait(TimeSpan.FromSeconds(10)), "the second caller never ran");
         releaseTheLoad.Set();
         var answers = await Task.WhenAll(a, b);
 
@@ -321,18 +332,162 @@ public class BergamotTranslatorTests : GatesTestBase
         // Bring it up on a good call first, so this is the translate leg and not the load leg.
         await provider.TranslateAsync("привет", "ru", "en");
 
-        factory.Last!.OnTranslate = (_, _) => throw new DllNotFoundException("bergamot");
-        var gone = await Assert.ThrowsAsync<TranslationException>(
-            () => provider.TranslateAsync("привет", "ru", "en"));
-        Assert.Equal(TranslationErrorKind.Unavailable, gone.Kind);
-        Assert.Equal(ProviderIds.Bergamot, gone.ProviderId);
-        Assert.False(NotSentOf(gone));
-
+        // "The engine is there and misbehaved" — BadResponse, and the engine STAYS: it answered, it
+        // answered wrongly, and three of those are what open the gate.
         factory.Last!.OnTranslate = (_, _) => throw new InvalidOperationException("garbage out");
         var broken = await Assert.ThrowsAsync<TranslationException>(
             () => provider.TranslateAsync("привет", "ru", "en"));
         Assert.Equal(TranslationErrorKind.BadResponse, broken.Kind);
         Assert.Equal(ProviderIds.Bergamot, broken.ProviderId);
+        Assert.False(NotSentOf(broken));
+        Assert.True(provider.IsLoaded);
+        Assert.Equal(1, factory.Initialisations);
+        Assert.Equal(0, factory.Last!.Disposals);
+
+        // "The engine is not THERE" — Unavailable, and the dead handle goes with it. Leaving it
+        // cached would hand the same corpse to every later call, tell E8.S4 that 121 MiB is resident
+        // and well, and make the tier unrecoverable inside the session.
+        factory.Last!.OnTranslate = (_, _) => throw new DllNotFoundException("bergamot");
+        var dead = factory.Last!;
+        var gone = await Assert.ThrowsAsync<TranslationException>(
+            () => provider.TranslateAsync("привет", "ru", "en"));
+        Assert.Equal(TranslationErrorKind.Unavailable, gone.Kind);
+        Assert.Equal(ProviderIds.Bergamot, gone.ProviderId);
+        Assert.False(NotSentOf(gone));
+        Assert.False(provider.IsLoaded);
+        Assert.Equal(1, dead.Disposals);
+    }
+
+    /// <summary>
+    /// The breaker has to cover the leg it is documented to cover. Before this case the two failure
+    /// modes BEFORE the engine is up reported to the gate and every failure AFTER it was up did not,
+    /// so a loaded-but-broken engine was re-asked on every LIVE tick for ever — with the gate window
+    /// as this class's only "the engine is broken" cache (there is no <c>_initFailed</c> bool by
+    /// design), that left the post-load modes with no cache at all.
+    /// </summary>
+    [Fact]
+    public async Task A_failure_after_the_engine_is_up_reaches_the_gate_too()
+    {
+        var factory = new FakeBergamotEngineFactory();
+        using var model = new TempModel();
+        var provider = Provider(factory, model);
+        var gate = ProviderGates.For(ProviderIds.Bergamot);
+
+        await provider.TranslateAsync("привет", "ru", "en");
+        Assert.Null(gate.Snapshot().BlockedUntil);
+
+        // BadResponse is a SOFT strike: three consecutive open the window, one does not (§5.3).
+        factory.Last!.OnBatch = lines => lines.Take(lines.Count - 1).ToList();
+        for (var i = 0; i < 3; i++)
+            await Assert.ThrowsAsync<TranslationException>(
+                () => provider.TranslateLinesAsync(new[] { "a", "b" }, "ru", "en"));
+
+        var window = gate.Snapshot().BlockedUntil;
+        Assert.NotNull(window);
+        Assert.True(window > gate.Now(), "three BadResponses in a row have to leave a future window");
+    }
+
+    /// <summary>…and the other half of §5.3, which has to land in the same commit as the half above:
+    /// a success in between RESETS the soft count. Without it the strike ladder is
+    /// cumulative-for-ever and three bad frames an hour apart would open a window on a healthy
+    /// engine — the opposite bug, and the more insidious one.</summary>
+    [Fact]
+    public async Task A_success_between_two_bad_frames_resets_the_soft_count()
+    {
+        var factory = new FakeBergamotEngineFactory();
+        using var model = new TempModel();
+        var provider = Provider(factory, model);
+        var gate = ProviderGates.For(ProviderIds.Bergamot);
+
+        await provider.TranslateAsync("привет", "ru", "en");
+
+        for (var i = 0; i < 5; i++)
+        {
+            factory.Last!.OnBatch = lines => lines.Take(lines.Count - 1).ToList();
+            await Assert.ThrowsAsync<TranslationException>(
+                () => provider.TranslateLinesAsync(new[] { "a", "b" }, "ru", "en"));
+
+            factory.Last!.OnBatch = null;                       // a good frame in between
+            await provider.TranslateLinesAsync(new[] { "a", "b" }, "ru", "en");
+
+            Assert.Null(gate.Snapshot().BlockedUntil);
+        }
+    }
+
+    /// <summary>E8.S3's store is injected code and it is allowed to fail. A locator that throws must
+    /// not send a raw <c>IOException</c> up the chain, where <c>ProviderErrorMapper</c> reads it as
+    /// <c>Unknown</c> — §4.1 says an Unknown in a field log is a bug report about the mapper, not
+    /// about the provider.</summary>
+    [Fact]
+    public async Task A_store_that_throws_is_still_a_typed_Unavailable()
+    {
+        var factory = new FakeBergamotEngineFactory();
+        var provider = new BergamotTranslator(
+            modelDirectory: () => throw new IOException("the store is not ready"),
+            engineFactory: factory.Create);
+
+        var ex = await Assert.ThrowsAsync<TranslationException>(
+            () => provider.TranslateAsync("привет", "ru", "en"));
+
+        Assert.Equal(TranslationErrorKind.Unavailable, ex.Kind);
+        Assert.Equal(ProviderIds.Bergamot, ex.ProviderId);
+        Assert.False(NotSentOf(ex));
+        Assert.Equal(0, factory.Initialisations);
+    }
+
+    /// <summary>A factory that answers <c>null</c> initialised nothing. Storing it would leave a
+    /// class that believes it is loaded and NREs on the next line — reported as
+    /// <c>BadResponse</c>, which is the wrong Kind for an engine that never ran.</summary>
+    [Fact]
+    public async Task A_factory_that_returns_null_is_a_typed_Unavailable()
+    {
+        using var model = new TempModel();
+        var provider = new BergamotTranslator(
+            modelDirectory: () => model.Path,
+            engineFactory: _ => null!);
+
+        var ex = await Assert.ThrowsAsync<TranslationException>(
+            () => provider.TranslateAsync("привет", "ru", "en"));
+
+        Assert.Equal(TranslationErrorKind.Unavailable, ex.Kind);
+        Assert.False(provider.IsLoaded);
+    }
+
+    /// <summary>
+    /// <b>TP-BRG-09, asserted rather than argued.</b> §7.6 constraint 7's words are "a `(`-prefixed
+    /// placeholder <i>so nothing is cached</i>", and ruling E8-c keeps the second half while
+    /// replacing the first: what the AC protects is <b>I4</b>. The throw satisfies it more strongly
+    /// than a return did — <c>CachingTranslator</c> is never handed a value at all — but "more
+    /// strongly" is a claim, and the TP id is claimed on it, so it is driven through a real
+    /// <c>CachingTranslator</c> here for both failure modes and the store is asked afterwards.
+    /// </summary>
+    [Fact]
+    public async Task TP_BRG_09_neither_failure_mode_puts_anything_in_the_cache()
+    {
+        var store = new TranslationCacheStore(50);
+        var factory = new FakeBergamotEngineFactory();
+
+        // Mode 1 — the model is not there.
+        var missing = new CachingTranslator(new BergamotTranslator(engineFactory: factory.Create), store);
+        await Assert.ThrowsAsync<TranslationException>(
+            () => missing.TranslateAsync("привет", "ru", "en"));
+        await Assert.ThrowsAsync<TranslationException>(
+            () => missing.TranslateLinesAsync(new[] { "привет", "пока" }, "ru", "en"));
+
+        // Mode 2 — initialisation failed.
+        using var model = new TempModel();
+        var broken = new FakeBergamotEngineFactory { FailWith = new InvalidOperationException("no") };
+        var failing = new CachingTranslator(Provider(broken, model), store);
+        await Assert.ThrowsAsync<TranslationException>(
+            () => failing.TranslateAsync("привет", "ru", "en"));
+
+        Assert.Equal(0, store.Count);
+
+        // Non-vacuity: the same store DOES take a success, so "0" above is the failure being
+        // refused and not a store that never stores.
+        var working = new CachingTranslator(Provider(new FakeBergamotEngineFactory(), model), store);
+        Assert.Equal("[привет]", await working.TranslateAsync("привет", "ru", "en"));
+        Assert.Equal(1, store.Count);
     }
 
     // =============================================================================================
@@ -480,6 +635,128 @@ public class BergamotTranslatorTests : GatesTestBase
         Assert.Equal(2, factory.All.Count);
     }
 
+    /// <summary>
+    /// <b>The thread contract, as a pin.</b> The binding is not documented thread-safe and
+    /// <c>BlockingService</c> is a synchronous native engine, not a server — so what AC 5 buys is
+    /// that two threads may CALL this class at once, not that two translations run at once. LIVE
+    /// (the read chain) and the Translator tab (the write chain) share one process and one engine,
+    /// and the lock is what stands between that and two threads inside <c>translator_translate</c>.
+    ///
+    /// <para>Deterministic in the direction that matters: it passes in microseconds when the lock
+    /// holds and cannot pass by luck when it does not — the yields inside each call give a broken
+    /// build every chance to overlap.</para>
+    /// </summary>
+    [Fact]
+    public async Task The_engine_never_sees_two_callers_at_once()
+    {
+        var factory = new FakeBergamotEngineFactory();
+        using var model = new TempModel();
+        var provider = Provider(factory, model);
+
+        await provider.TranslateAsync("warm", "ru", "en");
+        var engine = factory.Last!;
+
+        // No sleep (CI-3): a yield hands the core away, which is all an unsynchronised build needs
+        // to be caught, and costs nothing when the calls really are serialised.
+        static void Overlap() { for (var i = 0; i < 200; i++) Thread.Yield(); }
+        engine.OnTranslate = (t, _) => { Overlap(); return "[" + t + "]"; };
+        engine.OnBatch = lines => { Overlap(); return lines.Select(l => "[" + l + "]").ToList(); };
+
+        var callers = Enumerable.Range(0, 8).Select(i => Task.Run(() => i % 2 == 0
+            ? provider.TranslateAsync("line" + i, "ru", "en")
+            : (Task)provider.TranslateLinesAsync(new[] { "a" + i, "b" + i }, "ru", "en"))).ToArray();
+        await Task.WhenAll(callers);
+
+        Assert.Equal(1, engine.PeakConcurrentCalls);
+        Assert.Equal(1, factory.Initialisations);
+    }
+
+    /// <summary>
+    /// <b>An <see cref="BergamotTranslator.Unload"/> racing a translate in flight.</b> This is the
+    /// property T6 asks for and the one the <c>_sync</c> doc comment claims, and until now nothing
+    /// drove it: every unload case in this file was sequential, on one thread, with nothing running.
+    /// A refactor that moved the native call out of the lock — the obvious answer to "the lock is
+    /// held across a 150 ms frame" — would free a handle under a running call with no test failing.
+    ///
+    /// <para>What is pinned: the in-flight call gets its own answer, the engine is <b>not</b> freed
+    /// while it is inside one, and it is freed exactly once afterwards. Whether the unload waits or
+    /// the translate is refused is this class's choice — it waits — but "touches a freed handle" is
+    /// not on the menu.</para>
+    /// </summary>
+    [Fact]
+    public async Task An_Unload_racing_a_translate_never_frees_the_handle_under_it()
+    {
+        var factory = new FakeBergamotEngineFactory();
+        using var model = new TempModel();
+        var provider = Provider(factory, model);
+
+        await provider.TranslateAsync("warm", "ru", "en");
+        var engine = factory.Last!;
+
+        using var insideTheCall = new ManualResetEventSlim(false);
+        using var unloadWasAsked = new ManualResetEventSlim(false);
+
+        var freedDuringTheCall = -1;
+        engine.OnTranslate = (t, _) =>
+        {
+            insideTheCall.Set();
+            unloadWasAsked.Wait(TimeSpan.FromSeconds(10));   // the unload is now blocked on the lock
+            freedDuringTheCall = engine.Disposals;           // …and must not have freed anything yet
+            return "[" + t + "]";
+        };
+
+        var translating = Task.Run(() => provider.TranslateAsync("привет", "ru", "en"));
+        Assert.True(insideTheCall.Wait(TimeSpan.FromSeconds(10)), "the native call never started");
+
+        var unloading = Task.Run(() =>
+        {
+            unloadWasAsked.Set();
+            provider.Unload();
+        });
+
+        Assert.Equal("[привет]", await translating);
+        await unloading;
+
+        Assert.Equal(0, freedDuringTheCall);
+        Assert.False(engine.WasCalledAfterDispose);
+        Assert.False(engine.WasDisposedWhileInFlight);
+        Assert.Equal(1, engine.Disposals);
+        Assert.False(provider.IsLoaded);
+    }
+
+    /// <summary>
+    /// <b>The resolver is installed once per process, and the latch is a contract rather than an
+    /// optimisation.</b> <see cref="NativeLibrary.SetDllImportResolver"/> throws
+    /// <see cref="InvalidOperationException"/> on a second registration for the same assembly, so
+    /// "call it twice" is not a wasted call, it is a crash — which is why this is pinned rather than
+    /// trusted, and why the latch is taken under a lock and not before the registration (a latch
+    /// claimed first lets a second thread leave with no resolver installed and take a
+    /// <c>DllNotFoundException</c> on a machine where the engine is correctly installed).
+    ///
+    /// <para>Nothing native happens here: the callback is registered, never invoked — resolution
+    /// only runs when a <c>[LibraryImport]</c> member is first called, which this suite never does
+    /// (CI-8). With no native directory configured the callback would answer
+    /// <see cref="IntPtr.Zero"/> anyway.</para>
+    /// </summary>
+    [Fact]
+    public void The_dll_resolver_is_installed_once_per_process()
+    {
+        var ensure = typeof(BergamotEngine).GetMethod("EnsureResolver",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(ensure);
+
+        // Twice, from here, and a third time from a parallel caller: the second and third must be
+        // no-ops rather than the InvalidOperationException the runtime raises on a re-registration.
+        ensure!.Invoke(null, null);
+        ensure.Invoke(null, null);
+        Parallel.For(0, 8, _ => ensure.Invoke(null, null));
+
+        var latch = typeof(BergamotEngine).GetField("_resolverInstalled",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(latch);
+        Assert.True((bool)latch!.GetValue(null)!, "the latch has to be set once the resolver is in");
+    }
+
     /// <summary><see cref="BergamotTranslator.Load"/> is the other half E8.S4 needs: bring the
     /// engine up on the first LIVE tick, without translating anything.</summary>
     [Fact]
@@ -523,17 +800,13 @@ public class BergamotTranslatorTests : GatesTestBase
                 StringComparison.Ordinal);
     }
 
-    /// <summary>Ruling E8-c's negative half, from this side. <c>ChainTranslatorTests</c> already
-    /// asserts <c>HttpProviderCore</c> is the only writer of <c>NotSent</c> across the whole app —
-    /// this is the local statement of the same rule, so a reader of THIS file finds it here, and it
-    /// covers the seam file too.</summary>
-    [Fact]
-    public void The_offline_provider_never_writes_NotSent()
-    {
-        foreach (var file in new[] { "BergamotTranslator.cs", "BergamotEngine.cs" })
-            Assert.False(Regex.IsMatch(Code(File.ReadAllText(ServiceFile(file))), @"NotSent\s*=(?!=)"),
-                $"{file} writes NotSent — ruling E3-b gives the flag one owner (HttpProviderCore).");
-    }
+    // Ruling E8-c's negative half is NOT re-asserted here, and that is the story's instruction
+    // ("verify it still passes rather than writing a duplicate"), not an oversight. The one scan
+    // lives in ChainTranslatorTests.NotSent_is_written_in_exactly_one_place: its ProductionSources
+    // enumerates every *.cs outside tests/bin/obj, so both files this story adds are already in
+    // scope, and it asserts EXACT equality with { "HttpProviderCore.cs" } — a second writer here
+    // fails it. Verified green against this story. A local copy would be a second thing to keep in
+    // step with ruling E3-b, and the five NotSentOf assertions above already say it behaviourally.
 
     /// <summary>The provider is <b>local</b>, and that has to stay structurally true rather than
     /// merely intended: no <c>HttpClient</c>, no <c>HttpProviderCore</c>, no <c>System.Net</c> of any

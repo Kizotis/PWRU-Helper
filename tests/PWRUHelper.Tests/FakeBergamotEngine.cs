@@ -29,23 +29,78 @@ internal sealed class FakeBergamotEngine : IBergamotEngine
 
     private int _disposals;
 
+    private int _inFlight;
+
+    private int _peakInFlight;
+
     /// <summary><c>translator_free</c> calls. A count and not a bool, because "exactly once, and
     /// safe to ask twice" is what T6 owes.</summary>
     internal int Disposals => Volatile.Read(ref _disposals);
 
+    /// <summary>The most native calls this engine was ever inside at once. <b>It has to be 1.</b>
+    /// The binding is not documented thread-safe and <c>BlockingService</c> is a synchronous native
+    /// engine, not a server, so the provider owes it one caller at a time — while the read chain and
+    /// the write chain share one process and the Translator tab is not sequential. A counter here
+    /// rather than an assertion, so a case can state the contract as an equality.</summary>
+    internal int PeakConcurrentCalls => Volatile.Read(ref _peakInFlight);
+
+    /// <summary>Whether the handle had already been freed when a call arrived — the use-after-free
+    /// T6 exists to make impossible, observed from the side that would suffer it.</summary>
+    internal bool WasCalledAfterDispose;
+
+    /// <summary>The mirror image: whether <c>translator_free</c> ran while a call was still inside
+    /// this engine. Both directions, because "safe against a translate in flight" is a claim about
+    /// an ordering and an ordering has two ends.</summary>
+    internal bool WasDisposedWhileInFlight;
+
     public string Translate(string text, bool html)
+    {
+        Enter();
+        try
+        {
+            return TranslateCore(text, html);
+        }
+        finally { Leave(); }
+    }
+
+    public IReadOnlyList<string> TranslateBatch(IReadOnlyList<string> lines)
+    {
+        Enter();
+        try
+        {
+            lock (Batches) Batches.Add(lines.ToList());
+            // TranslateCore and not Translate: the default batch is the SAME native export, so
+            // counting each line as a nested call would make the peak 2 for one caller.
+            return OnBatch?.Invoke(lines) ?? lines.Select(l => TranslateCore(l, true)).ToList();
+        }
+        finally { Leave(); }
+    }
+
+    private string TranslateCore(string text, bool html)
     {
         lock (Calls) Calls.Add((text, html));
         return OnTranslate?.Invoke(text, html) ?? "[" + text + "]";
     }
 
-    public IReadOnlyList<string> TranslateBatch(IReadOnlyList<string> lines)
+    private void Enter()
     {
-        lock (Batches) Batches.Add(lines.ToList());
-        return OnBatch?.Invoke(lines) ?? lines.Select(l => Translate(l, true)).ToList();
+        if (Disposals > 0) WasCalledAfterDispose = true;
+
+        var now = Interlocked.Increment(ref _inFlight);
+        // Raise the high-water mark without a lock: only ever upward, and only by the thread that
+        // saw a higher count than the one already recorded.
+        int seen;
+        while ((seen = Volatile.Read(ref _peakInFlight)) < now)
+            Interlocked.CompareExchange(ref _peakInFlight, now, seen);
     }
 
-    public void Dispose() => Interlocked.Increment(ref _disposals);
+    private void Leave() => Interlocked.Decrement(ref _inFlight);
+
+    public void Dispose()
+    {
+        if (Volatile.Read(ref _inFlight) > 0) WasDisposedWhileInFlight = true;
+        Interlocked.Increment(ref _disposals);
+    }
 }
 
 /// <summary>
