@@ -274,6 +274,15 @@ Continuous execution, story by story: Amelia **DS** (test-first, one commit) the
 
 **Release A.2 = E4 + E5: 9 stories + 1 spike, 716 → 897 tests, ~3 s. PR #57 ready for review (merge order #54 → #55 → #56 → #57).** Sally's copy-deck amendments A1–A12 (D5 wording, provider display names, `{P}` templates, auto-stop sentence, "Cancel read" affordance, countdown bands, cache privacy + "Clear cache") are in `ux-mode-degrade.md`. Next: release B (E6 Azure key + settings, E7 UX surfaces) on `feature/p2-b-azure-and-ux`, stacked on A.2.
 
+### Release B — epics E6 + E7 (branch `feature/p2-b-azure-and-ux`, stacked on A.2; draft PR #58)
+| Story | DS commit | CR verdict / commit | Tests | Notes |
+|---|---|---|---|---|
+| E6.S2 `AzureTranslator` | `d6297bc` | approve-with-fixes · `24b4a44` | 897 → 949 | Translator v3 over the core, 1:1 batching never padded (single-line path too), key header-only + redacted (control char inside a key → typed `AuthFailed` before send), 400 → `Unknown` no strike. |
+| E6.S3 Azure key + region settings | `e38f8fe` | approve-with-fixes · `5bc69e2` | → 991 | About "Translation engines" block; write chain gains Azure iff key AND region; `OnKeySaved` (`EnsureLoaded` **then** `ClearAuthBlock` — the review found the clear ran before the state file loaded); DeepL save now lifts its own `AuthFailed`; `Theme.xaml` gains `PART_EditableTextBox` (pinned byte-identical for the five existing combos); I12 pins (file byte-identical after construction). |
+| E6.S4 read opt-in + E6-d/E6-e | `80f08d6` | approve-with-fixes · `c474365` | → 1015 | Read chain `[azure, dict, gtx]` only with key + region + tick; quota hint with derivation (≈21–35 h/month); cache never pads (whole call fails, hits kept); `_restoringSettings` misuse replaced by a narrow flag; status ⇔ chain[0] pinned across every permutation. |
+| E6.S5 Test key | (in progress) | — | — | DeepL `/usage` (free), Azure one tiny real request through the core (honest label); never saves, never clears a gate. |
+| E6.S1 / E6.S6 spikes | — | — | — | **Owner-blocked** (U4 real Azure F0 account; U5 an already-issued DeepL `:fx` key). Copy only; code not gated. |
+
 _Process note (2026-09-07): an agent reverted this README's working-copy edits during A.2 (rulings E4-a…E5-g and both tables were lost and re-entered here). Orchestrator edits are now committed immediately after each ruling._
 
 **Architect's rulings for E2 (recorded before/while the stories ran):**
