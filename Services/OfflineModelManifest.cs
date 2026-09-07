@@ -41,18 +41,30 @@ internal sealed record OfflineFile(string FileName, long Size, string Sha256, st
 /// exists to close. Keeping it in the assembly also removes a parse-failure path and a
 /// resource-loading path from a security check that must have exactly one answer.</para>
 ///
-/// <para><b>Placeholders.</b> The release does not exist yet — populating it is the owner's task
-/// (E8.S3 T8). Until then every digest below is <see cref="Todo"/>, which is <b>not</b> a bypass:
-/// <see cref="OfflineFile.IsVerifiable"/> is false, so the store reports "not installed", the
-/// install fails with the verification reason, and the native resolver refuses to load. The code
-/// path is complete and is exercised end to end in the suite against a manifest of the suite's own
-/// (see <see cref="Override"/>); only the digests are outstanding.</para>
+/// <para><b>The release exists.</b> <c>offline-engine-v1</c> was published on 2026-09-09 with the
+/// four assets below (beside the MPL-2.0 licence text and the notice, which the app never
+/// downloads), and every size and digest here was taken from those exact bytes — the three model
+/// files cross-checked against Mozilla Remote Settings' <c>decompressedSize</c> /
+/// <c>decompressedHash</c> for the <c>tiny</c> ru→en <b>v3.0</b> records.</para>
+///
+/// <para><b>Updating the engine means republishing it</b>, in one movement: a new release tag, this
+/// table repointed at it, and an app release that carries the new table. A manifest edited without a
+/// release — or a release published without the matching edit — does not load different bytes, it
+/// fails verification and takes the feature inert, which is the correct failure and not a reason to
+/// relax the check. The procedure is <c>packaging/offline-engine-release.md</c>.</para>
+///
+/// <para><b><see cref="Todo"/> stays as the structural floor.</b> A row without a real digest is not
+/// a row without a check: <see cref="OfflineFile.IsVerifiable"/> is false, so the store reports "not
+/// installed", the install fails with the verification reason, and the native resolver refuses to
+/// load. The download and verification paths are exercised end to end in the suite against a
+/// manifest of the suite's own (see <see cref="Override"/>), never against the release.</para>
 ///
 /// <para><b>I11</b>: nothing here is logged. A URL is a path, and a path is not a diagnostic.</para>
 /// </summary>
 internal sealed class OfflineModelManifest
 {
-    /// <summary>The digest of a file the owner has not published yet. Deliberately not 64 hex
+    /// <summary>The digest of a file that has not been published yet — unused by the shipping table
+    /// since <c>offline-engine-v1</c>, and kept for the next one. Deliberately not 64 hex
     /// characters, so <see cref="OfflineFile.IsVerifiable"/> rejects it structurally rather than by
     /// string comparison — a check that cannot be defeated by pasting a plausible-looking value.</summary>
     internal const string Todo = "TODO-owner";
@@ -101,8 +113,8 @@ internal sealed class OfflineModelManifest
     /// <summary>
     /// <b>The shipping table.</b> Sizes for the native library come from the E8.S1 spike
     /// (22,460,928 B, imports <c>KERNEL32 / SHELL32 / ole32 / dbghelp</c> only); the three model
-    /// files are the <c>tiny</c> ru→en v3.0 set the spike measured at 22,530,152 B in total, and
-    /// their individual sizes arrive with the owner's release along with the digests.
+    /// files are the <c>tiny</c> ru→en v3.0 set the spike measured at 22,530,152 B in total. All
+    /// four sizes and digests are the published <c>offline-engine-v1</c> bytes.
     /// </summary>
     private static readonly OfflineModelManifest Shipping = new("offline-engine-v1", new[]
     {

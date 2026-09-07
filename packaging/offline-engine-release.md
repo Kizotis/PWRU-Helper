@@ -3,14 +3,15 @@
 The optional offline engine is **downloaded on request**, never bundled. The app ships a table of
 the exact file names, sizes and SHA-256 digests it will accept — `OfflineModelManifest.Shipping` in
 [`Services/OfflineModelManifest.cs`](../Services/OfflineModelManifest.cs) — and refuses anything
-else. Four of those digests are still `TODO-owner`, so **today the feature is inert**: the About row
-says "not installed", a download attempt fails at verification before a single request, and the
-native library will not load.
+else.
 
-This guide is the one-time task that lifts that: create a GitHub release called **`offline-engine-v1`**
-on `Kizotis/PWRU-Helper`, upload six files to it, and paste four sizes and four digests back into the
-manifest. **It needs you** — it publishes under your account and it is the trust anchor for a
-21.4 MB native library the app will P/Invoke.
+> **`offline-engine-v1` is published (2026-09-09) and the manifest is filled**, so the feature is live
+> as of **v0.15.2**. What follows is therefore the procedure for a **future** model update: when
+> Mozilla ships a new model, publish it under a **new tag** and repeat these steps against that tag.
+
+The task: create a GitHub release on `Kizotis/PWRU-Helper`, upload the six required files to it, and
+paste four sizes and four digests back into the manifest. **It needs you** — it publishes under your
+account and it is the trust anchor for a 21.4 MB native library the app will P/Invoke.
 
 Budget: about 30 minutes, most of it a download. Everything below is PowerShell you can paste.
 
@@ -23,7 +24,7 @@ Budget: about 30 minutes, most of it a download. Everything below is PowerShell 
 
 ## 1. What the release must contain
 
-Exactly six assets, with **exactly** these file names — the app composes each download URL as
+Six **required** assets, with **exactly** these file names — the app composes each download URL as
 `https://github.com/Kizotis/PWRU-Helper/releases/download/offline-engine-v1/<name>` and the name on
 the release is also the name on disk:
 
@@ -43,6 +44,9 @@ physically beside the binaries they cover. The About tab already carries the one
 users who never see a release page.
 
 The app only ever downloads the **first four**. The other two are for the human who opens the page.
+**Extra assets are allowed** — the published `offline-engine-v1` also carries a `SHA256SUMS.txt`, and
+the app neither reads it nor is disturbed by it: it fetches four names it already knows and verifies
+them against the table in the exe. What matters is that the six above are all *present*.
 
 > **SignPath is unaffected.** Its Foundation plan requires the *application* to stay OSI-licensed,
 > and PWRU Helper stays MIT — MPL-2.0 is file-level copyleft on files that ship separately, and it
@@ -166,13 +170,18 @@ $stage = "$env:USERPROFILE\Downloads\offline-engine-v1"
 
 ## 5. Create the release and upload
 
-PowerShell does **not** expand a wildcard for a native command such as `gh`, so the six paths are
-listed explicitly:
+PowerShell does **not** expand a wildcard for a native command such as `gh`, so every path is passed
+explicitly. The guard checks the six required **names**, not a count — an extra file in the staging
+folder (a `SHA256SUMS.txt`, say) is fine and gets uploaded with them, while a *missing* one is what
+must stop the upload:
 
 ```powershell
-$stage  = "$env:USERPROFILE\Downloads\offline-engine-v1"
+$stage    = "$env:USERPROFILE\Downloads\offline-engine-v1"
+$required = 'bergamot.dll', 'model.ruen.intgemm.alphas.bin', 'vocab.ruen.spm',
+            'lex.50.50.ruen.s2t.bin', 'LICENSE-MPL-2.0.txt', 'NOTICE-offline-engine.md'
+$missing  = @($required | Where-Object { -not (Test-Path (Join-Path $stage $_)) })
+if ($missing) { throw "missing from ${stage}: $($missing -join ', ')" }
 $assets = @(Get-ChildItem $stage -File | ForEach-Object { $_.FullName })
-if ($assets.Count -ne 6) { throw "expected 6 assets in $stage, found $($assets.Count)" }
 
 gh release create offline-engine-v1 `
   --repo Kizotis/PWRU-Helper `
@@ -181,7 +190,8 @@ gh release create offline-engine-v1 `
   @assets
 ```
 
-Then confirm all six landed, the way the release checklist confirms the app's own artefacts:
+Then confirm the six required names landed, the way the release checklist confirms the app's own
+artefacts:
 
 ```powershell
 gh release view offline-engine-v1 --repo Kizotis/PWRU-Helper --json name,assets
@@ -195,7 +205,8 @@ gh release view offline-engine-v1 --repo Kizotis/PWRU-Helper --json name,assets
 ## 6. Paste the numbers into the manifest
 
 Open [`Services/OfflineModelManifest.cs`](../Services/OfflineModelManifest.cs) and find
-`Shipping`. It reads:
+`Shipping`. Before a fill it reads like this — the shipping table carries `offline-engine-v1`'s real
+numbers today, so a future update starts from those rather than from the zeros:
 
 ```csharp
 private static readonly OfflineModelManifest Shipping = new("offline-engine-v1", new[]
@@ -211,7 +222,9 @@ Replace each `0` with the size from § 4 and each `Todo` with that file's digest
 `bergamot.dll`'s size is already correct — leave the `22_460_928` alone; if § 4 printed a different
 number for it you have the wrong package, and § 2 is where to look.
 
-Change **nothing else**: not the tag, not the file names, not `ReleaseBase`. The manifest is the one
+Change **nothing else**: not the file names, not `ReleaseBase` — and the tag only when this really is
+a new release, in which case it changes here *and* in the release you just published, together. The
+manifest is the one
 place the app's download host is spelled, and it is handed straight to
 `UpdateService.IsTrustedDownload` — a change there is a change to the app's allow-list.
 
