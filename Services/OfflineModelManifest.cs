@@ -106,10 +106,10 @@ internal sealed class OfflineModelManifest
     /// </summary>
     private static readonly OfflineModelManifest Shipping = new("offline-engine-v1", new[]
     {
-        new OfflineFile(NativeFileName, 22_460_928, Todo, null),
-        new OfflineFile("model.ruen.intgemm.alphas.bin", 0, Todo, RuEn),
-        new OfflineFile("vocab.ruen.spm", 0, Todo, RuEn),
-        new OfflineFile("lex.50.50.ruen.s2t.bin", 0, Todo, RuEn),
+        new OfflineFile(NativeFileName, 22_460_928, "c8210424785f762c91a530c741f68035f44eced4bd10ff88923cf16c42427a1e", null),
+        new OfflineFile("model.ruen.intgemm.alphas.bin", 17_141_051, "b1d85c13cfbb05e1d326dd6f0fb5ef270a2011b547450260f96567a93f446c94", RuEn),
+        new OfflineFile("vocab.ruen.spm", 905_257, "93bdc941b16e523695c319f74778bca9fd8b75a25ad75020cdc98aef74cdc0fc", RuEn),
+        new OfflineFile("lex.50.50.ruen.s2t.bin", 4_483_844, "f654693577505fd38b1f3d220cdd4ffffbb45afb900a60cf751f0724eadc74e0", RuEn),
     });
 
     /// <summary>The manifest a test drives the store with (IS-2's shape, applied to a table instead
