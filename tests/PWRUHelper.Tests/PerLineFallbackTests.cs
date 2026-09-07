@@ -336,10 +336,13 @@ public class PerLineFallbackTests : GatesTestBase
     /// of which <b>none was a translation</b> — a list <see cref="ChainTranslator"/> reads as a
     /// success, leaving the healthy tier below untried. One timeout was enough to reach it.
     ///
-    /// <para>E3-g's predicate is "was anything translated", so this now throws — and it throws the
-    /// LAST failure, which is line 5's <c>NotSent</c> refusal rather than line 1's timeout: the
-    /// chain therefore records a skip with the gate's window, which is the truth about the tier as
-    /// it stands when the loop gives up.</para>
+    /// <para>E3-g's predicate is "was anything translated", so this throws. <b>WHICH failure it
+    /// throws is ruling E5-e</b> (E5.S3): line 1's <c>Timeout</c>, the one that was actually SENT,
+    /// and not line 5's refusal at admission. Throwing the refusal was how a tick that had burned a
+    /// request and a timeout came to report as one that had cost nothing — the chain read the tier as
+    /// skipped rather than tried, ended <c>AllProvidersPaused</c>, and
+    /// <c>LiveTickPolicy.Classify</c> called the whole tick <c>Refused</c>, so the auto-stop never
+    /// advanced and no next tier was tried.</para>
     /// </summary>
     [Fact]
     public async Task E3_g_a_soft_failure_that_closes_the_gate_now_throws_instead_of_reading_as_a_success()
@@ -351,8 +354,8 @@ public class PerLineFallbackTests : GatesTestBase
         var ex = await Assert.ThrowsAsync<TranslationException>(
             () => new GoogleGtxTranslator(fake).TranslateLinesAsync(Lines(5), "ru", "en"));
 
-        Assert.True(ex.NotSent, "the last thing that happened was a refusal at admission");
-        Assert.NotNull(ex.RetryAt);
+        Assert.Equal(TranslationErrorKind.Timeout, ex.Kind);
+        Assert.False(ex.NotSent, "E5-e: the SENT failure is the informative one, not the refusals after it");
         // The batch, then line 1's attempt and its single §5.6 retry (MaxAttempts = 2). Lines 2-5
         // were refused at admission behind the cooldown — no request, and no translation either.
         Assert.Equal(1 + TranslationPolicy.MaxAttempts, fake.Requests);

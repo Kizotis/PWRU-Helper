@@ -46,6 +46,12 @@ namespace PWRUHelper.Services;
 /// only <see cref="HttpProviderCore"/> may set, so the chain can still tell a tier that was refused
 /// at admission from one that really spoke to the endpoint and failed.</para>
 ///
+/// <para><b>And WHICH failure is rethrown is ruling E5-e</b> (E5.S3): the last one that was actually
+/// <i>sent</i> if there is one, and only otherwise the last refusal. "The last failure" was the
+/// wrong answer for the commonest shape of a dying tick — one request sent and timed out, the gate
+/// closed behind it, every line after it refused — where it made a tick that had burned a request
+/// report as one that had cost nothing.</para>
+///
 /// <para><b>Why the predicate is "nothing was translated" and not "every failure was a gate
 /// reason".</b> E3-f named three kinds (<c>RateLimited</c>, <c>Blocked</c>, a <c>NotSent</c>
 /// refusal), and E3.S8's review found the hole that leaves: a SOFT failure on line 1 is a §5.3
@@ -102,13 +108,32 @@ internal static class PerLineFallback
         bool rateLimited = false;
         int attempted = 0;
         bool capReported = false;
-        // The E3-f/E3-g bookkeeping, and it is deliberately only two things: the last failure of
-        // ANY kind, and whether ANY line was actually translated. E3-f used to track "was every
-        // failure a gate reason", which is what let one timeout switch the throw off (see the class
-        // comment). Captured rather than stored so a non-TranslationException — the shape the
-        // generic catch below renders — can be rethrown with its own stack intact too.
-        ExceptionDispatchInfo? lastFailure = null;
+        // The E3-f/E3-g bookkeeping, and it is deliberately only three things: the last failure that
+        // COST A REQUEST, the last one that did not, and whether ANY line was actually translated.
+        // E3-f used to track "was every failure a gate reason", which is what let one timeout switch
+        // the throw off (see the class comment). Captured rather than stored so a
+        // non-TranslationException — the shape the generic catch below renders — can be rethrown with
+        // its own stack intact too.
+        //
+        // Two slots and not one is ruling E5-e (E5.S2 review, landed in E5.S3): see the throw below.
+        // Named for what they hold rather than for the flag they are keyed on: `NotSent =` has
+        // exactly one writer in this app (HttpProviderCore.Paused, ruling E3-b) and
+        // ChainTranslatorTests scans production source for it, so a local called lastNotSent would
+        // read to that scan as a second writer of a flag no provider may set.
+        ExceptionDispatchInfo? lastSentFailure = null;
+        ExceptionDispatchInfo? lastRefusal = null;
         bool translatedSomething = false;
+
+        // Which of the two slots a failure belongs in, in the one place that knows: NotSent is set
+        // only by HttpProviderCore, on a call the gate refused before anything left the machine
+        // (ruling E3-b). Everything else — a typed failure from the endpoint, an untyped throw —
+        // was a request that was sent.
+        void Remember(Exception failure)
+        {
+            var captured = ExceptionDispatchInfo.Capture(failure);
+            if (failure is TranslationException { NotSent: true }) lastRefusal = captured;
+            else lastSentFailure = captured;
+        }
 
         foreach (var line in lines)
         {
@@ -160,16 +185,16 @@ internal static class PerLineFallback
             // anything.
             catch (TranslationException tex) when (tex.Kind is TranslationErrorKind.RateLimited
                                                             or TranslationErrorKind.Blocked)
-            { rateLimited = true; lastFailure = ExceptionDispatchInfo.Capture(tex); result.Add(RateLimitedMessage); }
+            { rateLimited = true; Remember(tex); result.Add(RateLimitedMessage); }
             // Every other typed failure is this line's problem and no other line's. Written out
             // rather than left to the generic catch below (which renders it identically) so the
             // intent survives an edit to that catch: this arm exists to NOT latch.
             catch (TranslationException tex)
             {
-                lastFailure = ExceptionDispatchInfo.Capture(tex);
+                Remember(tex);
                 result.Add(Failed(tex.Message));
             }
-            catch (Exception ex) { lastFailure = ExceptionDispatchInfo.Capture(ex); result.Add(Failed(ex.Message)); }
+            catch (Exception ex) { Remember(ex); result.Add(Failed(ex.Message)); }
         }
 
         // Rulings E3-f and E3-g. Not one line came back translated, so the list below would be
@@ -180,6 +205,17 @@ internal static class PerLineFallback
         // Through ExceptionDispatchInfo and not `throw`, which would reset the stack to THIS line
         // and lose the throw site inside the core — on the one path the epic exists to make
         // reportable (E3.S8 review).
+        //
+        // RULING E5-e — WHICH failure, and it is not "the last one" (E5.S2 review). The common shape
+        // of a tick that dies is: line 1 is sent and times out, the gate closes behind it, and lines
+        // 2..N come back as NotSent refusals. Throwing the LAST of those handed the chain a refusal,
+        // so the tier read as "skipped, not tried", the chain ended AllProvidersPaused, and
+        // LiveTickPolicy.Classify called the whole tick Refused — a tick that had burned a request
+        // and a timeout counted as nothing at all, twice over: the auto-stop never advanced and the
+        // next tier was never tried on a chain that thought it had nothing left. The SENT failure is
+        // the informative one and it is preferred whenever there is one; the NotSent slot is the
+        // fallback for the genuine case where nothing left the machine at all.
+        var lastFailure = lastSentFailure ?? lastRefusal;
         if (!translatedSomething && lastFailure is not null) lastFailure.Throw();
 
         return result;

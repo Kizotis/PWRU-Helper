@@ -300,10 +300,12 @@ public class UserMessagesTests : GatesTestBase
     /// is parameterised on what the read actually did — which is the point of the story that added
     /// them ("Done" is a claim, and a claim has to be earned line by line).
     ///
-    /// <para>The paused sentence is provisional and deliberately not §3.3's: that row promises rows
-    /// that will "fill in when one is back", which AC 3 forbids (a paused read-once creates none)
-    /// and a line count that cannot exist, since the pause is checked before the capture. E7.S1
-    /// owns the final wording.</para>
+    /// <para>The paused sentence now carries §3.3's {n} — ruling <b>E5-g</b> (E5.S3): the pre-capture
+    /// check that could not know a line count is gone, so the read captures, OCRs, serves what the
+    /// cache has and REPORTS the pause it was given. What is still deliberately not §3.3's is the
+    /// promise that the rows "will fill in when one is back": the retry queue is drained by the LIVE
+    /// loop, so a read taken with LIVE stopped has nothing coming for it. E7.S1 owns the final
+    /// wording.</para>
     /// </summary>
     [Fact]
     public void The_read_once_statuses_read_as_this_increments_copy()
@@ -319,14 +321,25 @@ public class UserMessagesTests : GatesTestBase
                      UserMessages.ReadOnceNoneTranslated(4, offline));
         Assert.Equal("Read 4 line(s) — none could be translated.",
                      UserMessages.ReadOnceNoneTranslated(4, null));
-        Assert.Equal("Nothing was read — all engines are paused. Try again in 30 s.",
-                     UserMessages.ReadOncePaused("30 s"));
-        Assert.Equal("Nothing was read — all engines are paused. Try again shortly.",
-                     UserMessages.ReadOncePaused(null));
+        Assert.Equal("Read 6 line(s) — all engines are paused. Try again in 30 s.",
+                     UserMessages.ReadOncePaused(6, "30 s"));
+        Assert.Equal("Read 6 line(s) — all engines are paused. Try again shortly.",
+                     UserMessages.ReadOncePaused(6, null));
         Assert.Equal("Could not read the screen: no internet connection — nothing can be translated until it is back.",
                      UserMessages.ReadFailed(offline));
         Assert.Equal("Read cancelled.", UserMessages.ReadCancelledStatus());
         Assert.Equal("not translated — read cancelled", UserMessages.ReadCancelledRow());
+
+        // E5.S3's two row texts. The pending one is the ellipsis the feed already writes, and the
+        // assertion that matters about it is the negative one: it must NOT open with "(", or it
+        // reads as terminal (AC 2) — and, worse, as I4's "this is a failure" marker on a row that
+        // has not failed. The given-up one is the only one of the two the call site parenthesises.
+        Assert.Equal("…", UserMessages.PendingRetryRow());
+        Assert.False(UserMessages.PendingRetryRow().StartsWith('('),
+                     "a pending row may not read as a terminal failure (AC 2)");
+        Assert.Equal("not translated — the engines did not come back", UserMessages.RetryGaveUpRow());
+        Assert.False(UserMessages.RetryGaveUpRow().StartsWith('('),
+                     "the deck never writes the paren — the feed row call site does (I4)");
     }
 
     /// <summary>

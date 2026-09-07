@@ -55,8 +55,22 @@ internal static class ReadOnceSummary
     /// site. It is one edit away from being reachable, though (a batch that tolerates a partial
     /// failure is E5.S3's whole subject), and a claim of "Done" over a batch that carried a failure
     /// is the exact class of lie this type exists to stop. Both conditions have to hold.</para>
+    ///
+    /// <para><b>The fourth branch is ruling E5-g's</b> (E5.S3). A read whose every line failed
+    /// because every engine is inside a block window is not "none could be translated" plus a
+    /// reason — it is the paused state, it cost no request, and §3.3 gives it its own sentence.
+    /// It is reachable only now that the pause is REPORTED by the chain instead of checked before
+    /// the capture: that check could not know <paramref name="lines"/>, and it refused reads whose
+    /// answers were already in the cache. <paramref name="pausedTryAgainIn"/> is the "{t}" the caller
+    /// has already rendered, exactly as <see cref="UserMessages.ReadOncePaused"/> documents —
+    /// formatting a countdown is not <c>Services/</c>' job (I2).</para>
+    ///
+    /// <para>Order matters between branches two and four: a read that translated SOMETHING (the
+    /// cache served part of it) reports the counts and names the pause as its reason, because
+    /// "all engines are paused" alone would hide the lines the player did get.</para>
     /// </summary>
-    internal static string Status(int lines, int translated, Exception? error)
+    internal static string Status(int lines, int translated, Exception? error,
+                                 string? pausedTryAgainIn = null)
     {
         // Defensive, and cheap: a caller that counted over a longer list than it rendered must not
         // be able to buy itself a "Done" with a number bigger than the read.
@@ -66,6 +80,16 @@ internal static class ReadOnceSummary
             return UserMessages.ReadOnceAllTranslated(lines);
         if (translated > 0)
             return UserMessages.ReadOncePartlyTranslated(lines, translated, error);
+        if (IsAllPaused(error))
+            return UserMessages.ReadOncePaused(lines, pausedTryAgainIn);
         return UserMessages.ReadOnceNoneTranslated(lines, error);
     }
+
+    /// <summary>Whether the failure a read came back with is "every engine is inside a block window"
+    /// — the one kind that is a STATE and not an error (<c>ux-mode-degrade.md</c> §2.1), so it gets
+    /// §3.3's paused sentence rather than a failure one. Typed, never a string match, and exposed so
+    /// the code-behind can decide whether it owes the sentence a countdown without re-deriving the
+    /// same test.</summary>
+    internal static bool IsAllPaused(Exception? error)
+        => error is TranslationException { Kind: TranslationErrorKind.AllProvidersPaused };
 }

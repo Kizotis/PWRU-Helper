@@ -222,31 +222,20 @@ public partial class MainWindow
         // confidently garbled one).
         if (!IsOcrReady()) { ShowOcrPackNeeded("then read the area again."); return; }
 
-        // AC 3 / ruling OQ-B, and the position is the whole of it: BEFORE _readingOnce is set and
-        // before the capture. A read that cannot translate a single line must not grey both buttons
-        // for a read that will not happen, must not spend a capture — and above all must create no
-        // rows: a feed full of "…" that never resolves is what makes a player press again, which is
-        // amplifier A7 with extra steps. The early return is ahead of the flag, so there is nothing
-        // to clear on this path.
+        // ---- ruling E5-g (E5.S3): there is no pause check here any more ---------------------------
+        // E5.S4 asked the chain BEFORE the capture and returned. It was the right instinct — OQ-B's
+        // "a paused app costs the player nothing" — applied one step too early, and it cost two
+        // things a read is entitled to. A capture and an OCR are LOCAL: they cost no request, which
+        // is the only currency a paused provider cares about. Refusing them meant (a) a read whose
+        // every line was already in the cache was turned away although it needed no provider at all,
+        // and (b) the sentence could not say how many lines were on the screen, because nothing had
+        // looked yet — §3.3's "Read {n} line(s) — all engines are paused" was unwritable.
         //
-        // It asks the CHAIN and never ProviderGates (TP-START-02). _readChain is the LIVE loop's,
-        // and it answers for read-once too because both chains resolve the SAME process-global
-        // gates (I9) — a second query would be redundant, not safer.
-        var pause = _readChain.PauseNow();
-        if (pause.AllPaused)
-        {
-            // The tab switch is here for the same reason the normal read does it four lines below:
-            // ScreenReadStatus lives on the Translator tab (MainWindow.xaml:308), so a Ctrl+Alt+R
-            // fired from the Screen OCR tab would otherwise write the one sentence this branch
-            // exists to say onto a page nobody is looking at — a read that appears to do nothing at
-            // all, which is the very state AC 3 is trying to explain (review). It is not a cost the
-            // branch is forbidden to spend: it creates no row, greys no button and takes no capture.
-            MainTabs.SelectedIndex = TabTranslator;
-            SetScreenStatus(UserMessages.ReadOncePaused(
-                CountdownText(LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now))));
-            return;
-        }
-
+        // So the read runs, the cache serves what it can, and the pause is REPORTED rather than
+        // predicted: the chain raises AllProvidersPaused without sending anything (it reads
+        // ProviderGate.Snapshot, which is side-effect free by contract), TranslateSentencesInto hands
+        // that back typed, and ReadOnceSummary turns it into the paused sentence with {n} in it.
+        // Zero requests either way — that half of AC 3 is unchanged and is what TP-ONCE-04 asserts.
         MainTabs.SelectedIndex = TabTranslator;   // results show on the Translator page
         SetReadOnceEnabled(false);
         LiveButton.IsEnabled = false;        // don't let live start mid-read (shared OCR engine)
@@ -303,7 +292,7 @@ public partial class MainWindow
             // UX hint 4 and the whole of DoD V1.5. The counts come from what the rows ACTUALLY got,
             // never from lines — reading N lines has never meant translating N lines.
             var (translated, error) = await TranslateSentencesInto(sentences, target, cts.Token);
-            SetScreenStatus(ReadOnceSummary.Status(lines, translated, error));
+            SetScreenStatus(ReadOnceSummary.Status(lines, translated, error, PausedTryAgainIn(error)));
         }
         // I3, in the shape ChainTranslator.RunAsync uses: OUR token really is cancelled, so this is
         // a person or the budget — never an HttpClient timeout, whose OperationCanceledException
@@ -360,6 +349,25 @@ public partial class MainWindow
         // NOT disposed here: the read that owns it is still inside its await and holds the token.
         // Its finally disposes on every path, which is the one place that knows the read is over —
         // disposing from the outside is the documented way to hand a live consumer a dead source.
+    }
+
+    /// <summary>The "{t}" of a paused read's status, or null when there is nothing honest to count
+    /// down to — E5-g's other half. The countdown is only asked for when the read really did come
+    /// back "every engine is paused"; every other failure gets §3.3's failure sentence and no timer.
+    ///
+    /// <para>It asks the CHAIN and never <c>ProviderGates</c> (TP-START-02), for the instant AND for
+    /// the clock that instant was produced against: <c>PauseNow()</c> answers both, and subtracting
+    /// our own <c>UtcNow</c> from a gate's <c>RetryAt</c> is the two-clocks bug IS-6 and
+    /// <c>ProviderGate.Now()</c> exist to prevent. <c>_readChain</c> is the LIVE loop's and answers
+    /// for read-once too, because both chains resolve the same process-global gates (I9). The call is
+    /// side-effect free by contract (ruling R-2), so asking after the fact costs nothing — and it
+    /// reads the windows as they are NOW, so a window that elapsed while the read ran simply drops
+    /// the number instead of promising a time that has passed.</para></summary>
+    private string? PausedTryAgainIn(Exception? error)
+    {
+        if (!ReadOnceSummary.IsAllPaused(error)) return null;
+        var pause = _readChain.PauseNow();
+        return CountdownText(LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now));
     }
 
     /// <summary>The read-once budget, as the failure it is. A budget expiry is a <b>timeout</b> and
@@ -441,7 +449,21 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
-            foreach (var it in items) it.TranslationBody = $"({Friendly(ex)})";
+            // E5.S3, and the answer to the question the test plan left open ("read-once rows?").
+            // These are ordinary failed rows in the same feed as the live ones, so they are retried
+            // in place by the same drain — but ONLY while the LIVE loop is running, because the loop
+            // is the only thing that drains. A read taken with LIVE stopped has nothing coming for
+            // it, and a row left pending for ever with nothing behind it is precisely the amplifier
+            // (A7) that made a player press the button again. So: a drain is coming ⇒ the row waits
+            // on "…"; no drain is coming ⇒ it says what went wrong, exactly as it always did.
+            if (_liveCts != null && PendingRetryQueue<OcrResultItem>.IsRetryable(ex))
+                for (int i = 0; i < items.Count; i++)
+                {
+                    items[i].TranslationBody = UserMessages.PendingRetryRow();
+                    _pendingRetry.Enqueue(items[i], parts[i].Body, target);
+                }
+            else
+                foreach (var it in items) it.TranslationBody = $"({Friendly(ex)})";
             return (0, AsTranslationFailure(ex, ct));
         }
         for (int i = 0; i < items.Count && i < translations.Count; i++)

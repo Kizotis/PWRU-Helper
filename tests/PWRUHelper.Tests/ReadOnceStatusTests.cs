@@ -171,18 +171,19 @@ public class ReadOnceStatusTests
     // =============================================================================================
 
     /// <summary>
-    /// <b>TP-ONCE-04, behaviourally.</b> Every read tier is inside a block window, so the answer the
-    /// button gets is a sentence and a time — and not a capture, not an OCR read, not a row and not a
-    /// request. The decision is <see cref="ChainTranslator.PauseNow"/>'s and is driven here over real
-    /// gates; the four costs are counted where the loop would incur them, the shape
-    /// <c>LivePauseTests</c> uses for the LIVE tick.
+    /// <b>TP-ONCE-04, behaviourally — and rewritten by ruling E5-g (E5.S3).</b> Every read tier is
+    /// inside a block window. What the player gets is §3.3's sentence WITH a line count in it, and
+    /// what it costs is still <b>zero requests</b> — which is the only half of AC 3 that was ever
+    /// about the provider. The capture and the OCR happen, because they are local and free, and
+    /// because refusing them is what made the count unknowable.
     ///
-    /// <para>"No rows" is the half that is about the player rather than about the provider: a row
-    /// that says "…" for ever is what makes somebody press the button again, which is the amplifier
-    /// this whole story exists to remove.</para>
+    /// <para>The pause is no longer predicted before the capture; it is REPORTED by the chain, which
+    /// skips every blocked tier and raises <c>AllProvidersPaused</c> without sending anything. The
+    /// chain is driven here for real over real gates, so "zero requests" is asserted on the
+    /// translator that would have been called and not on a branch that was not taken.</para>
     /// </summary>
     [Fact]
-    public void TP_ONCE_04_a_fully_paused_read_once_issues_no_request_and_creates_no_rows()
+    public async Task TP_ONCE_04_a_fully_paused_read_once_issues_no_request_and_says_how_many_lines()
     {
         var clock = new FakeClock();
         var dict = new ProviderGate(clock.Read);
@@ -199,66 +200,90 @@ public class ReadOnceStatusTests
         dict.ReportFailure(TranslationErrorKind.Network);
         gtx.ReportFailure(TranslationErrorKind.Network);
 
-        int captures = 0, rows = 0;
-        string? status = null;
+        // The read captures and OCRs — three lines are on the screen — and asks the chain, which
+        // refuses without sending. TranslateSentencesInto's catch turns that into (0, error).
+        const int lines = 3;
+        var error = await Assert.ThrowsAsync<TranslationException>(
+            () => chain.TranslateLinesAsync(new[] { "а", "б", "в" }, "ru", "en"));
 
-        // ReadRegionOnceAsync's opening, with its costs counted instead of incurred.
+        Assert.Equal(TranslationErrorKind.AllProvidersPaused, error.Kind);
+        Assert.Equal(0, translator.Calls);          // zero requests — the half AC 3 is really about
+
         var pause = chain.PauseNow();
-        if (pause.AllPaused)
-            status = UserMessages.ReadOncePaused(
-                MainWindow.CountdownText(LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now)));
-        else
-        {
-            captures++;
-            rows += 3;
-        }
+        var status = ReadOnceSummary.Status(lines, 0, error,
+            MainWindow.CountdownText(LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now)));
 
-        Assert.Equal(0, captures);
-        Assert.Equal(0, rows);
-        Assert.Equal(0, translator.Calls);
-        Assert.Equal($"Nothing was read — all engines are paused. Try again in {TranslationPolicy.SoftCooldownSecs} s.",
+        Assert.Equal($"Read {lines} line(s) — all engines are paused. Try again in {TranslationPolicy.SoftCooldownSecs} s.",
                      status);
+        Assert.DoesNotContain("Done", status, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// <b>TP-ONCE-04, in the source</b> — the half a headless suite cannot execute, and the half that
-    /// fails if somebody later "just captures anyway, it's local and free". The pause branch must
-    /// come before <c>_readingOnce</c> is set (or a paused read greys both buttons for a read that
-    /// never happens — and, if the early return is ever moved after the flag without a
-    /// <c>finally</c>, greys them for ever), before the capture, and it must name none of the things
-    /// a read costs.
+    /// <b>Ruling E5-g's other half: a read whose answers are all in the cache is served while every
+    /// engine is paused.</b> This is the case the pre-capture check refused outright — a player
+    /// re-reading the same chat box during an outage got "nothing was read" although not one request
+    /// was needed. The cache decorator only asks its inner translator for the MISSES, so a full hit
+    /// never reaches the paused chain at all, and the read ends on "Done".
     /// </summary>
     [Fact]
-    public void TP_ONCE_04_the_paused_branch_precedes_the_flag_and_the_capture_and_costs_nothing()
+    public async Task A_fully_cached_read_is_served_while_every_engine_is_paused()
+    {
+        var clock = new FakeClock();
+        var gate = new ProviderGate(clock.Read);
+        var translator = new CountingTranslator();
+        var chain = new ChainTranslator(new[] { new ChainTier("google-gtx", gate, translator) });
+        var cached = new CachingTranslator(chain, capacity: 8);
+
+        // Warm the cache while the chain is healthy…
+        var warm = await cached.TranslateLinesAsync(new[] { "привет", "го в лк" }, "ru", "en");
+        Assert.Equal(1, translator.Calls);
+
+        // …then the cable comes out.
+        gate.ReportFailure(TranslationErrorKind.Network);
+        Assert.True(chain.PauseNow().AllPaused);
+
+        var again = await cached.TranslateLinesAsync(new[] { "привет", "го в лк" }, "ru", "en");
+
+        Assert.Equal(warm, again);
+        Assert.Equal(1, translator.Calls);          // not one new request
+        Assert.Equal("Done — 2 line(s) translated.",
+                     ReadOnceSummary.Status(2, ReadOnceSummary.CountTranslated(again), null));
+    }
+
+    /// <summary>
+    /// <b>TP-ONCE-04, in the source</b> — the half a headless suite cannot execute. Ruling E5-g turns
+    /// it inside out: what has to be true now is that read-once does <b>not</b> decide anything
+    /// before the capture. The pause check is gone, the read captures and OCRs, and the only place
+    /// the chain is asked is when the status needs a countdown — after the fact, side-effect free
+    /// (R-2), and on the CHAIN rather than the registry (TP-START-02).
+    /// </summary>
+    [Fact]
+    public void TP_ONCE_04_nothing_is_decided_before_the_capture_any_more()
     {
         var ocr = Code(File.ReadAllText(RepoFile("MainWindow.Ocr.cs")));
 
-        int ask = ocr.IndexOf("_readChain.PauseNow()", StringComparison.Ordinal);
-        int branch = ocr.IndexOf("if (pause.AllPaused)", StringComparison.Ordinal);
-        int flag = ocr.IndexOf("_readingOnce = true;", StringComparison.Ordinal);
-        int capture = ocr.IndexOf("ScreenCapture.Capture", StringComparison.Ordinal);
+        int method = ocr.IndexOf("private async Task ReadRegionOnceAsync(", StringComparison.Ordinal);
+        int flag = ocr.IndexOf("_readingOnce = true;", method, StringComparison.Ordinal);
+        var beforeTheRead = ocr[method..flag];
 
-        Assert.True(ask >= 0, "read-once must ask the CHAIN whether every rung is paused (never the registry)");
-        Assert.True(branch > ask, "the answer must be branched on");
-        Assert.True(branch < flag, "the pause branch must come BEFORE _readingOnce = true (T4)");
-        Assert.True(flag < capture, "…and the flag still comes before the capture, as it always did");
+        // The pre-capture refusal is gone — this is the ruling, stated as the absence it is.
+        Assert.DoesNotContain("PauseNow", beforeTheRead);
+        Assert.DoesNotContain("AllPaused", beforeTheRead);
+        Assert.DoesNotContain("ReadOncePaused", beforeTheRead);
 
-        var body = BracedBlock(ocr, branch);
-        Assert.Contains("SetScreenStatus(UserMessages.ReadOncePaused(", body, StringComparison.Ordinal);
-        // The `return;` itself, which nothing pinned (review): without it every assertion in this
-        // case stays green while the read falls straight through to the capture, the rows and the
-        // requests AC 3 forbids — the forbidden-identifier scan below only reads THIS block, and a
-        // fall-through spends all four of them in the block after it.
-        Assert.Contains("return;", body, StringComparison.Ordinal);
+        // …and the flag still comes before the capture, as it always did.
+        Assert.True(flag < ocr.IndexOf("ScreenCapture.Capture", StringComparison.Ordinal));
 
-        foreach (var forbidden in new[]
-                 {
-                     "ScreenCapture.Capture", "ApplyOcrFilter", "ReadLinesAsync",
-                     "TranslateSentencesInto", "TranslateBodiesAsync", "_readOnceTranslator",
-                     "_ocrItems.Add", "new OcrResultItem", "_readingOnce", "SetReadOnceEnabled",
-                 })
-            Assert.False(body.Contains(forbidden, StringComparison.Ordinal),
-                $"a paused read-once must not reach {forbidden} — it does nothing at all (AC 3 / OQ-B)");
+        // The pause is reported instead: the status is composed from what the read produced, and the
+        // countdown is asked of the CHAIN, once, in the helper named for it.
+        Assert.Contains("ReadOnceSummary.Status(lines, translated, error, PausedTryAgainIn(error))",
+                        ocr, StringComparison.Ordinal);
+        var helper = BracedBlock(ocr, ocr.IndexOf("private string? PausedTryAgainIn(", StringComparison.Ordinal));
+        Assert.Contains("_readChain.PauseNow()", helper, StringComparison.Ordinal);
+        Assert.Contains("ReadOnceSummary.IsAllPaused(error)", helper, StringComparison.Ordinal);
+        // IS-6: the countdown subtracts the gates' own clock, never DateTimeOffset.UtcNow.
+        Assert.Contains("pause.RetryAt, pause.Now", helper, StringComparison.Ordinal);
+        Assert.DoesNotContain("UtcNow", helper);
     }
 
     // =============================================================================================
@@ -505,7 +530,9 @@ public class ReadOnceStatusTests
         var ocr = Code(File.ReadAllText(RepoFile("MainWindow.Ocr.cs")));
         Assert.Contains("var (translated, error) = await TranslateSentencesInto(sentences, target, cts.Token);",
                         ocr, StringComparison.Ordinal);
-        Assert.Contains("SetScreenStatus(ReadOnceSummary.Status(lines, translated, error));",
+        // E5-g added the fourth argument: the "{t}" of a paused read, rendered by the code-behind
+        // because formatting a countdown stays out of Services/ (I2).
+        Assert.Contains("SetScreenStatus(ReadOnceSummary.Status(lines, translated, error, PausedTryAgainIn(error)));",
                         ocr, StringComparison.Ordinal);
     }
 

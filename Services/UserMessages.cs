@@ -203,22 +203,69 @@ internal static class UserMessages
     /// must not pick these up.</para></summary>
     public static string ReadCancelledRow() => "not translated — read cancelled";
 
+    // ---- what a row says between two attempts, and when there is no attempt left (§9.3, §2.2) ----
+    //
+    // Methods for the same reason the read-once statuses are: they are ROW text, not rows of the
+    // Sentence(kind) table, and the house-rule tests read every public const in this type as one of
+    // those rows. Here under ruling GAP-4 all the same — the copy deck is one file, so E7.S1 opens
+    // one file.
+
+    /// <summary>
+    /// <b>A row waiting for the next drain, and it is the ellipsis it already was</b> (E5.S3, T2).
+    ///
+    /// <para>§9.3 sketches «Sally: retrying…» and <c>ux-mode-degrade.md</c> §2.2's S5 row says
+    /// pending rows keep the existing "…". The two are reconciled in favour of §2.2, and the reason
+    /// is UX principle 5 rather than economy: <b>a row never carries a countdown</b> and, by the same
+    /// argument, never carries a status — there is exactly one explanation per window and it lives on
+    /// the status line. A row that says "retrying…" is a second one, on every row, saying less than
+    /// the line above it already does.
+    /// </para>
+    ///
+    /// <para>What AC 2 actually requires of it is the half that matters: it is deliberately <b>not</b>
+    /// "("-prefixed, so it reads as pending rather than terminal — a "(" here would be I4's failure
+    /// marker on a row that has not failed yet. It is safe for the identical reason the marker exists:
+    /// this string is written by the UI onto a row and is never a translator's return value, so it
+    /// cannot reach <c>CachingTranslator.IsCacheable</c>. <b>E7.S1</b> owns the final copy, together
+    /// with the retry badge (E7.S6) that is the honest place for "retrying".</para>
+    /// </summary>
+    public static string PendingRetryRow() => "…";
+
+    /// <summary>The row §2.2 calls a "given-up" one: the drain has spent
+    /// <c>TranslationPolicy.PendingRetryMaxAttempts</c> on it and there is nothing left to wait for.
+    /// Wrapped in I4's "(" by the call site like every other non-translation, which is the whole
+    /// distinction AC 2 draws — <b>only the given-up form is parenthesised</b>.
+    ///
+    /// <para>It names no engine and no reason on purpose. The reason belongs to the status line,
+    /// which said it while the row was pending; what the row owes the player is the one fact the
+    /// status line cannot carry once it has moved on — <i>this</i> message was never
+    /// translated.</para></summary>
+    public static string RetryGaveUpRow() => "not translated — the engines did not come back";
+
     /// <summary>Nothing came back. This is the sentence the false "Done" used to cover
     /// (amplifier A7: a player told "Done" over an empty result presses the button again).</summary>
     public static string ReadOnceNoneTranslated(int lines, Exception? error)
         => $"Read {lines} line(s) — none could be translated." + Because(error);
 
-    /// <summary>Every engine is inside a block window, so the read did not happen at all: no
-    /// request, no capture, and — the part that matters — no rows (AC 3).
+    /// <summary>Every engine was inside a block window, so not one line could be translated — at a
+    /// cost of <b>zero requests</b>, which is what the pause is actually about.
     ///
-    /// <para>§3.3's row for this case reads "Read {n} line(s) — all engines are paused. They will
-    /// fill in when one is back", which promises rows that AC 3 forbids and a line count that
-    /// cannot exist, since the check runs before the capture. The behaviour is AC 3's; the final
-    /// wording is E7.S1's.</para></summary>
-    public static string ReadOncePaused(string? tryAgainIn)
+    /// <para><b>{n} is now known, and that is ruling E5-g</b> (E5.S4 review). E5.S4 shipped this
+    /// sentence from a check that ran BEFORE the capture, so there was no line count to give and
+    /// §3.3's "Read {n} line(s) — all engines are paused" could not be written; worse, a read whose
+    /// every line was already in the cache was refused although it needed no provider at all. The
+    /// check is gone: read-once captures and OCRs (both local), the cache serves what it can, and
+    /// the pause is now <i>reported</i> — it is the chain's own
+    /// <see cref="TranslationErrorKind.AllProvidersPaused"/>, raised without sending anything.</para>
+    ///
+    /// <para>§3.3's row goes on to promise the rows "will fill in when one is back". That promise is
+    /// not made here: the E5.S3 retry queue is drained by the LIVE loop, so a read-once taken with
+    /// LIVE stopped has nothing coming for it. The rows of a read taken WHILE live is running do get
+    /// retried, and they say so by staying on <see cref="PendingRetryRow"/> rather than by a sentence.
+    /// Final wording is E7.S1's.</para></summary>
+    public static string ReadOncePaused(int lines, string? tryAgainIn)
         => tryAgainIn is null
-            ? "Nothing was read — all engines are paused. Try again shortly."
-            : $"Nothing was read — all engines are paused. Try again in {tryAgainIn}.";
+            ? $"Read {lines} line(s) — all engines are paused. Try again shortly."
+            : $"Read {lines} line(s) — all engines are paused. Try again in {tryAgainIn}.";
 
     /// <summary>The screen itself could not be read — a capture or an OCR failure, not a
     /// translation one. Replaces "OCR failed: …", which named a component the player does not have

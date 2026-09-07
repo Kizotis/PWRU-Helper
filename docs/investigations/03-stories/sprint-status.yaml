@@ -128,7 +128,7 @@ development_status:
   # riskiest story of the release (a duplicated feed row is worse than the failure it replaces).
   e5-s1-skip-tick-and-back-off-while-paused: done             # order 1 — retires E2.S5's no-network REFUSED-tick auto-stop; E5.S2 owns the rest
   e5-s2-honest-auto-stop: done                               # order 2 — Live.cs:219 deleted; 5 consecutive SENT failures, no window (E5-c, E5-d)
-  e5-s3-retry-failed-rows-after-recovery: ready-for-dev      # order 4 — RISKIEST; LiveDedup must stay byte-identical
+  e5-s3-retry-failed-rows-after-recovery: review             # order 4 — RISKIEST; LiveDedup stayed byte-identical (verified); bundles E5-e/f/g
   e5-s4-honest-cancellable-read-once: done                   # order 3 — also depends on e5-s1 (PauseNow for AC 3)
   epic-5-retrospective: optional
 

@@ -416,14 +416,23 @@ public class LiveTickPolicyTests
         Assert.Equal(0, t.ConsecutiveFailures);
     }
 
-    /// <summary>The new outcomes leave E5.S1's back-off exactly where it was: only a skipped tick
-    /// advances it and only a translated one clears it. A refusal is not a skipped tick — the tick
-    /// ran, captured and OCR-ed — so it does not advance the curve either.</summary>
+    /// <summary>
+    /// A SENT failure leaves E5.S1's back-off exactly where it was — it belongs to the error counter,
+    /// which is the other rule entirely.
+    ///
+    /// <para><b>A refusal no longer does</b> (ruling E5-f, E5.S3). It was left alone here on the
+    /// grounds that "the tick ran, captured and OCR-ed", which is true and is precisely the problem:
+    /// nothing bounded a streak of them, so a tier refusing from inside the tick cost a full capture
+    /// and OCR every ~700 ms for as long as the refusal lasted. It is the same event as a pause seen
+    /// from the other side of the pre-tick check, so it advances the same curve — and still reaches
+    /// no error counter at all (E5-c), which the case above pins.</para></summary>
     [Fact]
-    public void The_error_outcomes_do_not_disturb_the_back_off()
+    public void A_sent_failure_leaves_the_back_off_alone_and_a_refusal_advances_it()
     {
         Assert.Equal(3, LiveTickPolicy.NextBackoffSteps(3, LiveTickOutcome.SentFailure));
-        Assert.Equal(3, LiveTickPolicy.NextBackoffSteps(3, LiveTickOutcome.Refused));
+        Assert.Equal(4, LiveTickPolicy.NextBackoffSteps(3, LiveTickOutcome.Refused));
+        Assert.Equal(LiveTickPolicy.NextBackoffSteps(3, LiveTickOutcome.Paused),
+                     LiveTickPolicy.NextBackoffSteps(3, LiveTickOutcome.Refused));
     }
 
     /// <summary>

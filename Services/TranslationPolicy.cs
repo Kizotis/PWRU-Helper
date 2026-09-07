@@ -248,6 +248,36 @@ internal static class TranslationPolicy
     // expression and not by a line number, which the same commit moved.
     public const int LiveAutoStopThreshold = 5;
 
+    // ---- the pending-retry queue (§9.3) --------------------------------------------------------
+    // Read by Services/PendingRetryQueue.cs and by MainWindow.Live.cs' drain (E5.S3). Ruling E3-h is
+    // what these two numbers implement: lines that failed — including the ones E3.S8's PerLineCap
+    // never asked for — are re-translated after recovery rather than burned for the session.
+
+    /// <summary>Rows the pending-retry queue holds at most, oldest dropped. <b>It is
+    /// <c>MainWindow.MaxHistory</c>'s 50 and not a number of its own</b>: the queue is bounded by the
+    /// same rule the feed is, so it can never hold a row the feed has already forgotten — and an
+    /// entry whose row HAS been evicted is dropped at drain time before it can cost a request
+    /// (<c>PendingRetryQueue.TakeAll</c>).
+    ///
+    /// <para>What the bound is really for: a 30-minute outage on a busy chat produces far more failed
+    /// rows than a feed keeps, and an unbounded queue would come back from it with a drain nobody
+    /// asked for — hundreds of requests into a provider that has just stopped refusing, which is how
+    /// a recovery becomes the next block.</para></summary>
+    // [CONFIRMED] MainWindow.xaml.cs' `private const int MaxHistory = 50`, mirrored here because
+    // Services/ cannot read the code-behind's constant; PendingRetryTests pins the two together.
+    public const int PendingRetryCapacity = 50;
+
+    /// <summary>How many drains may try one row before it becomes the terminal
+    /// <c>(not translated — …)</c> row of <c>ux-mode-degrade.md</c> §2.2. Counted in ATTEMPTS MADE,
+    /// so two means a row that has failed its retry twice stops being retried and starts saying so.
+    ///
+    /// <para>Two and not more because a row is not a request: every entry of a drain rides the same
+    /// batch, so an N-row queue retried three times is three batches into a provider whose gate has
+    /// only just reopened. The player's protection against a pending row that never resolves is this
+    /// number — after it, the row is honest about having been given up on.</para></summary>
+    // [ASSUMED] architecture-cible.md §9.3 (the number is named there and nowhere measured)
+    public const int PendingRetryMaxAttempts = 2;
+
     // ---- read-once (§9.4) ---------------------------------------------------------------------
     // Read by MainWindow.Ocr.cs (E5.S4), which builds one CancellationTokenSource per read from it.
 

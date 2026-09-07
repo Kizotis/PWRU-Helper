@@ -94,14 +94,24 @@ internal static class LiveTickPolicy
 
     /// <summary>AC 4, and the reason <see cref="LiveTickOutcome"/> exists: only a tick that really
     /// translated clears the back-off. An empty tick asked the providers nothing, and a tick that
-    /// threw belongs to the error counter.</summary>
+    /// really SENT something and failed belongs to the error counter, not to this curve.
+    ///
+    /// <para><b>Ruling E5-f (E5.S3): a <see cref="LiveTickOutcome.Refused"/> tick advances the same
+    /// step a <see cref="LiveTickOutcome.Paused"/> one does.</b> The two are the same event seen from
+    /// either side of the pre-tick check — a gate saying no, at no cost in requests — and E5.S1 only
+    /// bounded the half it could see in advance. Nothing bounded the other: a tier refusing from
+    /// INSIDE the tick (a probe deferral, a rate-ceiling refusal, or a window that closed between the
+    /// check and the request) left the loop capturing and OCR-ing a full frame every ~700 ms for as
+    /// long as the refusal lasted — the exact cost OQ-B's full pause exists to remove, reached
+    /// through the branch that throws. It still counts as no error at all
+    /// (<see cref="LiveErrorTracker"/>, ruling E5-c): backing off is not the same as blaming.</para></summary>
     internal static int NextBackoffSteps(int backoffSteps, LiveTickOutcome outcome) => outcome switch
     {
         LiveTickOutcome.Translated => 0,
         // Clamped rather than incremented for ever: the wait reaches the cap long before
         // MaxBackoffShift, so the counter has nothing left to say, and an unbounded int would
         // eventually wrap negative on a session left paused overnight.
-        LiveTickOutcome.Paused => Math.Min(backoffSteps + 1, MaxBackoffShift),
+        LiveTickOutcome.Paused or LiveTickOutcome.Refused => Math.Min(backoffSteps + 1, MaxBackoffShift),
         _ => backoffSteps,
     };
 
