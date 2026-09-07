@@ -236,9 +236,35 @@ public partial class MainWindow
     /// <summary>§3.2's "resumed" row, as a join: <i>the normal running line, plus §3.5's one-time
     /// notice</i>. Two spaces and no punctuation of its own — the notice is already a terminated
     /// sentence (§3.5) and the line it rides on ends in its own stop or ellipsis. Pure, so the
-    /// composition is a unit test rather than something only a running loop could show.</summary>
+    /// composition is a unit test rather than something only a running loop could show.
+    ///
+    /// <para><b>And it is BOUNDED</b> (review, Winston): a join of two sentences that are each
+    /// budgeted on their own is not itself budgeted, and the worst case — a paused row (79) plus
+    /// <c>Translated by {P} — {P2} is paused.</c> — already passes <see cref="MainStatusBudget"/>.
+    /// The half that gives way is the <b>status</b>, elided with an ellipsis: it is re-derived on
+    /// the next tick, while the notice is said once per switch and never repeated (§3.5). The cut
+    /// never leaves half a surrogate pair behind — every LIVE line in the deck opens on
+    /// <c>🔴</c>.</para></summary>
     internal static string WithNotice(string status, string? notice)
-        => notice is null ? status : status + "  " + notice;
+    {
+        if (notice is null) return status;
+        if (string.IsNullOrEmpty(status)) return notice;
+
+        string joined = status + "  " + notice;
+        if (joined.Length <= MainStatusBudget) return joined;
+
+        int room = MainStatusBudget - notice.Length - 3;      // the ellipsis + the two-space join
+        if (room <= 0) return notice;                         // a notice that fills the line alone
+        if (char.IsHighSurrogate(status[room - 1])) room--;   // never cut a pair in half
+        return status[..room].TrimEnd() + "…  " + notice;
+    }
+
+    /// <summary>§3.2's own measure of the main window's status line: <i>"rendered length with the
+    /// longest sentence in the deck is ~120 characters; the main window's status line wraps"</i>.
+    /// It is a budget and not a hard limit for the deck's own rows — every one of them is pinned
+    /// well under it — but a JOIN can grow past it, and an unbounded line is how a status becomes a
+    /// paragraph.</summary>
+    internal const int MainStatusBudget = 120;
 
     private void SetLiveUi(bool on)
     {

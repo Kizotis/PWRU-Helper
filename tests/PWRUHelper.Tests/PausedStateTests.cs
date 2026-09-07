@@ -512,7 +512,161 @@ public class PausedStateTests
         Assert.Contains("if (notice is not null && !string.Equals(notice, _lastStateNotice, StringComparison.Ordinal))",
                         body, StringComparison.Ordinal);
         Assert.Contains("_lastStateNotice = notice;", body, StringComparison.Ordinal);
-        Assert.Contains("notice = FallbackNotice(status);", body, StringComparison.Ordinal);
+        Assert.Contains("var notice = StateNotice(status, chip, _chipWasDegraded);", body,
+                        StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <b>The join is bounded</b> (review, Winston). Two sentences that are each budgeted on their
+    /// own do not make a budgeted line: the worst real pair — §3.2's paused row plus §3.5's
+    /// fallback notice — already passes §3.2's ~120, and "the main window wraps" is a reason to
+    /// bound it rather than a reason not to.
+    ///
+    /// <para>The half that gives way is the STATUS: it is re-derived on the next tick, while the
+    /// notice is said once per switch and never repeated. The cut is an ellipsis and it never
+    /// leaves half a surrogate pair behind — every LIVE line in the deck opens on <c>🔴</c>.</para>
+    /// </summary>
+    [Fact]
+    public void The_notice_rides_within_the_main_lines_budget_and_the_status_gives_way()
+    {
+        // The worst pair the app can actually render today: the paused row plus the fallback line.
+        var paused = MainWindow.LivePausedStatus(58);
+        var notice = UserMessages.TranslatedBy(ProviderIds.GoogleGtx, ProviderIds.GoogleDict)!;
+        var line = MainWindow.WithNotice(paused, notice);
+
+        Assert.True(line.Length <= MainWindow.MainStatusBudget,
+                    $"the joined line is {line.Length} chars, over §3.2's {MainWindow.MainStatusBudget}: {line}");
+        Assert.EndsWith(notice, line, StringComparison.Ordinal);
+        Assert.Contains("…  ", line, StringComparison.Ordinal);
+
+        // A pair that fits is joined untouched — the bound is a ceiling, not a formatter.
+        Assert.Equal("🔴 Live — watching (check #7)…  Back on Google.",
+                     MainWindow.WithNotice("🔴 Live — watching (check #7)…", "Back on Google."));
+
+        // Nothing to ride on: the notice is the line, rather than two spaces and a sentence.
+        Assert.Equal("Back on Google.", MainWindow.WithNotice("", "Back on Google."));
+
+        // …and the cut never splits a surrogate pair, with the pair placed exactly ON the cut.
+        int room = MainWindow.MainStatusBudget - notice.Length - 3;
+        var cut = MainWindow.WithNotice(new string('x', room - 1) + "🔴 tail", notice);
+        Assert.True(cut.Length <= MainWindow.MainStatusBudget);
+        Assert.DoesNotContain("🔴", cut, StringComparison.Ordinal);
+        for (int i = 0; i < cut.Length; i++)
+            Assert.False(char.IsHighSurrogate(cut[i]) && (i + 1 == cut.Length || !char.IsLowSurrogate(cut[i + 1])),
+                         "a cut line must not end on half a surrogate pair");
+    }
+
+    /// <summary>
+    /// <b>The fallback notice never names the engine that is serving.</b> <c>PreferredPause</c>
+    /// counts the serving tier's OWN window on purpose — for the chip, which is right: the player
+    /// is about to feel it — but "Translated by Google (backup) — Google (backup) is paused." is a
+    /// sentence that contradicts itself in six words. It is reachable the ordinary way round: the
+    /// tier that answered a moment ago closes behind the answer while the tier above it reopens.
+    /// </summary>
+    [Fact]
+    public void The_fallback_notice_never_names_the_engine_that_is_serving()
+    {
+        var servingIsPaused = Status(
+            gates: new(StringComparer.Ordinal)
+            {
+                [ProviderIds.GoogleGtx] =
+                    new(GateState.Open, Now + TimeSpan.FromSeconds(58), 1, TranslationErrorKind.RateLimited),
+            },
+            outcome: Answered(ProviderIds.GoogleGtx, ProviderIds.GoogleDict));
+
+        Assert.Null(MainWindow.FallbackNotice(servingIsPaused));
+    }
+
+    /// <summary>
+    /// <b>§3.5's two directions, as the one decision that chooses between them</b> (review): the
+    /// recovery line fires once per resume and <b>never on the first start</b> — every session
+    /// begins undegraded, so counting that would announce a recovery from nothing at the first
+    /// successful translation of every launch.
+    /// </summary>
+    [Fact]
+    public void The_recovery_notice_fires_once_per_resume_and_never_on_the_first_start()
+    {
+        var healthy = Status(outcome: Answered(ProviderIds.GoogleDict));
+        var healthyChip = MainWindow.ChipFor(healthy);
+        Assert.True(healthyChip.IsHealthy);
+
+        // The first start: nothing degraded was ever observed, so there is nothing to recover from.
+        Assert.Null(MainWindow.StateNotice(healthy, healthyChip, wasDegraded: false));
+
+        // Degraded, and the notice is the OTHER direction's — D2's evidence, not a recovery.
+        var degraded = FellBackFrom(pausedPreferred: true);
+        var degradedChip = MainWindow.ChipFor(degraded);
+        Assert.False(degradedChip.IsHealthy);
+        Assert.Equal("Translated by Google (backup) — Google is paused.",
+                     MainWindow.StateNotice(degraded, degradedChip, wasDegraded: false));
+
+        // …and back up: once, on the tick that recovers.
+        Assert.Equal("Back on Google.", MainWindow.StateNotice(healthy, healthyChip, wasDegraded: true));
+        // The caller's memory has moved on by the next tick (_chipWasDegraded is false while the
+        // chip is healthy), so the same recovery is not announced sixty times a minute.
+        Assert.Null(MainWindow.StateNotice(healthy, healthyChip, wasDegraded: false));
+    }
+
+    /// <summary>
+    /// <b>Two toasts that overlap keep ONE hold, and the last one wins</b> (review): the hold is a
+    /// flag rather than a counter, and its lifetime is the single <c>_toastTimer</c> restart the
+    /// main window does on every toast — so the second toast does not leave a hold behind that the
+    /// first toast's timer already ended.
+    /// </summary>
+    [Fact]
+    public void Two_overlapping_toasts_keep_one_hold_and_the_state_still_lands()
+    {
+        using var temp = new TempSettings(NoSettings);
+
+        StaTestHost.Run(() =>
+        {
+            var overlay = new CompactOverlay(new MainWindow());
+
+            overlay.ShowToast("Copied.");
+            overlay.SetStatusIfChanged("○ Live paused — back in 0:58");
+            overlay.ShowToast("Discord copied: kizotis");      // the second toast, mid-hold
+            Assert.Equal("Discord copied: kizotis", overlay.OverlayStatus.Text);
+
+            overlay.SetStatusIfChanged("○ Live paused — back in 0:57");
+            Assert.Equal("Discord copied: kizotis", overlay.OverlayStatus.Text);
+
+            // ONE EndToast (the one timer restarted by the second toast) releases the one hold, and
+            // the freshest state lands — not the one the first toast interrupted.
+            overlay.EndToast();
+            Assert.Equal("○ Live paused — back in 0:57", overlay.OverlayStatus.Text);
+
+            // …and a toast shown on the MAIN window leaves this line alone: EndToast is a no-op
+            // when this window holds nothing, so it can never invent a state or replay an old one.
+            overlay.EndToast();
+            Assert.Equal("○ Live paused — back in 0:57", overlay.OverlayStatus.Text);
+        });
+    }
+
+    /// <summary>
+    /// <b>Nothing stale is SHOWN once LIVE is off</b> (review). The paused state is remembered
+    /// across a Stop on purpose — it is what lets a restart into a standing pause render the paused
+    /// form at once, and what keeps the overlay's 600 ms timer stopped meanwhile (UX-DR18) — so the
+    /// thing that must hold is that neither surface can show a paused heartbeat while there is no
+    /// loop: both are <c>Collapsed</c>, and the overlay's ▶/■ button still follows the loop rather
+    /// than being stranded behind the pause guard's early return.
+    /// </summary>
+    [Fact]
+    public void A_pause_with_LIVE_off_shows_no_heartbeat_on_either_surface()
+    {
+        using var temp = new TempSettings(NoSettings);
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+            window.SetLivePaused(true);
+            Assert.Equal(MainWindow.LiveIndicatorPaused, window.LiveIndicator.Text);
+            Assert.Equal(System.Windows.Visibility.Collapsed, window.LiveIndicator.Visibility);
+
+            var overlay = new CompactOverlay(window);
+            overlay.SetPaused(true);
+            Assert.Equal(System.Windows.Visibility.Collapsed, overlay.LiveDot.Visibility);
+            Assert.Equal("▶ Live", overlay.LiveToggleButton.Content);
+        });
     }
 
     // ---- helpers ---------------------------------------------------------------------------------

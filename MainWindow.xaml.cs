@@ -989,9 +989,7 @@ public partial class MainWindow : Window
         // once the whole attempt has already failed. Its evidence is LastOutcome.Skipped being
         // non-empty behind a tier that ANSWERED (EngineStatus.FellBack, ruling E3-b), so the app
         // reports a fallback rather than promising one.
-        string? notice = null;
-        if (_chipWasDegraded && chip.IsHealthy) notice = UserMessages.BackOn(status.LastAnswered);
-        else if (!chip.IsHealthy) notice = FallbackNotice(status);
+        var notice = StateNotice(status, chip, _chipWasDegraded);
 
         // "Once per switch" as a comparison and not a flag: the same sentence is not re-announced
         // while the state it describes lasts (principle 1 — a state is announced once and left
@@ -1006,6 +1004,21 @@ public partial class MainWindow : Window
 
         return status.NeedsTick;
     }
+
+    /// <summary>
+    /// <b>Which §3.5 sentence this state has to say, if any</b> — the choice itself, pure, so both
+    /// directions are pinned as behaviour and not as a source scan (review, Winston).
+    ///
+    /// <para><c>Back on {P}.</c> only on the way UP and only when a degraded state was really
+    /// observed first: <paramref name="wasDegraded"/> is false for every session's first
+    /// translation, which is what stops the app announcing a recovery from nothing. On the way
+    /// down it is <see cref="FallbackNotice"/>'s evidence-backed line, and a healthy chip with
+    /// nothing behind it says nothing at all — which is also what clears the caller's memory so the
+    /// NEXT switch speaks.</para></summary>
+    internal static string? StateNotice(EngineStatus status, EngineChip chip, bool wasDegraded)
+        => chip.IsHealthy
+            ? wasDegraded ? UserMessages.BackOn(status.LastAnswered) : null
+            : FallbackNotice(status);
 
     /// <summary>
     /// <b>§3.5's "fallback active" line, and deviation D2's evidence</b> (amendment A4, E7.S4). It
@@ -1026,7 +1039,14 @@ public partial class MainWindow : Window
         // The same walk ChipFor's S3 arm makes: a tier paused BELOW the engine that answered costs
         // the player nothing and is not what this sentence is about.
         var paused = PreferredPause(readLines, serving);
-        return paused is null ? null : UserMessages.TranslatedBy(serving, paused.ProviderId);
+        // …and never the engine that is SERVING (review). That walk deliberately counts the serving
+        // tier's own window — for the chip, which is right: the player is about to feel it — but
+        // "Translated by Google — Google is paused." is a sentence that contradicts itself in six
+        // words. It is reachable the ordinary way round: the tier that answered a moment ago closes
+        // behind the answer while the tier above it reopens.
+        if (paused is null || string.Equals(paused.ProviderId, serving, StringComparison.Ordinal))
+            return null;
+        return UserMessages.TranslatedBy(serving, paused.ProviderId);
     }
 
     /// <summary>Where §3.5's one-time notice goes, which is <b>the surface that owns the state</b>.
