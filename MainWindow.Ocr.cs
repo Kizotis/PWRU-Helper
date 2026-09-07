@@ -243,9 +243,6 @@ public partial class MainWindow
         // that back typed, and ReadOnceSummary turns it into the paused sentence with {n} in it.
         // Zero requests either way — that half of AC 3 is unchanged and is what TP-ONCE-04 asserts.
         MainTabs.SelectedIndex = TabTranslator;   // results show on the Translator page
-        // A8: the button is not greyed — it becomes "Cancel read" and stays pressable, which is the
-        // only reason the second press below can ever reach the guard at the top of this method.
-        SetReadOnceCancelMode(reading: true);
         LiveButton.IsEnabled = false;        // don't let live start mid-read (shared OCR engine)
         // NOT _ocrItems.Clear(): the result is appended to the feed and framed instead (see
         // TranslateSentencesInto). Wiping the history to show one answer threw away the live lines
@@ -265,10 +262,17 @@ public partial class MainWindow
 
         int lines = 0;                    // what the status says it READ, set once OCR has answered
         // LAST, and immediately above the try (review): the flag is only cleared in the finally, so
-        // every statement standing between the two is a statement that can leave both read-once
-        // buttons and LiveButton greyed until restart. The setup above cannot throw today — they are
-        // property sets and a CancellationTokenSource over a compile-time constant — and this
+        // every statement standing between the two is a statement that can leave LiveButton greyed
+        // and the read-once buttons lying until restart. The setup above cannot throw today — they
+        // are property sets and a CancellationTokenSource over a compile-time constant — and this
         // ordering is what keeps that true of whatever gets added there next.
+        //
+        // The label swap is the LINE ABOVE the flag and not the one beside MainTabs (review, A8):
+        // since A8 the button is not greyed but re-labelled, so between the two writes the button
+        // would read "Cancel read" while _readingOnce is still false — and the guard at the top of
+        // SelectAreaAndReadOnceAsync reads the FLAG, so that press would start a second read on the
+        // shared OCR engine instead of cancelling. Written together, they cannot disagree.
+        SetReadOnceCancelMode(reading: true);
         _readingOnce = true;
         try
         {

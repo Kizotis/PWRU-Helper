@@ -618,8 +618,15 @@ public class ReadOnceStatusTests
 
             // The overlay's column of A8's table: the glyph becomes ■ and the tooltip becomes the
             // label, because at 360 px the button is icon-only and the tooltip is all it can say.
-            var overlay = new CompactOverlay(new MainWindow());
+            // Same window as its owner (review): a second MainWindow builds a second copy of every
+            // control this thread then keeps alive, and this one already exists.
+            var overlay = new CompactOverlay(window);
             Assert.Equal(UserMessages.ReadOnceOverlayLabel(), overlay.ReadOnceButton.Content);
+            // The automation name follows the LABEL in both states, which on an icon-only button is
+            // the only thing a screen reader has (review): idle it is the main window's sentence,
+            // never the glyph.
+            Assert.Equal(UserMessages.ReadOnceLabel(),
+                         System.Windows.Automation.AutomationProperties.GetName(overlay.ReadOnceButton));
 
             overlay.SetReadOnceCancelMode(reading: true);
             Assert.Equal("■", overlay.ReadOnceButton.Content);
@@ -703,6 +710,97 @@ public class ReadOnceStatusTests
             Assert.DoesNotContain("Content=", element, StringComparison.Ordinal);
             Assert.DoesNotContain("ToolTip=", element, StringComparison.Ordinal);
         }
+    }
+
+    /// <summary>
+    /// <b>The race A8 had to leave impossible: a press during the cancel window starts nothing.</b>
+    /// The guard that used to swallow the second press now cancels — so the review question is
+    /// whether the press that cancels can also, on the way back, start a second read on the OCR
+    /// engine, which is shared and non-reentrant. It cannot, and these are the four reasons, each
+    /// pinned rather than argued:
+    ///
+    /// <list type="number">
+    /// <item>every <c>_readingOnce</c> guard in the file has the same body — <c>CancelReadOnce();
+    ///       return;</c> — so a press that means "cancel" never falls through to a start;</item>
+    /// <item><c>CancelReadOnce</c> does not touch <c>_readingOnce</c>: it cancels the token and
+    ///       leaves the guard ARMED, so a third and a fourth press cancel nothing and start nothing
+    ///       either;</item>
+    /// <item>the flag is cleared in exactly one place, the <c>finally</c>, so it is still true for
+    ///       the whole of the unwind the cancelled read is doing;</item>
+    /// <item>and that <c>finally</c> is reached only after the awaited OCR call has returned — the
+    ///       capture and <c>ReadLinesAsync</c> take no token, so cancellation is observed after
+    ///       them, never during. The engine is free before the next read can be started.</item>
+    /// </list>
+    ///
+    /// <para>Source-level, because the read a headless suite would have to drive is the one thing
+    /// this repo cannot drive: it captures the screen and runs the Windows OCR engine (CI-3) — the
+    /// shape this file's other loop-level facts already use.</para>
+    /// </summary>
+    [Fact]
+    public void A8_a_press_during_the_cancel_window_cannot_start_a_second_read()
+    {
+        var ocr = Code(File.ReadAllText(RepoFile("MainWindow.Ocr.cs")));
+        var read = BracedBlock(ocr, ocr.IndexOf("private async Task ReadRegionOnceAsync(",
+                                                StringComparison.Ordinal));
+
+        // (1) every guard cancels AND returns — there is no other form of it in the file.
+        Assert.Equal(Occurrences(ocr, "if (_readingOnce)"),
+                     Occurrences(ocr, "if (_readingOnce) { CancelReadOnce(); return; }"));
+
+        // (2) the cancel leaves the flag alone, so the guard stays armed for the whole unwind.
+        var cancel = BracedBlock(ocr, ocr.IndexOf("private void CancelReadOnce()", StringComparison.Ordinal));
+        Assert.DoesNotContain("_readingOnce", cancel, StringComparison.Ordinal);
+
+        // (3) one clear, and it is the finally's.
+        Assert.Equal(1, Occurrences(ocr, "_readingOnce = false;"));
+        var unwind = BracedBlock(read, read.IndexOf("finally", StringComparison.Ordinal));
+        Assert.Contains("_readingOnce = false;", unwind, StringComparison.Ordinal);
+
+        // (4) …and that finally cannot run before the OCR call has returned: it is awaited inside
+        // the try, and it takes no token of its own that could abandon it.
+        Assert.Contains("await _ocr.ReadLinesAsync(", read, StringComparison.Ordinal);
+        Assert.True(read.IndexOf("_ocr.ReadLinesAsync(", StringComparison.Ordinal)
+                    < read.IndexOf("_readingOnce = false;", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// <b>The label may never disagree with the flag it describes</b> (review). Since A8 the button
+    /// is not greyed but re-labelled, and the guard reads <c>_readingOnce</c> rather than the label
+    /// — so a window in which the button says "Cancel read" while the flag is still false is a
+    /// window in which that press STARTS a read instead of cancelling one. The two writes are
+    /// therefore adjacent, with no statement between them, and both are restored by the
+    /// <c>finally</c> that ends every path.
+    ///
+    /// <para>The same truth is pushed through the one door that does not go through the read:
+    /// <c>EnterCompactMode</c> hands the overlay <c>_readingOnce</c> itself — not a hardcoded idle
+    /// — because Ctrl+Alt+R can be reading when the player goes compact. With the STA case above
+    /// proving what the two states render, this is what proves the overlay is told the right
+    /// one.</para>
+    /// </summary>
+    [Fact]
+    public void A8_the_label_is_written_with_the_flag_and_pushed_when_the_overlay_opens()
+    {
+        var ocr = Code(File.ReadAllText(RepoFile("MainWindow.Ocr.cs")));
+        var read = BracedBlock(ocr, ocr.IndexOf("private async Task ReadRegionOnceAsync(",
+                                                StringComparison.Ordinal));
+
+        const string label = "SetReadOnceCancelMode(reading: true);";
+        int at = read.IndexOf(label, StringComparison.Ordinal);
+        int flag = read.IndexOf("_readingOnce = true;", StringComparison.Ordinal);
+        Assert.True(at > 0 && at < flag, "the cancel label is written before the flag it describes");
+        Assert.DoesNotContain(";", read[(at + label.Length)..flag], StringComparison.Ordinal);
+
+        var unwind = BracedBlock(read, read.IndexOf("finally", StringComparison.Ordinal));
+        Assert.Contains("SetReadOnceCancelMode(reading: false);", unwind, StringComparison.Ordinal);
+
+        var compact = Code(File.ReadAllText(RepoFile("MainWindow.Compact.cs")));
+        var enter = BracedBlock(compact, compact.IndexOf("internal void EnterCompactMode()",
+                                                         StringComparison.Ordinal));
+        Assert.Contains("SetReadOnceCancelMode(_readingOnce);", enter, StringComparison.Ordinal);
+        Assert.DoesNotContain("SetReadOnceCancelMode(reading:", enter, StringComparison.Ordinal);
+        Assert.True(enter.IndexOf("_overlay.Show();", StringComparison.Ordinal)
+                    < enter.IndexOf("SetReadOnceCancelMode(_readingOnce);", StringComparison.Ordinal),
+                    "the overlay has to exist and be shown before it is told anything");
     }
 
     /// <summary>
