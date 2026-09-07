@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.IO;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 
 namespace PWRUHelper.Services;
@@ -55,29 +56,48 @@ internal sealed class TranslationCacheStore
     ///
     /// <para><b>Four megabytes, and it was one until E4.S3 measured the file.</b> §8.2 estimated
     /// ~150 B an entry ⇒ ≈300 KB for a full 2000, which is what a megabyte was "generous" against.
-    /// The estimate counted UTF-8 Cyrillic at two bytes a character; <see cref="Options"/> uses
+    /// The estimate counted UTF-8 Cyrillic at two bytes a character; the file was then written with
     /// <c>JsonSerializer</c>'s DEFAULT encoder, which escapes every non-ASCII character as
     /// <c>\uXXXX</c> — <b>six</b> bytes — so a realistic full cache measured <b>502 B an entry, 981 KB
     /// at 2000 entries</b> (U8, 2026-09-07, chat lines averaging 68 characters). A 1 MB bound left
     /// 4% of headroom and crossed at ≈2088 entries: the very users this cache is for would have had
     /// it silently refused, with no error and no log line — the worst shape of failure this file
-    /// has. Four megabytes is 4× a measured full cache, still refuses anything absurd, and parses in
-    /// ≈70 ms at the ≈55 MB/s this load measured, which is a bound and not a budget.</para>
+    /// has.</para>
     ///
-    /// <para>The cheaper fix — a non-escaping encoder, which would divide the Cyrillic by three —
-    /// changes the bytes of a file users already have and was out of E4.S3's scope by its own terms;
-    /// it is worth its own story, and this bound is sized so that story is an optimisation rather
-    /// than a rescue.</para></summary>
+    /// <para><b>E4.S5 then took the encoder itself</b> (see <see cref="Options"/>): the same 2000
+    /// entries, written as UTF-8, are <b>277 B an entry and 541 KB</b> — the file that forced this
+    /// bound up now fits inside the megabyte it broke. Not §8.2's ~150 either, and that is the
+    /// honest half of the story: only the Russian key was ever escaped, while the English value, the
+    /// 33-byte timestamp and the field names are ~130 B of every row and no encoder touches them.
+    /// The bound STAYS at four megabytes rather than following the file down — it is the guard
+    /// against a corrupt or hand-edited monster, not a budget for the cache, and headroom is what
+    /// E4.S3 learned to keep. ×7.6 a measured full cache, crossing at ≈15 000 entries.</para></summary>
     // [MEASURED] E4.S3 / U8, 2026-09-07: 502 B/entry, 981 KB at 2000 entries, 17.8 ms to load.
+    // [MEASURED] E4.S5, 2026-09-07: 277 B/entry, 541 KB at 2000, 9.7 ms — same harness, UTF-8 encoder.
     private const long MaxBytes = 4 * 1024 * 1024;
 
     /// <summary>Un-indented on purpose (unlike <c>provider-state.json</c>, which a user is asked to
     /// zip and send): this file is chat text and nobody reads it by hand — I11 says it may not even
     /// reach the error report. Indenting 2000 entries would roughly double it for no reader. One
-    /// options object for the life of the process, per the footprint rule.</summary>
+    /// options object for the life of the process, per the footprint rule.
+    ///
+    /// <para><b>The encoder is the other half of the size, and it is E4.S5's whole story.</b>
+    /// <c>JsonSerializer</c>'s DEFAULT encoder escapes every non-ASCII character as <c>\uXXXX</c> —
+    /// <b>six</b> bytes for a Cyrillic letter that is two in UTF-8 — which is what made a realistic
+    /// full cache measure 502 B an entry instead of the ≈150 §8.2 estimated (U8). Writing it with
+    /// <see cref="JavaScriptEncoder.UnsafeRelaxedJsonEscaping"/> puts the Cyrillic in the file as
+    /// UTF-8 and divides a Russian line by three.</para>
+    ///
+    /// <para>"Unsafe" names one hazard and it is not one this file has: the relaxed encoder stops
+    /// escaping <c>&lt;</c>, <c>&gt;</c>, <c>&amp;</c> and <c>'</c>, which matters only where JSON is
+    /// interpolated into HTML or a script. <b>This file is written and read by this app alone</b>,
+    /// parsed by <see cref="JsonDocument"/> and never rendered anywhere — and the JSON stays
+    /// strictly valid either way, control characters and quotes still escaped, so an old
+    /// <c>\uXXXX</c> file keeps loading (the parser cannot tell the two forms apart).</para></summary>
     private static readonly JsonSerializerOptions Options = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
     /// <summary>Where <c>translation-cache.json</c> is read from / written to (IS-2). Tests point

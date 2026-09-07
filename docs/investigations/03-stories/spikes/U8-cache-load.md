@@ -39,6 +39,8 @@ working set is `Process.WorkingSet64` and is the noisy one — it is a whole-pro
 | **2000** | **981 KB** | **502** | **0.003 ms** | **17.8 ms** / 14.6 / 21.0 | **15.3 ms** | **+960 KB** | +892 KB |
 | 5000 | 2 612 KB | 535 | 0.006 ms | 32.0 ms / 25.4 / 34.0 | 28.9 ms | +2 514 KB | ~0 (noise) |
 
+_Addendum — the same table after E4.S5's encoder change is in §8._
+
 Three more numbers from the same run:
 
 - **The pre-sized map costs nothing.** Constructing the 2000-slot store — the one new byte cost E4.S4
@@ -71,6 +73,7 @@ was the guard that was mis-sized.
 **Not done here, on purpose:** switching to a non-escaping encoder would divide the Cyrillic by three
 and is the obvious follow-up, but it changes the bytes of a file users already have and the spike's
 own terms forbade touching the format. The 4 MB bound is sized so that change stays an optimisation.
+**It was done next door — see the addendum in §8.**
 
 ## 5. AC 2 — nothing is read before it is asked for
 
@@ -108,4 +111,28 @@ Run it **once right after a reboot** (cold file cache, Defender cold) and once a
 (warm), on the personal Defender-only machine, and paste the two tables here. What matters is the
 2000-entry `load ms` column: anything under ~50 ms confirms the capacity for the machine class this
 project is actually fighting. Without the environment variable the harness compiles but no case is
-discovered, so a normal `dotnet test` is unchanged — 771 tests, ~2 s.
+discovered, so a normal `dotnet test` is unchanged — 774 tests since E4.S5, ~2 s.
+
+## 8. Addendum — re-measured after E4.S5 (2026-09-07, same box, same harness, same seed)
+
+E4.S5 took the follow-up §4 named: `TranslationCacheStore.Options` now writes with
+`JavaScriptEncoder.UnsafeRelaxedJsonEscaping`, so Cyrillic goes into the file as UTF-8 instead of
+`\uXXXX`. Nothing else changed — same schema, same generator, same `PWRU_SPIKE=1` run.
+
+| entries | file | B/entry | load (median) | vs. §3 |
+|---|---|---|---|---|
+| 500 | 128 KB | 263 | 2.36 ms | 231 KB / 474 / 3.6 ms |
+| **2000** | **541 KB** (554 233 B) | **277** | **9.73 ms** | 981 KB / 502 / 17.8 ms |
+| 5000 | 1 430 KB | 293 | 21.99 ms | 2 612 KB / 535 / 32.0 ms |
+
+**A full cache is 45% smaller and loads in 55% of the time**, and the file that forced `MaxBytes` up
+now fits inside the 1 MB bound it broke. It is **not** §8.2's ~150 B an entry, and the reason is
+worth recording so nobody re-opens this: only the Russian **key** was ever escaped. The English value
+(~70 B), the 33-byte round-trip timestamp and the field names are ~130 B of every row, and no encoder
+touches them — ~150 B/entry was never reachable with this schema.
+
+`MaxBytes` stays at **4 MB**: the bound guards against a corrupt or hand-edited file, not against the
+cache, and it is now ×7.6 a full one (crossing at ≈**15 135** entries). The number CI defends is
+`TranslationCachePersistenceTests.A_full_realistic_cache_costs_under_300_bytes_an_entry`, which runs
+over **this** harness's `Entries(2000)` — the generator is `internal` for exactly that reason, so the
+number in this table and the number in the suite cannot drift.

@@ -118,6 +118,7 @@ development_status:
   e4-s2-persist-cache-debounced: done                     # order 2 — lands IS-2/IS-3 (TempCache + redirect) FIRST
   e4-s3-measure-cache-load-spike-u8: done                 # spike (U8) — exit criterion MET: 2000 entries = 981 KB, 17.8 ms, ~1 MB heap; capacity 2000 kept and re-graded [MEASURED]; MaxBytes 1 MB -> 4 MB
   e4-s4-share-one-store-both-decorators: done               # order 3 — ONE store, THREE decorators; CR approve-with-fixes (3 suite patches)
+  e4-s5-non-escaping-cache-encoder: done                    # follow-up to the U8 spike — UTF-8 encoder: 502 -> 277 B/entry, 981 -> 541 KB at 2000; MaxBytes stays 4 MB
   epic-4-retrospective: optional
 
   # ---- Release A.2 · increment 4 ------------------------------------------------

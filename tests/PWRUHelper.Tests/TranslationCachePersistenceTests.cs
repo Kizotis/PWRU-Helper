@@ -551,6 +551,94 @@ public class TranslationCachePersistenceTests
         Directory.Delete(cache.Path + ".tmp");
     }
 
+    // ---- E4.S5: the encoder, i.e. what a Cyrillic line weighs on disk ---------------------------
+
+    [Fact]
+    public void A_Cyrillic_entry_is_written_as_UTF8_and_never_as_escaped_code_points()
+    {
+        // The whole of E4.S5. JsonSerializer's default encoder writes "привет" as six \uXXXX
+        // escapes — 36 bytes for a 12-byte word — which is what made a full cache 981 KB (U8);
+        // UnsafeRelaxedJsonEscaping writes the letters. The assertion is on the BYTES, not on a
+        // decoded string, because a JSON parser cannot tell the two forms apart and would pass
+        // either way.
+        using var cache = new TempCache();
+
+        var store = new TranslationCacheStore(persistent: true);
+        store.Store("ru|en|привет всем", "hello everyone");
+        store.SaveNow();
+
+        var text = cache.Read();
+        Assert.Contains("привет всем", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("\\u04", text, StringComparison.OrdinalIgnoreCase);
+
+        // …and still strictly valid JSON that this build reads back: the relaxation only stops
+        // escaping characters that matter to an HTML page, and this file is never rendered.
+        var reader = new TranslationCacheStore(persistent: true);
+        Assert.False(reader.TryGet("miss", out _));
+        Assert.True(reader.TryGet("ru|en|привет всем", out var value));
+        Assert.Equal("hello everyone", value);
+    }
+
+    [Fact]
+    public void A_file_written_in_the_OLD_escaped_form_still_loads()
+    {
+        // No shipped build ever wrote this file (A.2 is unreleased), so the format was free to
+        // change — but a cache written by a pre-E4.S5 branch build, or by a hand edit, must not
+        // cost the user their entries. Both forms are the SAME string to a parser; this case is
+        // what pins that, with the escapes spelled out rather than produced by a serialiser.
+        using var cache = new TempCache();
+        const string escaped =
+            "{\"version\":1,\"entries\":["
+            + "{\"k\":\"ru|en|\\u043F\\u0440\\u0438\\u0432\\u0435\\u0442\",\"v\":\"hello\","
+            + "\"p\":\"\",\"t\":\"2026-09-07T10:00:00.0000000+00:00\"}]}";
+
+        Assert.Contains("\\u04", escaped, StringComparison.OrdinalIgnoreCase);   // non-vacuity
+        cache.Write(escaped);
+
+        var store = new TranslationCacheStore(persistent: true);
+
+        Assert.False(store.TryGet("miss", out _));                 // the miss that loads
+        Assert.True(store.TryGet("ru|en|привет", out var value));
+        Assert.Equal("hello", value);
+
+        // And once this build rewrites it, the same entry is there in UTF-8: the format converts
+        // itself on the next save, with no migration and no version bump.
+        store.Store("ru|en|пока", "bye");
+        store.SaveNow();
+        Assert.DoesNotContain("\\u04", cache.Read(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void A_full_realistic_cache_costs_under_300_bytes_an_entry()
+    {
+        // U8's number, defended in CI. The spike's own generator is the source of the entries
+        // (internal since E4.S5) so the number here and the number in the spike table cannot drift:
+        // Russian chat lines of 20–90 characters with their English translations, deterministic
+        // seed. 502 B/entry before the encoder change, 277 after — the ceiling is set just above
+        // the measurement, tight enough that re-introducing an escaping encoder goes red (it would
+        // put the same entries back at ~500). It is not lower because most of what is left is not
+        // Cyrillic: the English value, the 33-byte timestamp and the field names are ~130 B of
+        // every row and no encoder touches them.
+        using var cache = new TempCache();
+        TranslationCacheStore.SaveDebounceMs = 60_000;            // no timer under the write
+
+        var entries = CacheLoadSpike.Entries(2000);
+        var store = new TranslationCacheStore(capacity: entries.Count, persistent: true);
+        foreach (var (key, value, provider) in entries) store.Store(key, value, provider);
+        store.SaveNow();
+
+        var bytes = new FileInfo(cache.Path).Length;
+        var perEntry = bytes / (double)entries.Count;
+
+        Assert.Equal(2000, Rows(cache.Read()).Count);
+        Assert.True(perEntry <= 300,
+            $"a full cache costs {perEntry:F0} B an entry ({bytes / 1024} KB); the encoder regressed");
+
+        // The concrete win: this is the very file that forced MaxBytes from 1 MB to 4 MB (U8, 981
+        // KB at 2000 entries). It now fits inside the bound it broke.
+        Assert.True(bytes < 1024 * 1024, $"{bytes / 1024} KB");
+    }
+
     // ---- the A.2 default: a store nobody made persistent touches no disk at all -----------------
 
     [Fact]

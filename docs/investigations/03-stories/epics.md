@@ -1417,6 +1417,43 @@ empties the cache.
 
 ---
 
+### Story E4.S5: Write the cache file as UTF-8 instead of `\uXXXX` ⛔ Phase 4
+
+_Added 2026-09-07 as the follow-up E4.S3 / U8 §4 named ("worth its own story"), on the architect's ruling that the
+file format is free to change while A.2 is unreleased._
+
+As a player with a full cache,
+I want the file that holds my translations to be the size it should be,
+So that the cache stays comfortably inside the guard that exists to refuse a corrupt one.
+
+**Acceptance Criteria:**
+
+**Given** a store that has cached a Russian line
+**When** the file is written
+**Then** the Cyrillic is in it as UTF-8 text, with no `\uXXXX` sequence anywhere in the file, and the file is still
+strictly valid JSON that this build reads back.
+
+**Given** a `translation-cache.json` written in the old escaped form
+**When** it is loaded
+**Then** every entry is read exactly as before, and the next save rewrites it in the new form — no migration, no
+`SchemaVersion` bump.
+
+**Given** the U8 harness's 2000 realistic entries
+**When** the full file is written through the store
+**Then** it costs under 300 B an entry and under 1 MB, and CI defends both.
+
+**Technical notes.** `TranslationCacheStore.Options` only (`Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping`,
+in-box, no new package). `ProviderStateStore` and `SettingsService` are untouched — ASCII files a human reads.
+`MaxBytes` stays 4 MB: it guards a corrupt file, not the cache.
+
+**Test expectations.** Three cases in `TranslationCachePersistenceTests`, one per AC; the size case runs over the
+spike's own `Entries(2000)`.
+
+**Size:** XS · **Depends on:** E4.S3 · **Risk:** low. · **DoD:** the three cases pass, the suite is green, and U8's
+table is re-measured (502 → 277 B/entry).
+
+---
+
 ## Epic 5 (E): Honest live translation
 
 **Increment 4.**
