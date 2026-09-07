@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.IO;
+using System.Reflection;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -301,12 +302,26 @@ public class TranslationCachePersistenceTests
     {
         // The bound is checked on the FileInfo, before a byte is read: this read happens under the
         // store's lock, which the next translation waits on, so a hand-edited or corrupted file may
-        // never become a hang. 1 MB against §8.2's ≈300 KB for a full 2000 entries.
+        // never become a hang.
+        //
+        // The bound is READ rather than repeated (E4.S3): the literal 1 MB that used to be typed
+        // twice here was the number the spike had to change, and a padding that agrees with itself
+        // would have gone green over a store that now reads the file. What this case pins is the
+        // behaviour — over the bound, refused unread — and one floor under the number itself.
+        var max = MaxBytes();
+
+        // U8, 2026-09-07: a FULL 2000-entry cache of realistic Cyrillic chat lines weighs 981 KB,
+        // because JsonSerializer's default encoder escapes every Cyrillic character to six bytes.
+        // A bound at or below that would refuse the app's own legitimate file — silently, which is
+        // why this floor is asserted and not left to the comment.
+        Assert.True(max >= 2L * 1024 * 1024,
+            $"MaxBytes is {max:N0} B — below twice the 981 KB a full 2000-entry cache measured (E4.S3/U8)");
+
         using var cache = new TempCache();
-        var padding = new string('x', 1024 * 1024);
+        var padding = new string('x', (int)max);
         cache.Write("{\"version\":1,\"entries\":[{\"k\":\"a\",\"v\":\"A\",\"p\":\"\",\"t\":\"\"}],\"pad\":\""
                     + padding + "\"}");
-        Assert.True(new FileInfo(cache.Path).Length > 1024 * 1024);
+        Assert.True(new FileInfo(cache.Path).Length > max);
 
         var store = new TranslationCacheStore(persistent: true);
 
@@ -825,6 +840,13 @@ public class TranslationCachePersistenceTests
         Assert.Fail($"'{signature}' has an unbalanced body");
         return "";
     }
+
+    /// <summary>The store's private read bound, read rather than copied — see
+    /// <c>An_absurdly_large_file_is_refused_unread</c>. <c>CacheLoadSpike</c> reads it the same way,
+    /// and both would rather break loudly on a rename than quietly pin a stale literal.</summary>
+    private static long MaxBytes() => (long)typeof(TranslationCacheStore)
+        .GetField("MaxBytes", BindingFlags.NonPublic | BindingFlags.Static)!
+        .GetValue(null)!;
 
     private static IEnumerable<string> ProductionSources(string root) =>
         Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)

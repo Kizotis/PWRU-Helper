@@ -54,12 +54,18 @@ internal static class TranslationPolicy
     /// <summary>Entries kept by the shared LRU translation cache — §5.6's number, the default of
     /// <see cref="TranslationCacheStore"/>, and since E4.S4 what the one store the app builds is
     /// built with (<c>TranslationChains.Cache</c>, pinned by <c>ChainCompositionTests</c>). §8.2's
-    /// ~150 B an entry ⇒ ≈300 KB is the JSON FILE; in memory an entry also carries two string objects,
-    /// a list node and a dictionary slot, so the RAM cost is a multiple of that and is the half U8
-    /// must actually measure — this app has a memory budget it has been bitten by.</summary>
-    // [ASSUMED] architecture-cible.md §8.2, whose own sentence is "the capacity is the knob": what
-    // settles it is U8 (E4.S3) measuring the load cost of a full file against G6's startup budget,
-    // and the memory it costs once loaded.
+    /// ~150 B an entry ⇒ ≈300 KB was the estimate for the JSON FILE, and U8 found it three times
+    /// short (see below); in memory an entry also carries two string objects, a list node and a
+    /// dictionary slot, which is the half U8 had to measure because this app has a memory budget it
+    /// has been bitten by.</summary>
+    // [MEASURED] E4.S3 / U8 on the dev box, 2026-09-07 (docs/investigations/03-stories/spikes/
+    // U8-cache-load.md): a full 2000-entry file of realistic Cyrillic chat lines is 981 KB and
+    // loads in 17.8 ms (median of 7, warm) on the calling thread of the first miss, for +960 KB
+    // managed / +892 KB working set — against §8.2's go criterion of 50 ms and G6's ~150 MB budget,
+    // both with an order of magnitude to spare. The capacity is the knob and it did not need
+    // turning; what the same measurement DID turn is TranslationCacheStore.MaxBytes, which the
+    // 981 KB had come within 4% of. The remaining open half is the cold, Defender-scanned number
+    // from a personal machine (the owner's hand-off), which does not gate A.2.
     public const int CacheCapacity = 2000;
 
     /// <summary>How long <see cref="TranslationCacheStore"/> waits after a store before it writes
@@ -70,9 +76,11 @@ internal static class TranslationPolicy
     /// 300 KB on a hot path. The window is fixed from the FIRST pending store rather than restarted
     /// by each one, so a busy minute cannot postpone the write for ever; a close inside the window
     /// is covered by <c>SaveNow()</c> on the <c>OnClosing</c> path.</summary>
-    // [ASSUMED] architecture-cible.md §8.2 ("save debounced ~5 s, plus one on exit"); never
-    // measured. What would settle it is U8 (E4.S3) timing a full 2000-entry write against the
-    // storage a real user has, and field reports of the app being closed mid-window.
+    // [ASSUMED] architecture-cible.md §8.2 ("save debounced ~5 s, plus one on exit"); the WINDOW is
+    // still unmeasured. What U8 (E4.S3) settled is only its cost: a full 2000-entry write measured
+    // 15.8 ms on the dev box (2026-09-07), so the five seconds buy coalescing and not headroom for
+    // a slow write. What is left to settle is the window itself — field reports of the app being
+    // closed mid-window, and the storage a real user has.
     public const int CacheSaveDebounceMs = 5000;
 
     /// <summary>The text travels in a GET query string, so it is chunked to stay well under

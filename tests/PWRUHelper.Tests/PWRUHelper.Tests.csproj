@@ -9,6 +9,16 @@
     <UseWPF>true</UseWPF>
   </PropertyGroup>
 
+  <!-- E4.S3 / U8 — the opt-in switch for the measurement harness (CacheLoadSpike.cs). MSBuild reads
+       environment variables as properties, so `set PWRU_SPIKE=1` before `dotnet test` is the whole
+       mechanism: with it, the harness's [Fact] attributes compile in and the Category=Spike filter
+       runs them; without it CI discovers ZERO cases there and the suite count and its two seconds
+       are untouched. A [Fact(Skip=…)] cannot do this — `Skip` is a compile-time constant no
+       environment variable can lift, and the skipped cases would still be counted on every run. -->
+  <PropertyGroup Condition="'$(PWRU_SPIKE)' == '1'">
+    <DefineConstants>$(DefineConstants);PWRU_SPIKE</DefineConstants>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
     <PackageReference Include="xunit" Version="2.9.2" />

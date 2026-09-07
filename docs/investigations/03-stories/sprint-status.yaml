@@ -116,7 +116,7 @@ development_status:
   # makes E5.S3's pending-retry drain nearly free (arch §9.3). Within E4: s1 -> s2 -> s4 -> s3.
   e4-s1-extract-translation-cache-store: done             # order 1 — DoD met: CachingTranslatorTests green with ZERO edits; CR approve-with-fixes
   e4-s2-persist-cache-debounced: done                     # order 2 — lands IS-2/IS-3 (TempCache + redirect) FIRST
-  e4-s3-measure-cache-load-spike-u8: ready-for-dev        # spike (U8); order 4 — runs after s2, blocks nothing
+  e4-s3-measure-cache-load-spike-u8: done                 # spike (U8) — exit criterion MET: 2000 entries = 981 KB, 17.8 ms, ~1 MB heap; capacity 2000 kept and re-graded [MEASURED]; MaxBytes 1 MB -> 4 MB
   e4-s4-share-one-store-both-decorators: done               # order 3 — ONE store, THREE decorators; CR approve-with-fixes (3 suite patches)
   epic-4-retrospective: optional
 

@@ -48,12 +48,28 @@ internal sealed class TranslationCacheStore
     /// one translation.</summary>
     internal const int SchemaVersion = 1;
 
-    /// <summary>The most this file may be before it is refused <b>unread</b>. 2000 entries of chat
-    /// text at §8.2's ~150 B is ≈300 KB, so a megabyte is generous for anything this app writes —
-    /// and a hand-edited or corrupted 400 MB file must not become a startup hang, because this read
-    /// happens under <see cref="_gate"/>, which the next translation waits on. Bounded before the
-    /// file is opened, so the size is never the thing that is read.</summary>
-    private const long MaxBytes = 1024 * 1024;
+    /// <summary>The most this file may be before it is refused <b>unread</b>. It exists so a
+    /// hand-edited or corrupted 400 MB file cannot become a startup hang: the read happens under
+    /// <see cref="_gate"/>, which the next translation waits on, and the size is checked on the
+    /// <c>FileInfo</c> before a byte is opened.
+    ///
+    /// <para><b>Four megabytes, and it was one until E4.S3 measured the file.</b> §8.2 estimated
+    /// ~150 B an entry ⇒ ≈300 KB for a full 2000, which is what a megabyte was "generous" against.
+    /// The estimate counted UTF-8 Cyrillic at two bytes a character; <see cref="Options"/> uses
+    /// <c>JsonSerializer</c>'s DEFAULT encoder, which escapes every non-ASCII character as
+    /// <c>\uXXXX</c> — <b>six</b> bytes — so a realistic full cache measured <b>502 B an entry, 981 KB
+    /// at 2000 entries</b> (U8, 2026-09-07, chat lines averaging 68 characters). A 1 MB bound left
+    /// 4% of headroom and crossed at ≈2088 entries: the very users this cache is for would have had
+    /// it silently refused, with no error and no log line — the worst shape of failure this file
+    /// has. Four megabytes is 4× a measured full cache, still refuses anything absurd, and parses in
+    /// ≈70 ms at the ≈55 MB/s this load measured, which is a bound and not a budget.</para>
+    ///
+    /// <para>The cheaper fix — a non-escaping encoder, which would divide the Cyrillic by three —
+    /// changes the bytes of a file users already have and was out of E4.S3's scope by its own terms;
+    /// it is worth its own story, and this bound is sized so that story is an optimisation rather
+    /// than a rescue.</para></summary>
+    // [MEASURED] E4.S3 / U8, 2026-09-07: 502 B/entry, 981 KB at 2000 entries, 17.8 ms to load.
+    private const long MaxBytes = 4 * 1024 * 1024;
 
     /// <summary>Un-indented on purpose (unlike <c>provider-state.json</c>, which a user is asked to
     /// zip and send): this file is chat text and nobody reads it by hand — I11 says it may not even
