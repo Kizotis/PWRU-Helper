@@ -108,9 +108,10 @@ public class HttpSeamGuardTests : GatesTestBase
     [Fact]
     public void No_handler_keeps_the_shared_static_client()
     {
-        // The only two handler-less providers the suite builds: IS-10 forbids them because they
-        // *could* reach the Internet, and neither is ever asked to translate — constructing them is
-        // the only way to prove "null means the shared client" (IS-8).
+        // The only three handler-less providers the suite builds (GoogleDict joined them with
+        // E3.S4): IS-10 forbids them because they *could* reach the Internet, and none of the three
+        // is ever asked to translate — constructing them is the only way to prove "null means the
+        // shared client" (IS-8).
         // Both NotNull guards matter: without them a renamed field would make this Assert.Same
         // compare null to null and pass while checking nothing.
         Assert.NotNull(SharedClientOf(typeof(GoogleGtxTranslator)));

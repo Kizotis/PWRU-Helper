@@ -229,8 +229,14 @@ public class GoogleDictTranslator : ITranslator
     /// nobody documents.</summary>
     private Task<string> RequestAsync(string text, string source, string target, CancellationToken ct)
     {
+        // sl/tl are encoded as well as q (E3.S4 review). They are combo-box Tag constants today, so
+        // this is not reachable from the app — but TranslateAsync is public on a public class, and a
+        // '&' in a language code would inject a parameter into a URL whose ONE parameter that must
+        // never move is `client=`: R1's whole mitigation is that the client id lives in one place.
+        // Encoding "ru"/"en"/"auto" is the identity, so it costs exactly nothing to close.
         var url = $"https://clients5.google.com/translate_a/t?client={ClientId}" +
-                  $"&sl={source}&tl={target}&q={HttpUtility.UrlEncode(text)}";
+                  $"&sl={HttpUtility.UrlEncode(source)}&tl={HttpUtility.UrlEncode(target)}" +
+                  $"&q={HttpUtility.UrlEncode(text)}";
 
         // The address travels as a Uri because RequestLog renders host + path and CANNOT render a
         // query, so the q= never reaches the log; the text is handed over only to be MEASURED (I11).
@@ -258,7 +264,15 @@ public class GoogleDictTranslator : ITranslator
         {
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Array || root.GetArrayLength() == 0) throw new JsonException();
+            // EXACTLY one element, not "at least one" (E3.S4 review). The root carries one element
+            // per q=, and this provider sends exactly one q= — multi-q= is a declined non-feature
+            // (project-context.md), so a root of two is a shape the app cannot have asked for.
+            // Accepting it would read root[0] and DROP the rest while reporting a SUCCESS to the
+            // gate, so §5.3's three-BadResponse strike never fires and the user gets translation 1
+            // of N with no error anywhere: silent truncation, which is I5's "never pad" seen from
+            // the other side. benchmark… §3.2 records `["Hello","How are you"]` as the two-q= reply,
+            // which is precisely the body this rejects.
+            if (root.ValueKind != JsonValueKind.Array || root.GetArrayLength() != 1) throw new JsonException();
 
             var first = root[0];
             var text = first.ValueKind switch

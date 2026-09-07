@@ -23,6 +23,14 @@ namespace PWRUHelper.Services;
 /// properties above are unchanged and still hold — including for ill-formed input, which is carried
 /// through byte for byte rather than repaired.</para>
 ///
+/// <para><b>The one caveat on "every chunk within the budget", stated so it is not read as
+/// unconditional (E3.S4 review):</b> a single code point that does not fit <c>maxBytes</c> is
+/// emitted anyway rather than dropped or rejected — losing the character would be worse than
+/// exceeding a budget by three bytes. So the property holds for <c>maxBytes</c> ≥ 4, which covers
+/// every caller (<c>MaxQueryBytes</c> is 1500). Behaviour inherited from the pre-fix code, not
+/// introduced by it; a future caller with a genuinely tiny budget is the one that would need to
+/// care.</para>
+///
 /// <para>The limit itself does not live here: it is <c>TranslationPolicy.MaxQueryBytes</c>, passed
 /// in as the <c>maxBytes</c> argument, so a provider with a different query budget can use the
 /// splitter.</para>

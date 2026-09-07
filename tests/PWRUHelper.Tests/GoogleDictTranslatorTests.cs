@@ -81,7 +81,18 @@ public class GoogleDictTranslatorTests : GatesTestBase
     [InlineData("[1]")]              // a number where the translation should be
     [InlineData("[[1,\"ru\"]]")]     // shape B with a number where the translation should be
     [InlineData("[null]")]
+    [InlineData("[[null]]")]         // shape B whose translation slot is null
+    [InlineData("""[[["Hello"]]]""")] // nested one level deeper than shape B
     [InlineData("\"Hello\"")]        // a bare string: not an array at all
+    [InlineData("null")]             // the JSON null literal: a value, but not an array
+    [InlineData("")]                 // an empty body served as JSON
+    [InlineData("""["Hello"] and then some""")]  // trailing garbage after a valid value
+    // The multi-`q=` body benchmark… §3.2 measured and declined to propose. This provider sends
+    // exactly one q=, so a root of two elements is a body it cannot have asked for — and accepting
+    // it would return translation 1 of 2 while telling the gate the call SUCCEEDED. Silent
+    // truncation is I5's "never pad" seen from the other side, and this row is what forbids it.
+    [InlineData("""["Hello","How are you"]""")]
+    [InlineData("""[["Hello","ru"],["How are you","ru"]]""")]
     [InlineData("not json at all")]
     public async Task TP_PRV_03_any_other_shape_is_a_BadResponse(string body)
     {
@@ -92,6 +103,46 @@ public class GoogleDictTranslatorTests : GatesTestBase
 
         Assert.Equal(TranslationErrorKind.BadResponse, ex.Kind);
         Assert.Equal(1, fake.Requests);   // a bad shape is not retried
+    }
+
+    /// <summary>
+    /// The other half of the rejection table, and the reason it is a separate case: this shape is
+    /// <b>accepted</b>, deliberately, and the acceptance is a decision rather than an oversight — so
+    /// it is pinned here, where a future edit has to read it.
+    ///
+    /// <para><c>[["Hello"]]</c> is shape B with no detected-language element. §7.1 says only
+    /// "<c>root[0]</c> is an array ⇒ take <c>root[0][0]</c>"; it does not require the second element,
+    /// and the translation is still unambiguously <c>root[0][0]</c>. Rejecting it would mean a
+    /// <c>BadResponse</c> feed — and, at three in a row, an open gate — on the day Google stops
+    /// echoing the detected source back on a request whose translation arrived perfectly well.
+    /// <b>Note the asymmetry with the multi-element ROOT above, which is rejected:</b> a missing
+    /// element loses nothing, an extra one would be dropped, and dropping is the failure this
+    /// project has a name for (I5, "never pad" — read from the other side).</para>
+    /// </summary>
+    [Fact]
+    public async Task Shape_B_without_a_detected_language_is_accepted_on_purpose()
+    {
+        var fake = new FakeHandler().RespondJson("""[["Hello"]]""");
+
+        Assert.Equal("Hello", await new GoogleDictTranslator(fake).TranslateAsync("привет", "ru", "en"));
+    }
+
+    /// <summary>The language codes are percent-encoded like <c>q</c> is. Unreachable from the app —
+    /// today's callers pass combo-box <c>Tag</c> constants and the literals "ru"/"auto" — but
+    /// <c>TranslateAsync</c> is public on a public class, and the one parameter that must never move
+    /// is <c>client=</c>: R1's whole mitigation is that the client id lives in exactly one place.
+    /// Asserted on the parsed query, so an injected parameter shows up as an extra KEY.</summary>
+    [Fact]
+    public async Task A_language_code_cannot_inject_a_query_parameter()
+    {
+        var fake = new FakeHandler().RespondJson(ShapeA);
+
+        await new GoogleDictTranslator(fake).TranslateAsync("привет", "ru&client=evil", "en");
+
+        var q = Query(Assert.Single(fake.Calls).Uri);
+        Assert.Equal(new[] { "client", "q", "sl", "tl" }, q.Keys.OrderBy(k => k, StringComparer.Ordinal));
+        Assert.Equal("dict-chrome-ex", q["client"]);       // still the one and only client id
+        Assert.Equal("ru&client=evil", q["sl"]);           // the whole thing travelled as ONE value
     }
 
     // =============================================================================================
@@ -401,7 +452,7 @@ public class GoogleDictTranslatorTests : GatesTestBase
             .GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
             .Single(c => c.GetParameters().Any(p => p.ParameterType == typeof(HttpMessageHandler)));
 
-        var priority = Assert.Single(ctor.GetParameters().Where(p => p.ParameterType == typeof(RequestPriority)));
+        var priority = Assert.Single(ctor.GetParameters(), p => p.ParameterType == typeof(RequestPriority));
         Assert.True(priority.HasDefaultValue);
         Assert.Equal((int)RequestPriority.Interactive, Convert.ToInt32(priority.DefaultValue));
         Assert.True(ctor.IsAssembly, "the handler ctor is a test seam, not public API");

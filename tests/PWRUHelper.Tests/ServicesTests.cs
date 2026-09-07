@@ -187,6 +187,44 @@ public class TextChunkerTests
         Assert.Contains(chunks, c => c.Contains("\U0001F600", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// The same two properties, swept across <b>every</b> alignment of the budget against a 4-byte
+    /// code point rather than the one offset the case above happens to use. This is the half of the
+    /// fix that is easy to get wrong and impossible to see in a single example: when a pair is moved
+    /// to the next chunk, the running byte count has to be reset <i>with</i> it, or the chunk it
+    /// moved into starts life already three bytes into its budget and eventually goes over. Sweeping
+    /// the offset puts the boundary before, inside (both halves) and after the pair.
+    /// </summary>
+    [Theory]
+    [InlineData(1496)] [InlineData(1497)] [InlineData(1498)] [InlineData(1499)] [InlineData(1500)]
+    public void ChunkText_KeepsBothPropertiesAtEveryBoundaryAlignment(int prefix)
+    {
+        const int limit = 1500;
+        // Emoji all the way down after the prefix: every subsequent chunk boundary also has to
+        // decide about a pair, so one correct decision at the first boundary cannot carry the test.
+        var text = new string('a', prefix) + string.Concat(Enumerable.Repeat("\U0001F600", 400));
+
+        var chunks = TextChunker.ChunkText(text, limit).ToList();
+
+        Assert.Equal(text, string.Concat(chunks));
+        Assert.All(chunks, c => Assert.True(Encoding.UTF8.GetByteCount(c) <= limit,
+            $"a chunk of {Encoding.UTF8.GetByteCount(c)} bytes went over the {limit}-byte budget"));
+        Assert.All(chunks, c => Assert.False(char.IsHighSurrogate(c[^1]), "a chunk ends mid-pair"));
+        Assert.All(chunks, c => Assert.False(char.IsLowSurrogate(c[0]), "a chunk starts mid-pair"));
+
+        // PROGRESS, not just safety — and it is the assertion that matters most here, because the
+        // three above are all satisfied by a splitter that has stopped making progress. `bytes` is a
+        // running counter that must be reset in lockstep with the buffer; drop the reset and every
+        // chunk after the first is ONE code point, which still round-trips, still fits the budget
+        // and still never cuts a pair. What it costs is one HTTP request per code point against the
+        // rented endpoint this whole epic exists to avoid annoying. Bounded against the budget
+        // rather than pinned to a number, so the case survives a change to `limit`.
+        int minimum = (Encoding.UTF8.GetByteCount(text) + limit - 1) / limit;
+        Assert.True(chunks.Count <= minimum + 1,
+            $"{chunks.Count} chunks for {Encoding.UTF8.GetByteCount(text)} bytes at a {limit}-byte "
+            + $"budget: the splitter stopped making progress (at most {minimum + 1} expected)");
+    }
+
     /// <summary>Ill-formed input is carried through unchanged rather than repaired: the property the
     /// whole class rests on is that the chunks concatenate back to the input, and a splitter that
     /// substituted U+FFFD for a lone surrogate would be editing the user's text on its way to a

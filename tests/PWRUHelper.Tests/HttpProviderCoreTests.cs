@@ -682,18 +682,23 @@ public class HttpProviderCoreTests : GatesTestBase
         // HttpProviderCore and awaits IS on the request path, so E3.S4's new provider joins this
         // scan by existing. A hand-written list would have gone blind to it in exactly the way a
         // list of file names goes stale — which is what E3.S6's rename cost this test in the first
-        // place. The filter reproduces today's five files and nothing else.
+        // place. The filter reproduces today's six files and nothing else.
         var onTheRequestPath = Directory.EnumerateFiles(ServicesDir(), "*.cs")
             .Where(f => File.ReadAllText(f).Contains("HttpProviderCore", StringComparison.Ordinal))
             .Where(f => Statements(f).Any(s => Regex.IsMatch(s, @"(^|[^\w.])await\s")))
             .OrderBy(Path.GetFileName, StringComparer.Ordinal)
             .ToList();
 
-        // Non-vacuity, first half: the five files this scan has always covered must all be in the
-        // derived set. A filter that quietly matched nothing would pass every assertion below.
+        // Non-vacuity, first half: the files this scan covers must all be in the derived set. A
+        // filter that quietly matched nothing would pass every assertion below. GoogleDictTranslator
+        // joined the floor with E3.S4 — not to make the scan find it (the derivation above does that
+        // on its own, which is the whole design) but so that the DEFAULT provider silently dropping
+        // out of the derived set fails here, loudly, instead of quietly un-scanning the file every
+        // translation the app makes now goes through.
         var names = onTheRequestPath.Select(Path.GetFileName).ToList();
         foreach (var known in new[] { "HttpProviderCore.cs", "GoogleGtxTranslator.cs",
-                                      "DeepLTranslator.cs", "RequestLog.cs", "ChainTranslator.cs" })
+                                      "GoogleDictTranslator.cs", "DeepLTranslator.cs",
+                                      "RequestLog.cs", "ChainTranslator.cs" })
             Assert.Contains(known, names);
 
         foreach (var file in onTheRequestPath)
