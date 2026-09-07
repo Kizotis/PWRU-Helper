@@ -248,6 +248,25 @@ internal static class TranslationPolicy
     // expression and not by a line number, which the same commit moved.
     public const int LiveAutoStopThreshold = 5;
 
+    // ---- read-once (§9.4) ---------------------------------------------------------------------
+    // Read by MainWindow.Ocr.cs (E5.S4), which builds one CancellationTokenSource per read from it.
+
+    /// <summary>How long a single "read the screen once" may run before it gives up and says so.
+    ///
+    /// <para>It is a <b>budget</b> and not a request timeout: <see cref="RequestTimeoutSeconds"/>
+    /// bounds ONE HTTP call, while a read fans out over two source groups, two tiers and up to
+    /// <see cref="MaxAttempts"/> attempts each. That fan-out is what took the uncancellable worst
+    /// case to ≈36.9 s — measured, in <c>analyse-implementation-actuelle.md</c> §4 — with both
+    /// read-once buttons greyed and no way out but the window.</para>
+    ///
+    /// <para>Thirty seconds is the round number just under that worst case: long enough that a slow
+    /// but working read still lands, short enough that a dead one ends inside the patience of
+    /// somebody who pressed a button and is watching. It is the CEILING and not the wait — the same
+    /// token is cancelled by a second press, by <c>StopLive</c> and by closing the window, so the
+    /// common way a read ends early is still a person ending it.</para></summary>
+    // [ASSUMED] architecture-cible.md §9.4 (the number is named there and nowhere measured)
+    public const int ReadOnceBudgetSeconds = 30;
+
     // ---- HTML abuse-page markers (§4.3) ------------------------------------------------------
     // Matched lower-cased against DE-TAGGED text — E1.S4 does the de-tagging and lower-casing, so
     // the literals are kept lower-case here and no call site has to remember. Order matters at the

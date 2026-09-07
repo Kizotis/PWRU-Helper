@@ -263,7 +263,15 @@ public class UserMessagesTests : GatesTestBase
                 $"({s})",                                           // Live.cs:281, Ocr.cs:298
                 $"Live hiccup ({s}) — retrying…",                   // Live.cs:238
                 $"Live stopped after repeated errors ({s}).",       // Live.cs:235
-                $"OCR failed: {s}",                                 // Ocr.cs:248
+                // E5.S4 replaced "OCR failed: {s}" — developer-speak for a component the player
+                // does not have and cannot act on (§3.3) — and the new join lower-cases the deck
+                // sentence, which is the rule §3.3 states and the reason the helper is public.
+                UserMessages.ReadFailed(new TranslationException(TranslationErrorKind.Unknown, s)),
+                // …and read-once's other three statuses, which join the same sentence three more
+                // ways. Composed through the deck rather than copied, so a wording change to any of
+                // them still has to read as a sentence here.
+                UserMessages.ReadOncePartlyTranslated(4, 3, new TranslationException(TranslationErrorKind.Unknown, s)),
+                UserMessages.ReadOnceNoneTranslated(4, new TranslationException(TranslationErrorKind.Unknown, s)),
                 $"⚠ {s} — your text is kept, press Enter to retry.",// CompactOverlay.xaml.cs:142
             };
 
@@ -280,6 +288,62 @@ public class UserMessagesTests : GatesTestBase
             // 360 px overlay list, and a batch failure stamps EVERY row in the batch with it.
             Assert.True($"({s})".Length <= 110,
                 $"a feed row is {$"({s})".Length} chars, over the 110 the feed can carry: ({s})");
+        }
+    }
+
+    // ---- E5.S4: the read-once statuses (§3.3) -------------------------------------------------
+
+    /// <summary>
+    /// The five sentences a read-once can end on, pinned literally like everything else in this
+    /// file: this is the increment that writes them, and the next edit to any of them must be a
+    /// deliberate one that fails here first. They are METHODS rather than table rows because each
+    /// is parameterised on what the read actually did — which is the point of the story that added
+    /// them ("Done" is a claim, and a claim has to be earned line by line).
+    ///
+    /// <para>The paused sentence is provisional and deliberately not §3.3's: that row promises rows
+    /// that will "fill in when one is back", which AC 3 forbids (a paused read-once creates none)
+    /// and a line count that cannot exist, since the pause is checked before the capture. E7.S1
+    /// owns the final wording.</para>
+    /// </summary>
+    [Fact]
+    public void The_read_once_statuses_read_as_this_increments_copy()
+    {
+        var offline = new TranslationException(TranslationErrorKind.Network, "raw provider text (HTTP 000)");
+
+        Assert.Equal("Done — 3 line(s) translated.", UserMessages.ReadOnceAllTranslated(3));
+        Assert.Equal("Read 5 line(s) — 3 translated, 2 could not be. no internet connection — nothing can be translated until it is back",
+                     UserMessages.ReadOncePartlyTranslated(5, 3, offline));
+        Assert.Equal("Read 5 line(s) — 3 translated, 2 could not be.",
+                     UserMessages.ReadOncePartlyTranslated(5, 3, null));
+        Assert.Equal("Read 4 line(s) — none could be translated. no internet connection — nothing can be translated until it is back",
+                     UserMessages.ReadOnceNoneTranslated(4, offline));
+        Assert.Equal("Read 4 line(s) — none could be translated.",
+                     UserMessages.ReadOnceNoneTranslated(4, null));
+        Assert.Equal("Nothing was read — all engines are paused. Try again in 30 s.",
+                     UserMessages.ReadOncePaused("30 s"));
+        Assert.Equal("Nothing was read — all engines are paused. Try again shortly.",
+                     UserMessages.ReadOncePaused(null));
+        Assert.Equal("Could not read the screen: no internet connection — nothing can be translated until it is back", UserMessages.ReadFailed(offline));
+    }
+
+    /// <summary>The deck's sentence, lower-cased at the join (§3.3) — and ONLY at the join: the rest
+    /// of the sentence is untouched, so "Your API key was refused — check it in About" keeps the
+    /// capital A of About and the pass-through of an unmapped provider message keeps its shape.
+    /// A read-once status is the first place in this app that renders a deck sentence mid-line.</summary>
+    [Fact]
+    public void The_reason_is_the_decks_own_sentence_lower_cased_only_at_the_join()
+    {
+        Assert.Equal("your API key was refused — check it in About, or clear it",
+                     UserMessages.LowerAtJoin(UserMessages.AuthFailed));
+        Assert.Equal("", UserMessages.LowerAtJoin(""));
+
+        foreach (var s in Sentences())
+        {
+            var joined = UserMessages.LowerAtJoin(s);
+            Assert.Equal(s.Length, joined.Length);
+            Assert.Equal(s[1..], joined[1..]);                       // only the first character moved
+            Assert.Contains(joined, UserMessages.ReadOnceNoneTranslated(2, new TranslationException(
+                Enum.GetValues<TranslationErrorKind>().First(k => UserMessages.Sentence(k) == s), "raw")));
         }
     }
 

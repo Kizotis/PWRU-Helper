@@ -155,4 +155,62 @@ internal static class UserMessages
         TaskCanceledException => Timeout,
         _ => ex.Message,
     };
+
+    // ---- what a read-once says when it is over (ux-mode-degrade.md §3.3) ----------------------
+    //
+    // METHODS, not consts, and the difference is not cosmetic. Every one of these is parameterised
+    // on what the read actually DID — how many lines were read, how many carry a translation, and
+    // why the rest do not — which is the whole of the story that added them: "Done" is a claim, and
+    // a claim has to be earned line by line. They are deliberately outside the Sentence(kind) table
+    // above: that table is keyed by error kind, its house-rule tests read every public const in
+    // this type as one of its rows, and none of these is a row — each one JOINS a row of it.
+    //
+    // The countdown is still not formatted here (I2): ReadOncePaused takes the "{t}" text already
+    // rendered by MainWindow, exactly as LivePausedStatus renders it for the LIVE loop.
+
+    /// <summary>The one sentence that may say "Done", and the caller may only reach it when every
+    /// line read has a translation (UX hint 4 / TP-ONCE-02). Unchanged wording — what changed is
+    /// that it is now one branch of four instead of the only thing a read ever said.</summary>
+    public static string ReadOnceAllTranslated(int lines)
+        => $"Done — {lines} line(s) translated.";
+
+    /// <summary>Some lines came back and some did not. The count is of ROWS that carry a real
+    /// translation, never of lines sent, and <paramref name="error"/> may legitimately be null: a
+    /// provider's per-line fallback fills the gaps it could not do with its own placeholders and
+    /// throws nothing, so there is a partial result with no exception behind it. The sentence then
+    /// stops after the counts rather than inventing a reason it does not have.</summary>
+    public static string ReadOncePartlyTranslated(int lines, int translated, Exception? error)
+        => $"Read {lines} line(s) — {translated} translated, {lines - translated} could not be." + Because(error);
+
+    /// <summary>Nothing came back. This is the sentence the false "Done" used to cover
+    /// (amplifier A7: a player told "Done" over an empty result presses the button again).</summary>
+    public static string ReadOnceNoneTranslated(int lines, Exception? error)
+        => $"Read {lines} line(s) — none could be translated." + Because(error);
+
+    /// <summary>Every engine is inside a block window, so the read did not happen at all: no
+    /// request, no capture, and — the part that matters — no rows (AC 3).
+    ///
+    /// <para>§3.3's row for this case reads "Read {n} line(s) — all engines are paused. They will
+    /// fill in when one is back", which promises rows that AC 3 forbids and a line count that
+    /// cannot exist, since the check runs before the capture. The behaviour is AC 3's; the final
+    /// wording is E7.S1's.</para></summary>
+    public static string ReadOncePaused(string? tryAgainIn)
+        => tryAgainIn is null
+            ? "Nothing was read — all engines are paused. Try again shortly."
+            : $"Nothing was read — all engines are paused. Try again in {tryAgainIn}.";
+
+    /// <summary>The screen itself could not be read — a capture or an OCR failure, not a
+    /// translation one. Replaces "OCR failed: …", which named a component the player does not have
+    /// and cannot act on (§3.3).</summary>
+    public static string ReadFailed(Exception error)
+        => $"Could not read the screen: {LowerAtJoin(For(error))}";
+
+    /// <summary>§3.3's join rule: the deck's sentences are written to start a line, and these
+    /// statuses put them AFTER one. Only the first character changes — "Your API key" keeps its
+    /// capital K, and a pass-through provider message keeps whatever shape it had.</summary>
+    public static string LowerAtJoin(string sentence)
+        => string.IsNullOrEmpty(sentence) ? sentence : char.ToLowerInvariant(sentence[0]) + sentence[1..];
+
+    private static string Because(Exception? error)
+        => error is null ? "" : " " + LowerAtJoin(For(error));
 }

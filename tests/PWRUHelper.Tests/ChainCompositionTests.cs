@@ -463,7 +463,11 @@ public class ChainCompositionTests : GatesTestBase
 
         Assert.Contains("_readTranslator, ct)", live, StringComparison.Ordinal);
         Assert.DoesNotContain("_readOnceTranslator", live, StringComparison.Ordinal);
-        Assert.Contains("_readOnceTranslator, default)", ocr, StringComparison.Ordinal);
+        // `, ct)` and no longer `, default)`: E5.S4's whole AC 2 is that the argument stopped being
+        // `default`, so this line changed ON PURPOSE. It still pins the chain — the pair of asserts
+        // is about WHICH chain each path reads through — and now pins the token with it, which is
+        // the one thing that would silently bring back ≈36.9 s of uncancellable UI.
+        Assert.Contains("_readOnceTranslator, ct)", ocr, StringComparison.Ordinal);
 
         // Both chains are assigned in the ctor body — never back in a field initializer, where they
         // would run BEFORE _settings and read a null — and _readTranslator stays readonly so no

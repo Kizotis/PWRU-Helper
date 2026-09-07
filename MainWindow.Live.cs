@@ -141,6 +141,13 @@ public partial class MainWindow
 
     private void StopLive()
     {
+        // ■ Stop ends the thing the player is waiting on, and a read-once is one of those (AC 2,
+        // E5.S4). It is BEFORE the guard below on purpose: that guard returns when no loop is
+        // running, and a read-once has no loop. Harmless on the path that matters most —
+        // SelectAreaAndReadOnceAsync calls StopLive() BEFORE it starts its read, so the token this
+        // cancels is the previous read's (already gone) and never the one about to be created.
+        CancelReadOnce();
+
         if (_liveCts == null) return;
         _liveCts.Cancel();
         _liveCts.Dispose();
@@ -363,11 +370,22 @@ public partial class MainWindow
     {
         if (secondsLeft is not { } s)
             return "○ Live — paused. It resumes on its own; nothing is lost.";
-        // Seconds up to a minute, then whole minutes rounded up: "in 90 s" reads as a stopwatch,
-        // and a player who is waiting for a 30-minute window wants the shape, not the precision.
-        var t = s < 60 ? $"{s} s" : $"{(s + 59) / 60} min";
+        var t = CountdownText(s)!;
         return $"○ Live — paused, next try in {t}. It resumes on its own; nothing is lost.";
     }
+
+    /// <summary>The <c>{t}</c> of every paused sentence: seconds up to a minute, then whole minutes
+    /// rounded up — "in 90 s" reads as a stopwatch, and somebody waiting out a 30-minute window
+    /// wants the shape and not the precision. Null in, null out, for the case where there is
+    /// nothing honest to count down to.
+    ///
+    /// <para>Shared by the LIVE status above and by read-once's (E5.S4) so the two cannot come to
+    /// disagree about what a countdown looks like. It stays in the code-behind for the reason
+    /// <c>UserMessages</c> states: formatting a time is not <c>Services/</c>' job (I2).</para></summary>
+    internal static string? CountdownText(int? seconds)
+        => seconds is not { } s ? null
+           : s < 60 ? $"{s} s"
+           : $"{(s + 59) / 60} min";
 
     /// <summary>Add placeholder items, translate the batch (one request when possible),
     /// keep the last MaxHistory, and auto-scroll. Respects the live cancellation token.</summary>

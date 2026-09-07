@@ -209,12 +209,36 @@ public partial class MainWindow
         // Only one read-once may run at a time: the OCR engine is shared and non-reentrant, so a
         // second Ctrl+Alt+R (or a live start) firing RecognizeAsync on it concurrently would race.
         // The flag gates ToggleLive/StartLive/ReadLastAreaOnce too; button disabling stays a UI cue.
-        if (_readingOnce) return;
+        //
+        // The second press is no longer SWALLOWED, though (AC 2): it cancels the read in flight.
+        // Pressing again is the natural thing to do when nothing has happened for twenty seconds,
+        // and until this story that press did nothing at all — there was no way to end a read but
+        // the window. It still does not START a second read; the guard owns the OCR engine and
+        // cancellation does not replace it (TP-ONCE-06).
+        if (_readingOnce) { CancelReadOnce(); return; }
 
         // Same reason as StartLive: with no Russian engine there is nothing to read, and the app has
         // to say so — rather than show an empty result (or, before the fallback was removed, a
         // confidently garbled one).
         if (!IsOcrReady()) { ShowOcrPackNeeded("then read the area again."); return; }
+
+        // AC 3 / ruling OQ-B, and the position is the whole of it: BEFORE _readingOnce is set and
+        // before the capture. A read that cannot translate a single line must not grey both buttons
+        // for a read that will not happen, must not spend a capture — and above all must create no
+        // rows: a feed full of "…" that never resolves is what makes a player press again, which is
+        // amplifier A7 with extra steps. The early return is ahead of the flag, so there is nothing
+        // to clear on this path.
+        //
+        // It asks the CHAIN and never ProviderGates (TP-START-02). _readChain is the LIVE loop's,
+        // and it answers for read-once too because both chains resolve the SAME process-global
+        // gates (I9) — a second query would be redundant, not safer.
+        var pause = _readChain.PauseNow();
+        if (pause.AllPaused)
+        {
+            SetScreenStatus(UserMessages.ReadOncePaused(
+                CountdownText(LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now))));
+            return;
+        }
 
         _readingOnce = true;
         MainTabs.SelectedIndex = TabTranslator;   // results show on the Translator page
@@ -224,6 +248,19 @@ public partial class MainWindow
         // TranslateSentencesInto). Wiping the history to show one answer threw away the live lines
         // the user was reading — most obviously from the overlay, where the feed IS the window.
         SetScreenStatus("Reading…");
+
+        // One CancellationTokenSource per read, and the budget lives on it rather than on any one
+        // request: what took the worst case to ≈36.9 s of uncancellable UI was the FAN-OUT (two
+        // source groups × two tiers × retries), each leg of it inside its own honest 12 s timeout.
+        // Nothing below the UI can bound that, because nothing below the UI knows a person is
+        // waiting. Cancelled by this token: a second press, ■ Stop, closing the window — and the
+        // 30 s budget itself, which is why _readOnceStopped is reset here and not just set below.
+        CancelReadOnce();                 // nothing should be in flight (the guard above) — never leak one
+        _readOnceStopped = false;
+        var cts = _readOnceCts = new CancellationTokenSource(
+            TimeSpan.FromSeconds(TranslationPolicy.ReadOnceBudgetSeconds));
+
+        int lines = 0;                    // what the status says it READ, set once OCR has answered
         try
         {
             using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
@@ -238,22 +275,67 @@ public partial class MainWindow
                     : "No text detected — the Russian OCR pack isn't installed. Install it on the Screen OCR tab (1 click).");
                 return;
             }
+            lines = sentences.Count;
             var target = SelectedTag(OcrTargetCombo) ?? "en";
-            SetScreenStatus($"Read {sentences.Count} line(s). Translating…");
-            await TranslateSentencesInto(sentences, target);
-            SetScreenStatus($"Done — {sentences.Count} line(s) translated.");
+            SetScreenStatus($"Read {lines} line(s). Translating…");
+
+            // The four-way branch of §3.3, and "Done" is one branch of it (never the fall-through):
+            // ReadOnceSummary reaches it only when every line read carries a translation, which is
+            // UX hint 4 and the whole of DoD V1.5. The counts come from what the rows ACTUALLY got,
+            // never from lines — reading N lines has never meant translating N lines.
+            var (translated, error) = await TranslateSentencesInto(sentences, target, cts.Token);
+            SetScreenStatus(ReadOnceSummary.Status(lines, translated, error));
+        }
+        // I3, in the shape ChainTranslator.RunAsync uses: OUR token really is cancelled, so this is
+        // a person or the budget — never an HttpClient timeout, whose OperationCanceledException
+        // arrives with the token untouched and is classified as the Timeout it is further down.
+        //
+        // The two are told apart by the FLAG and not by the exception, because they cannot be told
+        // apart by the exception: a person's Stop renders nothing at all (§2.1 — "Cancelled" is not
+        // a state, and the feed keeps what it has), while the 30 s budget is a failure and gets
+        // §3.3's failure sentence like any other.
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+            if (!_readOnceStopped) SetScreenStatus(ReadOnceSummary.Status(lines, 0, BudgetExpired()));
         }
         catch (Exception ex)
         {
-            SetScreenStatus($"OCR failed: {Friendly(ex)}");
+            SetScreenStatus(UserMessages.ReadFailed(ex));
         }
         finally
         {
             SetReadOnceEnabled(true);
             LiveButton.IsEnabled = true;
             _readingOnce = false;
+            // Dispose OURS, and clear the field only if it is still ours: a second press has
+            // already cancelled, disposed and cleared it, and may even have started the next read.
+            cts.Dispose();
+            if (ReferenceEquals(_readOnceCts, cts)) _readOnceCts = null;
         }
     }
+
+    /// <summary>End the read-once in flight, if there is one, and record that a PERSON ended it.
+    /// Called by the second press, by <see cref="StopLive"/> and by <c>OnClosing</c> — the three
+    /// cancels AC 2 names. The flag is what makes a stop render nothing while the 30 s budget, which
+    /// cancels the identical token, renders a failure.</summary>
+    private void CancelReadOnce()
+    {
+        if (_readOnceCts is not { } cts) return;
+        _readOnceStopped = true;
+        _readOnceCts = null;    // cleared BEFORE the cancel, so nothing re-entered can cancel it twice
+        cts.Cancel();
+        // NOT disposed here: the read that owns it is still inside its await and holds the token.
+        // Its finally disposes on every path, which is the one place that knows the read is over —
+        // disposing from the outside is the documented way to hand a live consumer a dead source.
+    }
+
+    /// <summary>The read-once budget, as the failure it is. A budget expiry is a <b>timeout</b> and
+    /// not a cancel: the player asked for this read and the app gave up on it, so they are told —
+    /// with the same sentence a provider timeout gets, because from where they sit it is the same
+    /// thing. Built here because nothing below the UI knows a budget exists.</summary>
+    private static TranslationException BudgetExpired()
+        => new(TranslationErrorKind.Timeout,
+               $"the read-once budget of {TranslationPolicy.ReadOnceBudgetSeconds} s elapsed");
 
     /// <summary>Grey out BOTH read-once buttons while a read is in flight. Ctrl+Alt+R can start one
     /// without ever leaving compact mode, so the overlay's copy has to follow the main window's.</summary>
@@ -264,8 +346,16 @@ public partial class MainWindow
     }
 
     /// <summary>Fill the reading list with each Russian message and its translation. Only the
-    /// message body is translated; the speaker's nickname is kept verbatim as a prefix.</summary>
-    private async Task TranslateSentencesInto(List<string> sentences, string target)
+    /// message body is translated; the speaker's nickname is kept verbatim as a prefix.
+    ///
+    /// <para><b>Returns what actually happened</b>, and that return type is the story:
+    /// <c>Translated</c> is how many rows carry a real translation and <c>Error</c> is the failure
+    /// to say out loud, so the caller cannot write "Done" over a read that translated nothing. It
+    /// used to return <c>Task</c> and its catch used to <c>return</c> — the swallow that let
+    /// <c>Done — N line(s) translated.</c> print over a list of "(no internet connection)" rows
+    /// (V1.5, amplifier A7).</para></summary>
+    private async Task<(int Translated, TranslationException? Error)> TranslateSentencesInto(
+        List<string> sentences, string target, CancellationToken ct)
     {
         // APPENDS to the feed — it used to Clear() it first. Reading once from the compact overlay
         // is meant to drop an answer INTO the live flow you are watching, not to wipe the flow to
@@ -296,21 +386,53 @@ public partial class MainWindow
         // so its providers ask the gate as Interactive (ruling OQ-a). Same free chain, same gates,
         // same I8 — the LIVE loop's Background reserve exists to keep a token free for exactly this.
         try { translations = await TranslateBodiesAsync(parts.Select(p => p.Body).ToList(), target,
-                                                       _readOnceTranslator, default); }
+                                                       _readOnceTranslator, ct); }
+        // I3, and FIRST for the same reason the chain puts it first: our token really is cancelled,
+        // so this is the player's Stop or the 30 s budget — never an HttpClient timeout, which
+        // arrives as a TaskCanceledException with the token NOT cancelled and falls to the catch
+        // below to be classified as the Timeout it is. The rows keep their "…": the read was
+        // abandoned rather than answered, and the caller owns what (if anything) is said about it.
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             foreach (var it in items) it.TranslationBody = $"({Friendly(ex)})";
-            return;
+            return (0, AsTranslationFailure(ex, ct));
         }
         for (int i = 0; i < items.Count && i < translations.Count; i++)
             items[i].TranslationBody = translations[i];
+        // Not items.Count, and not sentences.Count: TranslateBodiesAsync fills a gap with the
+        // (expanded) source text rather than a null, and a provider's per-line fallback (E3.S8)
+        // returns "(…)" placeholders for the lines it could not do. ReadOnceSummary holds the app's
+        // one definition of "this is a translation" — the very test CachingTranslator.IsCacheable
+        // applies before it stores anything, which is not a coincidence.
+        return (ReadOnceSummary.CountTranslated(translations), null);
+    }
+
+    /// <summary>The failure a read-once reports, typed. A <see cref="TranslationException"/> already
+    /// carries its Kind; anything else goes through <c>ProviderErrorMapper</c> rather than being
+    /// re-classified here — E1.S3 owns that vocabulary, and a second switch over the same statuses
+    /// is how two of them came to disagree. The two guards around the mapper are the chain's own
+    /// (<c>ChainTranslator.RunAsync</c>): a cancelled token may not reach it, because the Kind it
+    /// would answer with is the one nothing in this app may construct (I3).</summary>
+    private static TranslationException AsTranslationFailure(Exception ex, CancellationToken ct)
+    {
+        if (ex is TranslationException typed) return typed;
+        ct.ThrowIfCancellationRequested();
+        var kind = ProviderErrorMapper.Classify(null, null, ex, false, ct);
+        ct.ThrowIfCancellationRequested();
+        return new TranslationException(kind, UserMessages.Sentence(kind) ?? ex.Message);
     }
 
     /// <summary>Ctrl+Alt+R: read the saved area once (no live loop). If live is already
     /// running we leave it alone; if there's no saved area we surface the picker.</summary>
     private async void ReadLastAreaOnce()
     {
-        if (_selectingRegion || _readingOnce) return;   // ignore a double Ctrl+Alt+R (shared OCR engine)
+        if (_selectingRegion) return;
+        // A second Ctrl+Alt+R does not start a second read — the OCR engine is shared and
+        // non-reentrant — but it no longer does nothing either: it cancels the read in flight
+        // (AC 2). ReadRegionOnceAsync's own guard says the same thing for the button path; this
+        // one exists because the hotkey never reaches it.
+        if (_readingOnce) { CancelReadOnce(); return; }
         if (_liveCts != null) { ShowToast("Live is already running (Ctrl+Alt+L to stop)."); return; }
         if (!TryGetSavedRegion(out var rect))
         {

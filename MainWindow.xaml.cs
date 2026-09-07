@@ -97,6 +97,13 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _liveCts;
     private bool _selectingRegion;                       // a screen-area drag is in progress
     private bool _readingOnce;                            // a one-shot Ctrl+Alt+R / read-once is mid-flight
+    // The read-once in flight, and WHY it was cancelled. Both are needed: a person's Stop and the
+    // 30 s budget cancel the very same token, so the exception they raise is identical by design
+    // (I3) and the reason cannot be recovered from it. It is recorded at the cancel site instead —
+    // a stop renders nothing at all (ux-mode-degrade §2.1: "Cancelled" is not a state), a budget
+    // expiry is a failure the player has to be told about (E5.S4).
+    private CancellationTokenSource? _readOnceCts;
+    private bool _readOnceStopped;
     private System.Drawing.Rectangle? _liveRegion;
     private LiveDedup _dedup = new();                     // decides which lines are genuinely new
     private int _liveTicks;
@@ -278,6 +285,10 @@ public partial class MainWindow : Window
     protected override void OnClosing(CancelEventArgs e)
     {
         base.OnClosing(e);
+
+        // A read-once in flight is ended by closing the window (AC 2, E5.S4). Nothing renders after
+        // it — the surfaces are going away — which is exactly what a cancel is supposed to show.
+        CancelReadOnce();
 
         // Write out any provider pause that is still inside its 1-second debounce, so a block the
         // user is waiting out survives the restart instead of being re-earned on the first request
