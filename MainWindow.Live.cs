@@ -124,7 +124,9 @@ public partial class MainWindow
         _ocrItems.Clear();
         // The feed has just been emptied, so every row the queue could be holding is gone. Clearing
         // it here as well as in StopLive is belt and braces on the one property that matters: an
-        // entry can only ever point at a row that is on the screen in front of the player.
+        // entry can only ever point at a row that is on the screen in front of the player. What it
+        // was holding is discarded rather than given up (StopLive does the opposite) for that same
+        // reason: there is nothing left to write on — _ocrItems.Clear() ran on the line above.
         _pendingRetry.Clear();
         SetLiveUi(true);
         MainTabs.SelectedIndex = TabTranslator;
@@ -177,7 +179,15 @@ public partial class MainWindow
         // waiting on, and a queue that survived the loop that filled it would fill rows in on the
         // NEXT session's feed. Unconditional, so "press ■, then ▶, and no old row is resurrected"
         // (the story's manual step 8) holds however the session ended.
-        _pendingRetry.Clear();
+        //
+        // The rows it was holding are GIVEN UP rather than left on "…" (review). Stop does not clear
+        // the feed — StartLive does — so those rows stay on both surfaces, and the loop that owed
+        // them their translation is the thing that just ended: nothing is coming for them, by
+        // construction. §2.2 draws exactly this line — a pending row keeps "…" WHILE something is
+        // coming, and a given-up row says so in parentheses — and a "…" that never resolves is the
+        // amplifier (A7) the whole epic exists to remove. It is also what the auto-stop needs: that
+        // path ends a long outage by calling StopLive() for the player.
+        foreach (var entry in _pendingRetry.Clear()) GiveUpRow(entry.Row);
 
         if (_liveCts == null) return;
         _liveCts.Cancel();
@@ -497,15 +507,18 @@ public partial class MainWindow
             // exactly what this call was given, and items[i] is the row it was given for — the two
             // lists are built together above and stay index-parallel.
             //
-            // A genuine Stop never reaches here: it arrives as an OperationCanceledException with the
-            // loop's token cancelled, and the LOOP's filtered catch takes it (I3). What does reach
-            // here and must not be queued is every failure a retry cannot help — see
-            // PendingRetryQueue.IsRetryable, which is where that list is written down once.
+            // A genuine Stop DOES reach this catch (review): it is generic and it is inside the call,
+            // so it runs long before the loop's filtered one — read-once has a filtered catch of its
+            // own for exactly this, and this method has never had one. What keeps a cancelled row out
+            // of the queue is therefore IsRetryable and not the shape of the catch: an
+            // OperationCanceledException is not a TranslationException, so it is not retryable, and
+            // the rows fall to the terminal branch below as they always did. The same test is where
+            // every failure a retry cannot help is written down, once.
             if (PendingRetryQueue<OcrResultItem>.IsRetryable(ex))
                 for (int i = 0; i < items.Count; i++)
                 {
                     items[i].TranslationBody = UserMessages.PendingRetryRow();
-                    _pendingRetry.Enqueue(items[i], parts[i].Body, target);
+                    EnqueueForRetry(items[i], parts[i].Body, target);
                 }
             else
                 // Don't leave the placeholders stuck on "…" forever (e.g. a body we could not read):
@@ -528,8 +541,9 @@ public partial class MainWindow
     ///
     /// <para><b>In place, and that is the story.</b> Each entry holds the <c>OcrResultItem</c> itself,
     /// so the drain assigns <c>Row.TranslationBody</c> and stops. <c>OcrResultItem</c> raises
-    /// <c>PropertyChanged</c> for <c>TranslationBody</c> AND for <c>Translation</c>, so the main
-    /// feed's two-tone line and the overlay's single string both repaint where the row already is —
+    /// <c>PropertyChanged</c> for <c>TranslationBody</c> AND for the composed <c>Translation</c>, so
+    /// both feeds' two-tone lines (<c>MainWindow.xaml:340</c>, <c>CompactOverlay.xaml:80</c>, which
+    /// bind the body) and everything reading the composed line repaint where the row already is —
     /// for free, through bindings that already exist and are already <c>Mode=OneWay</c> (I15: this
     /// story adds no <c>Run.Text</c>; the retry badge is E7.S6's, with its own render case). Nothing
     /// here calls <c>_ocrItems.Add</c>, <c>Insert</c> or a re-sort: an <c>Add</c> would raise
@@ -538,16 +552,21 @@ public partial class MainWindow
     /// row) would arrive. The 🔑 glossary line is untouched for the same reason: it was set once at
     /// creation, so "keeping their 🔑 line" is satisfied by not writing it.</para>
     ///
-    /// <para><b>The queue survives a throw.</b> Entries are taken off the queue before the request and
-    /// put back in the <c>catch</c> before it rethrows — without that, one exception would silently
-    /// discard up to fifty rows and turn the whole story into a no-op that passes its own happy-path
+    /// <para><b>The queue survives a throw, and every entry it handed over ends somewhere.</b>
+    /// <c>TakeAll</c> empties the queue before the first request, so from that moment this method
+    /// owes each entry an ending on EVERY exit: translated, back on the queue, or given up. The
+    /// <c>catch</c> puts the failing batch back and the batches it never reached too — without that
+    /// last part, one exception silently discarded every row queued for a target the player had
+    /// switched away from, and turned the story into a no-op that passes its own happy-path
     /// test.</para>
     ///
     /// <para><b>I3.</b> The <c>await</c> below is inside the loop's <c>try</c>, so a translator
-    /// TIMEOUT arrives here as a <c>TaskCanceledException</c> with the token NOT cancelled. There is
-    /// deliberately no unfiltered <c>OperationCanceledException</c> catch anywhere on this path: the
-    /// loop's own filtered one takes the genuine Stop, and everything else must reach the counted
-    /// handler.</para></summary>
+    /// TIMEOUT arrives here as a <c>TaskCanceledException</c> with the token NOT cancelled — and it
+    /// must reach the counted handler as the failure it is. There is deliberately no unfiltered
+    /// <c>OperationCanceledException</c> catch on this path; the generic <c>catch</c> does see a
+    /// genuine Stop, and treats it as what it is — a row nothing is coming for any more, given up
+    /// exactly as <c>StopLive</c> gives up the ones still on the queue — before rethrowing into the
+    /// loop's filtered catch, which is what actually ends the loop.</para></summary>
     private async Task<bool> DrainPendingRetryAsync(CancellationToken ct)
     {
         if (_pendingRetry.IsEmpty) return false;
@@ -562,14 +581,23 @@ public partial class MainWindow
         bool translated = false;
         // One batch per distinct target, in queue order — the queue can hold rows from before the
         // player changed the target combo, and a batch is per target by construction.
-        foreach (var group in due.GroupBy(e => e.Target, StringComparer.Ordinal))
+        //
+        // Materialised as a LIST of groups rather than iterated lazily (review), because TakeAll has
+        // already emptied the queue: every entry it handed over must end somewhere on every exit
+        // from this method — translated, back on the queue, or given up — and a group the drain
+        // never reaches is only reachable if it is still addressable. Iterating the GroupBy directly
+        // lost the groups after the one that threw: a player who changed the target combo during the
+        // outage had those rows silently dropped, off the queue and stuck on "…" for the session,
+        // which is the "drain that quietly does nothing" the story names as its second risk.
+        var groups = due.GroupBy(e => e.Target, StringComparer.Ordinal)
+                        .Select(g => g.ToList()).ToList();
+        for (int g = 0; g < groups.Count; g++)
         {
-            var entries = group.ToList();
+            var entries = groups[g];
             try
             {
                 var translations = await TranslateBodiesAsync(entries.Select(e => e.Body).ToList(),
-                                                              group.Key, _readTranslator, ct);
-                if (ct.IsCancellationRequested) return translated;
+                                                              entries[0].Target, _readTranslator, ct);
                 for (int i = 0; i < entries.Count && i < translations.Count; i++)
                     entries[i].Row.TranslationBody = translations[i];   // IN PLACE — never an Add
                 translated = true;
@@ -577,14 +605,64 @@ public partial class MainWindow
             catch (Exception ex)
             {
                 // AC 5: back on the queue with one more attempt spent, or terminal once there is no
-                // attempt left. Requeue() is what makes a row that never comes back eventually say so
-                // rather than sit on "…" for the rest of the session.
+                // attempt left. RequeueOrGiveUp is what makes a row that never comes back eventually
+                // say so rather than sit on "…" for the rest of the session.
                 foreach (var entry in entries) RequeueOrGiveUp(entry, ex);
+                // The groups this drain never got to keep their attempt count: they were not tried,
+                // and charging one target's batch for another target's failure is how a row gives up
+                // without ever having been asked about. On a Stop there is nothing to go back TO —
+                // StopLive has already cleared the queue these entries are no longer on — so they
+                // are given up instead, exactly as the ones Stop did find were.
+                for (int rest = g + 1; rest < groups.Count; rest++)
+                    foreach (var entry in groups[rest])
+                    {
+                        if (ct.IsCancellationRequested) GiveUpRow(entry.Row);
+                        else EnqueueForRetry(entry.Row, entry.Body, entry.Target, entry.Attempts);
+                    }
                 throw;   // the loop's catch owns the counter and the status line
+            }
+            // A cancel observed HERE is the player's ■ and never an HttpClient timeout: this is our
+            // own token, and a timeout arrives as an exception, in the catch above (I3). The rows
+            // just written keep their translation — the answer was paid for and writing it in place
+            // costs nothing — and whatever is left has nothing coming for it, so it says so.
+            if (ct.IsCancellationRequested)
+            {
+                for (int rest = g + 1; rest < groups.Count; rest++)
+                    foreach (var entry in groups[rest]) GiveUpRow(entry.Row);
+                return translated;
             }
         }
         return translated;
     }
+
+    /// <summary>Put a row on the pending-retry queue — and say something to whatever the bound
+    /// pushed off the front, if the player can still see it.
+    ///
+    /// <para>The queue is bounded at the feed's own <c>MaxHistory</c> so the two normally forget the
+    /// same row on the same tick and this loop does nothing. They are still two lists trimmed by
+    /// three different call sites, though, and a read-once landing between a tick's append and its
+    /// failure is enough to put their order out of step — at which point the entry that falls off
+    /// the front belongs to a row that is still on screen. Every exit from the queue owes a visible
+    /// row an answer (review); this is the one the queue itself cannot give, because only the window
+    /// knows what is on screen.</para></summary>
+    private void EnqueueForRetry(OcrResultItem row, string body, string target, int attempts = 0)
+    {
+        foreach (var dropped in _pendingRetry.Enqueue(row, body, target, attempts))
+            if (_ocrItems.Contains(dropped.Row)) GiveUpRow(dropped.Row);
+    }
+
+    /// <summary><c>ux-mode-degrade.md</c> §2.2's <b>given-up</b> row — the ONLY one of the two forms
+    /// that is parenthesised, which is the whole of AC 2's distinction, and I4's marker so nothing
+    /// downstream mistakes it for a translation.
+    ///
+    /// <para>Named once and called from every place a row leaves the queue with nothing left that
+    /// could fill it in: its attempts spent, a failure a retry cannot help, ■ Stop, a cancel
+    /// mid-drain, or the bound dropping it while it is still on screen. One sentence for all of them
+    /// on purpose — the row's job is not to explain WHY (the status line did that while it was
+    /// pending, and E7.S1 owns the final copy) but to stop implying that something is still
+    /// coming.</para></summary>
+    private static void GiveUpRow(OcrResultItem row)
+        => row.TranslationBody = $"({UserMessages.RetryGaveUpRow()})";
 
     /// <summary>One entry after a drain that failed: back on the queue if it has an attempt left, and
     /// otherwise the terminal <c>(…)</c> row of <c>ux-mode-degrade.md</c> §2.2 — the ONLY one of the
@@ -593,14 +671,31 @@ public partial class MainWindow
     /// <para>A row is also given up when the failure is one a retry cannot help
     /// (<see cref="PendingRetryQueue{TRow}.IsRetryable"/>): the outage the row was waiting out has
     /// been replaced by something else, and continuing to wait would be the pending row that never
-    /// resolves — amplifier A7, which is what makes a player press the button again.</para></summary>
+    /// resolves — amplifier A7, which is what makes a player press the button again.</para>
+    ///
+    /// <para><b>An attempt is spent only by a drain that REACHED a provider</b> (review, ruling
+    /// E5-c's principle applied to the queue: backing off is not the same as blaming). A drain
+    /// refused at the gate sent nothing — the row was never actually asked about — and the drain runs
+    /// on every non-skipped tick, so charging refusals would spend both of a row's attempts inside
+    /// two ticks (≈1.4 s) and hand it the given-up sentence in the first second of the very outage
+    /// this queue exists to survive. With this rule a row is charged once per window in which a
+    /// request really left the machine, which is what "retried after recovery" means. It cannot
+    /// spin: while every rung is blocked the tick is SKIPPED and no drain runs at all (E5.S1), a
+    /// refusal that reaches a drain is by definition a gate that is not yet, or no longer, shut —
+    /// and ■ Stop gives every row still waiting its terminal sentence.
+    /// <see cref="LiveTickPolicy.Classify"/> is the app's one definition of "this cost a request",
+    /// the same one the tick's own outcome is read from, so the queue and the counters cannot come to
+    /// disagree about what a refusal is.</para></summary>
     private void RequeueOrGiveUp(PendingRetryEntry<OcrResultItem> entry, Exception ex)
     {
-        if (PendingRetryQueue<OcrResultItem>.GivesUpAfter(entry)
-            || !PendingRetryQueue<OcrResultItem>.IsRetryable(ex))
-            entry.Row.TranslationBody = $"({UserMessages.RetryGaveUpRow()})";
+        bool costARequest = LiveTickPolicy.Classify(ex) != LiveTickOutcome.Refused;
+
+        if (!PendingRetryQueue<OcrResultItem>.IsRetryable(ex)
+            || (costARequest && PendingRetryQueue<OcrResultItem>.GivesUpAfter(entry)))
+            GiveUpRow(entry.Row);
         else
-            _pendingRetry.Enqueue(entry.Row, entry.Body, entry.Target, entry.Attempts + 1);
+            EnqueueForRetry(entry.Row, entry.Body, entry.Target,
+                            costARequest ? entry.Attempts + 1 : entry.Attempts);
     }
 
     /// <summary>Translate message bodies READ FROM THE SCREEN, picking the source language per

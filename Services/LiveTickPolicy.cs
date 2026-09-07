@@ -29,8 +29,16 @@ internal enum LiveTickOutcome
     /// closed between E5.S1's pre-tick check and the request.
     ///
     /// <para><b>Ruling E5-c</b>: that is a pause wearing an exception's clothes, so it counts
-    /// exactly as much as one does — not at all. It is not <see cref="Paused"/> either: the tick
-    /// really did capture and OCR, so it does not advance the back-off.</para></summary>
+    /// exactly as much as one does — not at all.</para>
+    ///
+    /// <para><b>Ruling E5-f (E5.S3) settled the other half, and it reverses E5.S2's deviation D1</b>
+    /// ("<c>Refused</c> leaves <c>backoffSteps</c> alone"): it now advances the same step
+    /// <see cref="Paused"/> does. The argument that kept them apart — the tick really did capture
+    /// and OCR — is the argument FOR backing off, not against it: nothing else bounded a streak of
+    /// refusals, so the loop kept paying for a full frame every ~700 ms for as long as one lasted,
+    /// which is the exact cost OQ-B's pause exists to remove, reached through the branch that throws
+    /// instead of the one that skips. Still no error either way: backing off is not
+    /// blaming.</para></summary>
     Refused,
 
     /// <summary>A request left the machine and failed. <b>The only outcome the auto-stop counts</b>

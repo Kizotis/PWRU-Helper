@@ -80,11 +80,23 @@ internal sealed class PendingRetryQueue<TRow> where TRow : class
     ///       resort. Nothing says a retry would help, so the conservative answer ships.</item>
     /// </list>
     ///
-    /// <para><b>The genuine user cancel never reaches here</b>, and not by a filter: the call sites
-    /// enqueue from their <i>generic</i> catch, while a cancel is taken by the filtered
-    /// <c>OperationCanceledException</c> catch above it (I3). A cancelled read's rows are FINISHED,
-    /// not failed (<see cref="UserMessages.ReadCancelledRow"/>) — re-sending them would spend the
-    /// request the player just declined.</para>
+    /// <para><b>The three exclusions are about failures that were SENT, and the <c>NotSent</c> test
+    /// deliberately comes first</b> (review). A refusal carries the gate's LAST kind, not this
+    /// call's — a 429 that was never re-sent still reads as <c>RateLimited</c>, and a tier blocked
+    /// for quota refuses with <c>QuotaExhausted</c> on it — so keying the decision on the kind of a
+    /// refusal would read a stale label as a verdict. The flag is what decides, exactly as
+    /// <c>LiveTickPolicy.Classify</c> decides, and a refused row costs nothing to keep: the drain
+    /// that finds the gate still shut spends no request and (<c>MainWindow.RequeueOrGiveUp</c>) no
+    /// attempt either.</para>
+    ///
+    /// <para><b>A genuine user cancel is never queued</b>, and this predicate is what guarantees it:
+    /// an <c>OperationCanceledException</c> is not a <c>TranslationException</c>, so it answers
+    /// false. That matters because only ONE of the two call sites has a filtered
+    /// <c>OperationCanceledException</c> catch ahead of its generic one (read-once's, which also
+    /// gives those rows <see cref="UserMessages.ReadCancelledRow"/>); the LIVE one does not, so a
+    /// Stop lands in the generic catch and is kept out by the test below rather than by the shape of
+    /// the catch (review). A cancelled read's rows are FINISHED, not failed — re-sending them would
+    /// spend the request the player just declined.</para>
     /// </summary>
     internal static bool IsRetryable(Exception ex)
         => ex is TranslationException te
@@ -96,19 +108,36 @@ internal sealed class PendingRetryQueue<TRow> where TRow : class
                           or TranslationErrorKind.Unavailable
                           or TranslationErrorKind.AllProvidersPaused);
 
-    /// <summary>Put a row on the queue, oldest dropped past the capacity.
+    /// <summary>Put a row on the queue, oldest dropped past the capacity, and <b>hand the dropped
+    /// entries back</b> so the caller can say something to a row that is still on the screen.
     ///
     /// <para>A row already queued is <b>replaced</b> rather than added a second time. Nothing in the
     /// loop can queue one twice today — every row is enqueued once, in the catch of the call that
     /// created it — but a row present twice would be translated twice in one drain, and "this row is
-    /// here at most once" is cheaper to guarantee than to argue about.</para></summary>
-    internal void Enqueue(TRow row, string body, string target, int attempts = 0)
+    /// here at most once" is cheaper to guarantee than to argue about.</para>
+    ///
+    /// <para><b>Why the drop is returned rather than swallowed</b> (review). The bound is the feed's
+    /// own <c>MaxHistory</c>, so the two normally fall off together and the returned list is empty —
+    /// but they are two lists trimmed by three different call sites (the LIVE trim, read-once's, and
+    /// this bound), and a read-once landing between a tick's append and its failure is enough to put
+    /// their ORDER out of step. When it is, the entry that falls off the front can belong to a row
+    /// the player is still looking at, and that row would keep the pending "…" for the rest of the
+    /// session with nothing left that could fill it in. Every exit from this queue owes a visible row
+    /// an answer; this one owes it to the caller, because only the caller knows what is on
+    /// screen.</para></summary>
+    internal List<PendingRetryEntry<TRow>> Enqueue(TRow row, string body, string target, int attempts = 0)
     {
         _entries.RemoveAll(e => ReferenceEquals(e.Row, row));
         _entries.Add(new PendingRetryEntry<TRow>(row, body, target, attempts));
         // Oldest first: the queue is bounded by the same 50 the feed is, so what falls off the front
         // here is a row that is about to fall off the feed anyway.
-        while (_entries.Count > _capacity) _entries.RemoveAt(0);
+        var dropped = new List<PendingRetryEntry<TRow>>();
+        while (_entries.Count > _capacity)
+        {
+            dropped.Add(_entries[0]);
+            _entries.RemoveAt(0);
+        }
+        return dropped;
     }
 
     /// <summary>
@@ -138,6 +167,18 @@ internal sealed class PendingRetryQueue<TRow> where TRow : class
         => entry.Attempts + 1 >= TranslationPolicy.PendingRetryMaxAttempts;
 
     /// <summary>■ Stop, and the start of a new session. A queue that outlived the loop that filled it
-    /// would resurrect old rows onto a feed that has been cleared.</summary>
-    internal void Clear() => _entries.Clear();
+    /// would resurrect old rows onto a feed that has been cleared.
+    ///
+    /// <para>It answers what it was holding, for the same reason <see cref="Enqueue"/> does: after
+    /// ■ Stop nothing will ever drain these entries, and their rows are still on the screen —
+    /// <c>StopLive</c> does not clear the feed. A row left on the pending "…" with the loop that
+    /// owed it the translation now stopped is the pending row that never resolves (amplifier A7);
+    /// <c>ux-mode-degrade.md</c> §2.2 gives it the parenthesised given-up sentence instead. The
+    /// caller writes it — this type has no opinion about what a row renders (I2).</para></summary>
+    internal List<PendingRetryEntry<TRow>> Clear()
+    {
+        var held = new List<PendingRetryEntry<TRow>>(_entries);
+        _entries.Clear();
+        return held;
+    }
 }

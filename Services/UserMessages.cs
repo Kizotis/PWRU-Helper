@@ -258,10 +258,11 @@ internal static class UserMessages
     /// <see cref="TranslationErrorKind.AllProvidersPaused"/>, raised without sending anything.</para>
     ///
     /// <para>§3.3's row goes on to promise the rows "will fill in when one is back". That promise is
-    /// not made here: the E5.S3 retry queue is drained by the LIVE loop, so a read-once taken with
-    /// LIVE stopped has nothing coming for it. The rows of a read taken WHILE live is running do get
-    /// retried, and they say so by staying on <see cref="PendingRetryRow"/> rather than by a sentence.
-    /// Final wording is E7.S1's.</para></summary>
+    /// deliberately NOT made here: the E5.S3 retry queue is drained by the LIVE loop, and no
+    /// read-once can run while that loop does (the OCR engine is shared and non-reentrant, so one
+    /// entry point stops LIVE first and the other refuses) — so a read-once row never has a drain
+    /// coming for it and says what went wrong instead of waiting on "…". Final wording is
+    /// E7.S1's.</para></summary>
     public static string ReadOncePaused(int lines, string? tryAgainIn)
         => tryAgainIn is null
             ? $"Read {lines} line(s) — all engines are paused. Try again shortly."

@@ -450,17 +450,25 @@ public partial class MainWindow
         catch (Exception ex)
         {
             // E5.S3, and the answer to the question the test plan left open ("read-once rows?").
-            // These are ordinary failed rows in the same feed as the live ones, so they are retried
-            // in place by the same drain — but ONLY while the LIVE loop is running, because the loop
-            // is the only thing that drains. A read taken with LIVE stopped has nothing coming for
-            // it, and a row left pending for ever with nothing behind it is precisely the amplifier
-            // (A7) that made a player press the button again. So: a drain is coming ⇒ the row waits
-            // on "…"; no drain is coming ⇒ it says what went wrong, exactly as it always did.
+            // A read-once row may wait on the queue only while the LIVE loop is running, because the
+            // loop is the only thing that drains: a row left pending for ever with nothing behind it
+            // is precisely the amplifier (A7) that made a player press the button again. So: a drain
+            // is coming ⇒ the row waits on "…"; no drain is coming ⇒ it says what went wrong,
+            // exactly as it always did.
+            //
+            // TODAY THE CONDITION IS NEVER TRUE, and that is the honest reading (review): no
+            // read-once can run while live does. The button path calls StopLive() before it even
+            // picks the region (SelectAreaAndReadOnceAsync), and the Ctrl+Alt+R path refuses with a
+            // toast while _liveCts is set (ReadLastAreaOnce) — the shared, non-reentrant OCR engine
+            // is why. So every read-once failure takes the terminal branch below, which is the
+            // outcome the rule asks for anyway. The test stays as a GUARD, not as a feature: the day
+            // a read is allowed alongside the loop (E7 has the compact-overlay read in view), its
+            // rows join the drain instead of being burned, and nothing here has to be remembered.
             if (_liveCts != null && PendingRetryQueue<OcrResultItem>.IsRetryable(ex))
                 for (int i = 0; i < items.Count; i++)
                 {
                     items[i].TranslationBody = UserMessages.PendingRetryRow();
-                    _pendingRetry.Enqueue(items[i], parts[i].Body, target);
+                    EnqueueForRetry(items[i], parts[i].Body, target);
                 }
             else
                 foreach (var it in items) it.TranslationBody = $"({Friendly(ex)})";

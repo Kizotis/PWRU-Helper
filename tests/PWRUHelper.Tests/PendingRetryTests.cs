@@ -51,6 +51,23 @@ public class PendingRetryTests
     private static TranslationException Offline()
         => new(TranslationErrorKind.Network, "raw provider text (HTTP 000) — not for the user");
 
+    /// <summary><c>MainWindow.RequeueOrGiveUp</c>, mirrored. The window cannot be built headlessly, so
+    /// the decision is reproduced here and held against the source by
+    /// <see cref="The_requeue_decision_in_the_window_is_the_one_mirrored_here"/> — a copy nobody
+    /// checks is worse than no copy, because it goes on passing after the original changes.</summary>
+    private static void RequeueOrGiveUp(PendingRetryQueue<OcrResultItem> queue,
+                                        PendingRetryEntry<OcrResultItem> entry, Exception ex)
+    {
+        bool costARequest = LiveTickPolicy.Classify(ex) != LiveTickOutcome.Refused;
+
+        if (!PendingRetryQueue<OcrResultItem>.IsRetryable(ex)
+            || (costARequest && PendingRetryQueue<OcrResultItem>.GivesUpAfter(entry)))
+            entry.Row.TranslationBody = $"({UserMessages.RetryGaveUpRow()})";
+        else
+            queue.Enqueue(entry.Row, entry.Body, entry.Target,
+                          costARequest ? entry.Attempts + 1 : entry.Attempts);
+    }
+
     // =============================================================================================
     //  Which failures are worth keeping
     // =============================================================================================
@@ -257,13 +274,76 @@ public class PendingRetryTests
     /// <summary>The bound is the feed's own 50 and not a number of its own, so the queue can never
     /// hold a row the feed has already forgotten. The two live in different files — one is a
     /// code-behind <c>const</c>, the other a graded constant in <c>Services/</c> — so the agreement
-    /// is pinned rather than assumed.</summary>
+    /// is pinned rather than assumed.
+    ///
+    /// <para>Read out of the source with the terminator, not with <c>Contains</c> (review): raising
+    /// the feed to <c>MaxHistory = 500</c> still CONTAINS "MaxHistory = 50", so the loose form stayed
+    /// green on the exact divergence the case exists to catch — a queue a tenth of the feed.</para>
+    /// </summary>
     [Fact]
     public void The_queue_is_bounded_by_the_feed_s_own_MaxHistory()
     {
         Assert.Equal(50, TranslationPolicy.PendingRetryCapacity);
-        Assert.Contains("MaxHistory = 50", File.ReadAllText(RepoFile("MainWindow.xaml.cs")),
-                        StringComparison.Ordinal);
+
+        var declared = System.Text.RegularExpressions.Regex.Match(
+            File.ReadAllText(RepoFile("MainWindow.xaml.cs")), @"MaxHistory\s*=\s*(\d+)\s*;");
+        Assert.True(declared.Success, "MainWindow must still declare MaxHistory");
+        Assert.Equal(TranslationPolicy.PendingRetryCapacity.ToString(), declared.Groups[1].Value);
+    }
+
+    /// <summary>
+    /// <b>The bound's other end, and it is a row the player can still see</b> (review). The queue and
+    /// the feed are bounded by the same 50, so they normally forget the same row on the same tick —
+    /// but they are two lists trimmed by three call sites, and a read-once landing between a tick's
+    /// append and its failure puts their ORDER out of step. When it does, what falls off the front of
+    /// the queue can be a row that is still on screen, and it would keep the pending "…" for the rest
+    /// of the session with nothing left to fill it in. <c>Enqueue</c> hands the drop back so the
+    /// window can give it §2.2's given-up sentence; <c>MainWindow.EnqueueForRetry</c> is the one
+    /// caller and the scan below pins that it is the only one.
+    /// </summary>
+    [Fact]
+    public void A_row_the_bound_drops_while_it_is_still_on_screen_is_told_so()
+    {
+        var feed = new System.Collections.ObjectModel.ObservableCollection<OcrResultItem>();
+        var queue = new PendingRetryQueue<OcrResultItem>(capacity: 2);
+        var rows = new[] { Row("a"), Row("b"), Row("c") };
+        foreach (var r in rows) feed.Add(r);
+
+        var dropped = new List<PendingRetryEntry<OcrResultItem>>();
+        foreach (var (row, i) in rows.Select((r, i) => (r, i)))
+            dropped.AddRange(queue.Enqueue(row, $"body {i}", "en"));
+
+        // EnqueueForRetry's two lines, and the row is still on screen.
+        foreach (var d in dropped)
+            if (feed.Contains(d.Row)) d.Row.TranslationBody = $"({UserMessages.RetryGaveUpRow()})";
+
+        Assert.Equal(2, queue.Count);
+        Assert.Single(dropped);
+        Assert.Same(rows[0], dropped[0].Row);
+        Assert.Equal($"({UserMessages.RetryGaveUpRow()})", rows[0].TranslationBody);
+        Assert.Equal(3, feed.Count);                                  // in place: nothing was added
+        Assert.All(rows.Skip(1), r => Assert.Equal("…", r.TranslationBody));
+    }
+
+    /// <summary>Every enqueue in the code-behind goes through <c>EnqueueForRetry</c>, which is where
+    /// "a dropped row that is still on screen is told so" lives. A bare <c>_pendingRetry.Enqueue</c>
+    /// at a call site would bypass it silently — the drop is invisible by construction, since it is
+    /// the entry nothing points at any more.</summary>
+    [Fact]
+    public void Nothing_enqueues_past_the_wrapper_that_answers_the_dropped_row()
+    {
+        foreach (var file in new[] { "MainWindow.Ocr.cs", "MainWindow.xaml.cs" })
+            Assert.DoesNotContain("_pendingRetry.Enqueue(", Code(File.ReadAllText(RepoFile(file))),
+                                  StringComparison.Ordinal);
+
+        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+        var wrapper = BracedBlock(live, live.IndexOf("private void EnqueueForRetry(", StringComparison.Ordinal));
+        Assert.Contains("_pendingRetry.Enqueue(row, body, target, attempts)", wrapper, StringComparison.Ordinal);
+        Assert.Contains("_ocrItems.Contains(dropped.Row)", wrapper, StringComparison.Ordinal);
+        Assert.Contains("GiveUpRow(dropped.Row)", wrapper, StringComparison.Ordinal);
+
+        // …and the wrapper is the ONLY place that calls the queue's Enqueue in the whole window.
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(live, @"_pendingRetry\.Enqueue\("));
     }
 
     /// <summary>A row cannot be queued twice. Nothing in the loop can do it today — each row is
@@ -325,11 +405,7 @@ public class PendingRetryTests
         {
             var entry = Assert.Single(queue.TakeAll(_ => true));
             Assert.Equal(drain - 1, entry.Attempts);
-            // The failing drain, as the loop writes it.
-            if (PendingRetryQueue<OcrResultItem>.GivesUpAfter(entry))
-                entry.Row.TranslationBody = $"({UserMessages.RetryGaveUpRow()})";
-            else
-                queue.Enqueue(entry.Row, entry.Body, entry.Target, entry.Attempts + 1);
+            RequeueOrGiveUp(queue, entry, Offline());     // the failing drain, as the loop writes it
 
             if (drain < TranslationPolicy.PendingRetryMaxAttempts)
             {
@@ -346,15 +422,70 @@ public class PendingRetryTests
 
     /// <summary>A failure a retry cannot help ends the wait immediately, whatever attempts are left:
     /// the outage the row was waiting out has been replaced by something else, and continuing to wait
-    /// would be a pending row with nothing behind it.</summary>
+    /// would be a pending row with nothing behind it. Asserted on the ROW (review — the case used to
+    /// check two predicates side by side and never composed them, so the behaviour it is named for
+    /// was not covered).</summary>
     [Fact]
     public void A_row_whose_failure_stops_being_retryable_gives_up_at_once()
     {
+        var queue = new PendingRetryQueue<OcrResultItem>();
         var entry = new PendingRetryEntry<OcrResultItem>(Row("го"), "го", "en", Attempts: 0);
-
         Assert.False(PendingRetryQueue<OcrResultItem>.GivesUpAfter(entry));   // it has an attempt left…
-        Assert.False(PendingRetryQueue<OcrResultItem>.IsRetryable(
-            new TranslationException(TranslationErrorKind.QuotaExhausted, "spent")));   // …and no reason to use it
+
+        RequeueOrGiveUp(queue, entry, new TranslationException(TranslationErrorKind.QuotaExhausted, "spent"));
+
+        Assert.True(queue.IsEmpty, "…and no reason to use it: the row does not go back on the queue");
+        Assert.Equal($"({UserMessages.RetryGaveUpRow()})", entry.Row.TranslationBody);
+    }
+
+    /// <summary>
+    /// <b>A drain that was REFUSED at the gate spends no attempt</b> (review, and it is the rule that
+    /// makes the two attempts mean what AC 5 says). Nothing left the machine, so the row was never
+    /// actually asked about — and the drain runs on every non-skipped tick, so charging refusals
+    /// would burn both of a row's attempts inside two ticks (≈1.4 s) and hand it the given-up
+    /// sentence in the first seconds of the very outage the queue exists to survive. It is
+    /// <c>LiveTickPolicy.Classify</c>'s definition of "this cost a request" and not a second one, so
+    /// the queue and the tick counters cannot come to disagree.
+    /// </summary>
+    [Fact]
+    public void A_drain_refused_at_the_gate_does_not_spend_an_attempt()
+    {
+        var queue = new PendingRetryQueue<OcrResultItem>();
+        var row = Row("нужен хил");
+        queue.Enqueue(row, "нужен хил", "en");
+
+        var refusal = new TranslationException(TranslationErrorKind.AllProvidersPaused, "every rung is shut");
+        for (int drain = 0; drain < 5; drain++)
+        {
+            var entry = Assert.Single(queue.TakeAll(_ => true));
+            Assert.Equal(0, entry.Attempts);                  // …however many refusals it survives
+            RequeueOrGiveUp(queue, entry, refusal);
+        }
+
+        Assert.Equal(1, queue.Count);
+        Assert.Equal("…", row.TranslationBody);               // still pending, never given up
+
+        // …and the first drain that really reaches a provider does spend one.
+        RequeueOrGiveUp(queue, Assert.Single(queue.TakeAll(_ => true)), Offline());
+        Assert.Equal(1, Assert.Single(queue.TakeAll(_ => true)).Attempts);
+    }
+
+    /// <summary>The mirror below is only worth having if it still matches the window. This pins the
+    /// three decisions <c>MainWindow.RequeueOrGiveUp</c> is made of — the cost test, the retryable
+    /// test, the attempt arithmetic — against the source, so the copy cannot drift silently.</summary>
+    [Fact]
+    public void The_requeue_decision_in_the_window_is_the_one_mirrored_here()
+    {
+        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+        var body = BracedBlock(live, live.IndexOf("private void RequeueOrGiveUp(", StringComparison.Ordinal));
+
+        Assert.Contains("LiveTickPolicy.Classify(ex) != LiveTickOutcome.Refused", body, StringComparison.Ordinal);
+        Assert.Contains("!PendingRetryQueue<OcrResultItem>.IsRetryable(ex)", body, StringComparison.Ordinal);
+        Assert.Contains("costARequest && PendingRetryQueue<OcrResultItem>.GivesUpAfter(entry)",
+                        body, StringComparison.Ordinal);
+        Assert.Contains("GiveUpRow(entry.Row)", body, StringComparison.Ordinal);
+        Assert.Contains("costARequest ? entry.Attempts + 1 : entry.Attempts", body, StringComparison.Ordinal);
+        Assert.Contains("EnqueueForRetry(", body, StringComparison.Ordinal);
     }
 
     // =============================================================================================
@@ -397,7 +528,7 @@ public class PendingRetryTests
         // …and the UI's pending text is never handed to the cache at all: the enqueue writes it onto
         // the ROW, and the only string that reaches a Store is a translator's return value.
         var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
-        int enqueue = live.IndexOf("_pendingRetry.Enqueue(items[i]", StringComparison.Ordinal);
+        int enqueue = live.IndexOf("EnqueueForRetry(items[i]", StringComparison.Ordinal);
         Assert.True(enqueue > 0, "the failure branch must enqueue the row it just marked pending");
     }
 
@@ -437,14 +568,7 @@ public class PendingRetryTests
             try { throw Offline(); }
             catch (Exception ex)
             {
-                foreach (var entry in due)
-                {
-                    if (PendingRetryQueue<OcrResultItem>.GivesUpAfter(entry)
-                        || !PendingRetryQueue<OcrResultItem>.IsRetryable(ex))
-                        entry.Row.TranslationBody = $"({UserMessages.RetryGaveUpRow()})";
-                    else
-                        queue.Enqueue(entry.Row, entry.Body, entry.Target, entry.Attempts + 1);
-                }
+                foreach (var entry in due) RequeueOrGiveUp(queue, entry, ex);
                 throw;
             }
         }));
@@ -497,6 +621,47 @@ public class PendingRetryTests
     }
 
     /// <summary>
+    /// <b>The drain owes an ending to every entry it took off the queue</b> (review, and it is this
+    /// story's second named risk: "a drain that throws and drops the queue, which makes the whole
+    /// story a no-op that passes its own happy-path test"). <c>TakeAll</c> empties the queue before
+    /// the first request, so from then on each entry must be translated, put back, or given up on
+    /// EVERY exit — including the two the first version missed: the target groups after the one that
+    /// threw (reachable exactly when the player changed the target combo during the outage, which is
+    /// the case the grouping exists for) and the ones left when a Stop lands mid-drain.
+    ///
+    /// <para>Scanned rather than driven because the loop lives on a <c>MainWindow</c> the headless
+    /// suite cannot build; the behavioural half is <see cref="A_drain_that_throws_puts_its_entries_back_on_the_queue"/>.</para>
+    /// </summary>
+    [Fact]
+    public void The_drain_leaves_no_entry_behind_on_any_exit()
+    {
+        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+        var body = BracedBlock(live, live.IndexOf("private async Task<bool> DrainPendingRetryAsync(",
+                                                  StringComparison.Ordinal));
+
+        // The groups are materialised — a lazy GroupBy cannot be revisited after the throw.
+        Assert.Contains(".Select(g => g.ToList()).ToList()", body, StringComparison.Ordinal);
+        Assert.Contains("for (int g = 0; g < groups.Count; g++)", body, StringComparison.Ordinal);
+
+        // Both leftovers are walked, in the catch and on the cancel, and nothing else is.
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(
+            body, @"for \(int rest = g \+ 1; rest < groups\.Count; rest\+\+\)").Count);
+
+        var failed = BracedBlock(body, body.IndexOf("catch (Exception ex)", StringComparison.Ordinal));
+        Assert.Contains("RequeueOrGiveUp(entry, ex)", failed, StringComparison.Ordinal);
+        Assert.Contains("EnqueueForRetry(entry.Row, entry.Body, entry.Target, entry.Attempts)",
+                        failed, StringComparison.Ordinal);   // untried: the SAME attempt count
+        Assert.Contains("GiveUpRow(entry.Row)", failed, StringComparison.Ordinal);
+        Assert.Contains("throw;", failed, StringComparison.Ordinal);
+
+        // The rows a completed batch answered are written BEFORE the cancel is observed: the answer
+        // was paid for, and writing it in place cannot duplicate anything.
+        Assert.True(body.IndexOf("entries[i].Row.TranslationBody = translations[i];", StringComparison.Ordinal)
+                    < body.IndexOf("if (ct.IsCancellationRequested)", StringComparison.Ordinal),
+                    "a cancel must not throw away a translation that has already come back");
+    }
+
+    /// <summary>
     /// <b>AC 1's real content.</b> <c>LiveDedup</c> is not touched at all — the strongest possible
     /// guarantee that it cannot swallow anything — and the RAW body is what is queued, because
     /// <c>TranslateBodiesAsync</c> expands the slang itself (I6) and a pre-expanded body would be
@@ -506,9 +671,9 @@ public class PendingRetryTests
     public void The_queue_stores_the_raw_body_and_the_dedup_is_not_touched()
     {
         var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
-        int enqueue = live.IndexOf("_pendingRetry.Enqueue(items[i]", StringComparison.Ordinal);
+        int enqueue = live.IndexOf("EnqueueForRetry(items[i]", StringComparison.Ordinal);
 
-        Assert.Contains("_pendingRetry.Enqueue(items[i], parts[i].Body, target);",
+        Assert.Contains("EnqueueForRetry(items[i], parts[i].Body, target);",
                         live, StringComparison.Ordinal);
         Assert.False(live[..enqueue].Contains("_slang.Expand", StringComparison.Ordinal)
                      && live.IndexOf("_slang.Expand", StringComparison.Ordinal) < enqueue,
@@ -520,17 +685,48 @@ public class PendingRetryTests
     }
 
     /// <summary>■ Stop clears the queue, and it does so unconditionally — before the guard that
-    /// returns when no loop is running — so the promise holds however the session ended.</summary>
+    /// returns when no loop is running — so the promise holds however the session ended.
+    ///
+    /// <para><b>And it tells the rows</b> (review). Stop does not clear the feed the way
+    /// <c>StartLive</c> does, so every row that was waiting is still on both surfaces with the loop
+    /// that owed it a translation now stopped: nothing is coming, by construction. §2.2 gives a
+    /// pending row the "…" only WHILE something is coming and a given-up row the parenthesised
+    /// sentence, so this is the moment one becomes the other — including on the auto-stop path,
+    /// which ends a long outage by calling <c>StopLive()</c> for the player.</para></summary>
     [Fact]
-    public void TP_LIVE_12_StopLive_clears_the_queue()
+    public void TP_LIVE_12_StopLive_clears_the_queue_and_gives_up_the_rows_it_held()
     {
         var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
         var stop = BracedBlock(live, live.IndexOf("private void StopLive()", StringComparison.Ordinal));
 
-        Assert.Contains("_pendingRetry.Clear();", stop, StringComparison.Ordinal);
-        Assert.True(stop.IndexOf("_pendingRetry.Clear();", StringComparison.Ordinal)
+        Assert.Contains("foreach (var entry in _pendingRetry.Clear()) GiveUpRow(entry.Row);",
+                        stop, StringComparison.Ordinal);
+        Assert.True(stop.IndexOf("_pendingRetry.Clear()", StringComparison.Ordinal)
                     < stop.IndexOf("if (_liveCts == null) return;", StringComparison.Ordinal),
                     "Stop must clear the queue even when no loop is running");
+
+        // The sentence itself is written in exactly one place — GiveUpRow — so "given up" cannot come
+        // to mean two different things in two of the five branches that reach it.
+        Assert.Contains("private static void GiveUpRow(OcrResultItem row)", live, StringComparison.Ordinal);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(live, @"RetryGaveUpRow\(\)"));
+    }
+
+    /// <summary><c>Clear</c> answers what it was holding, which is what lets ■ Stop give those rows
+    /// §2.2's given-up sentence instead of leaving them on a "…" nothing will ever resolve.</summary>
+    [Fact]
+    public void Clearing_hands_back_the_rows_that_were_waiting()
+    {
+        var queue = new PendingRetryQueue<OcrResultItem>();
+        var rows = new[] { Row("a"), Row("b") };
+        foreach (var r in rows) queue.Enqueue(r, r.OriginalBody, "en");
+
+        var held = queue.Clear();
+
+        Assert.True(queue.IsEmpty);
+        Assert.Equal(rows, held.Select(e => e.Row));
+
+        foreach (var e in held) e.Row.TranslationBody = $"({UserMessages.RetryGaveUpRow()})";
+        Assert.All(rows, r => Assert.StartsWith("(", r.TranslationBody));
     }
 
     /// <summary>The story adds no <c>Run.Text</c> and therefore no new render case (I15) — the retry
@@ -546,6 +742,18 @@ public class PendingRetryTests
             var xaml = File.ReadAllText(RepoFile(file));
             Assert.DoesNotContain("PendingRetry", xaml);
             Assert.DoesNotContain("Attempts", xaml);
+
+            // …and the trap itself, not just this story's name for it (review): EVERY bound Run in
+            // both feeds says Mode=OneWay. Run.Text binds TwoWay by default and throws once per
+            // rendered item on a get-only property — the badge edit this case exists to stop would
+            // have passed a scan for the word "PendingRetry".
+            foreach (System.Text.RegularExpressions.Match run in
+                     System.Text.RegularExpressions.Regex.Matches(xaml, @"<Run\b[^>]*>"))
+            {
+                if (!run.Value.Contains("{Binding", StringComparison.Ordinal)) continue;
+                Assert.True(run.Value.Contains("Mode=OneWay", StringComparison.Ordinal),
+                            $"{file}: {run.Value} — Run.Text binds TwoWay by default (I15)");
+            }
         }
     }
 
