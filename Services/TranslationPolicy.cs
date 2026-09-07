@@ -1,4 +1,4 @@
-namespace PWRUHelper.Services;
+﻿namespace PWRUHelper.Services;
 
 /// <summary>
 /// Every tunable number of the translation path, in one place, each with the evidence behind it.
@@ -127,6 +127,24 @@ internal static class TranslationPolicy
     // [ASSUMED] architecture-cible.md §6.3 / §5.6; calibrated to analyse-implementation-actuelle.md
     // S6/A11 (the 14-line → 30-request amplifier) and never measured. Field logs settle it (U9/E2.S7).
     public const int PerLineCap = 8;
+
+    // ---- Azure's native batch (§7.5) ------------------------------------------------------------
+    // Read by Services/AzureTranslator.cs (E6.S2). Azure is the only tier with a true 1:1 array
+    // contract, so its batch is bounded by the DOCUMENTED request limits rather than by a guess:
+    // one POST carries at most this many elements and at most this many characters, and a batch
+    // larger than either is split into several POSTs whose answers are concatenated in order.
+    // Nothing in this app comes near either number (a LIVE tick is ≈2.1 chat lines) — the split
+    // exists so a pathological OCR frame is a second request instead of a 400 nobody can read.
+
+    /// <summary>Elements per Translate call — the array length limit of the documented contract.</summary>
+    // [CONFIRMED] benchmark-fournisseurs.md §5.4 [S19, docs dated 2026-08-11]; architecture-cible.md §7.5
+    public const int AzureMaxTextsPerRequest = 1000;
+
+    /// <summary>Characters per request, across all target languages, of the same contract. Counted
+    /// over the texts themselves: the JSON envelope is a handful of bytes per element and the cap
+    /// is two orders of magnitude above anything this app sends.</summary>
+    // [CONFIRMED] benchmark-fournisseurs.md §5.4 [S19]; architecture-cible.md §7.5
+    public const int AzureMaxCharsPerRequest = 50000;
 
     // ---- the retry policy (§5.6) ---------------------------------------------------------------
     // Read by Services/HttpProviderCore.cs (E2.S5), which replaced the three-attempt / 300 ms-linear

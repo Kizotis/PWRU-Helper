@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -700,8 +700,12 @@ public class HttpProviderCoreTests : GatesTestBase
         // every per-line request in the app goes through its two awaits. It is on the derived list
         // because it names HttpProviderCore (it rethrows the core's NotSent refusals by contract),
         // and it is on this floor so that losing that reference silently un-scans the loop.
+        // AzureTranslator.cs joined with E6.S2 — by existing, which is the design: it names
+        // HttpProviderCore and it awaits, so the derivation above finds it. It is on the floor so
+        // that losing either reference cannot silently un-scan a keyed provider's request path.
         foreach (var known in new[] { "HttpProviderCore.cs", "GoogleGtxTranslator.cs",
                                       "GoogleDictTranslator.cs", "DeepLTranslator.cs",
+                                      "AzureTranslator.cs",
                                       "RequestLog.cs", "ChainTranslator.cs",
                                       "PerLineFallback.cs" })
             Assert.Contains(known, names);
