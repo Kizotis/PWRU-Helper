@@ -133,25 +133,40 @@ development_status:
   epic-5-retrospective: optional
 
   # ---- Release B.1 · increment 5 ------------------------------------------------
-  epic-6: backlog
-  e6-s1-verify-azure-f0-spike-u4: backlog                # spike
-  e6-s2-azure-translator: backlog
-  e6-s3-azure-key-and-region-settings: backlog
-  e6-s4-use-key-for-reading-opt-in: backlog
-  e6-s5-test-a-key-without-spending-quota: backlog
-  e6-s6-deepl-fx-keys-still-work-spike-u5: backlog       # spike
+  epic-6: in-progress
+  # RELEASE B ORDER (2026-09-07, Amelia CS): E6 before E7 — E7's copy needs {P} (the provider names)
+  # and the About-tab key block that E6 lands. Within E6: s2 -> s3 -> s4 -> s5.
+  # s2 first because it is pure Services/ and every hard part (gate, retries, jitter, log redaction,
+  # 403-quota classification) already shipped; s3 is the RISKIEST story of release B (the settings
+  # surface, two migrations deep) and needs a provider to construct; s4 is one conditional tiers.Add
+  # over s3's rebuild seam; s5 last because its DeepL /usage probe is also E6.S6's own method.
+  e6-s1-verify-azure-f0-spike-u4: blocked-owner          # spike (U4); needs an Azure account (non-prepaid card) — blocks COPY only, not s2-s5
+  e6-s2-azure-translator: ready-for-dev                  # order 1 — Services/ only; fixtures from the documented §7.5 shapes, so U4 does not gate it
+  e6-s3-azure-key-and-region-settings: ready-for-dev     # order 2 — RISKIEST of release B; lands the read-chain rebuild seam and widens TP-START-02's allow-list deliberately
+  e6-s4-use-key-for-reading-opt-in: ready-for-dev        # order 3 — ChainCompositionTests.EveryPermutation() must gain the Azure key+opt-in PAIR (it varies one property at a time)
+  e6-s5-test-a-key-without-spending-quota: ready-for-dev # order 4 — OQ-d/OQ-f open, defaults recommended in the story; Azure /languages cannot validate a key
+  e6-s6-deepl-fx-keys-still-work-spike-u5: blocked-owner # spike (U5); needs an already-issued :fx key or a DeepL support answer — trivial once e6-s5 ships
   epic-6-retrospective: optional
 
   # ---- Release B.2 · increment 6 ------------------------------------------------
-  epic-7: backlog
-  e7-s1-one-sentence-per-error-kind: backlog
-  e7-s2-one-per-window-countdown: backlog
-  e7-s3-provider-chip-and-tooltip: backlog
-  e7-s4-paused-state-and-frozen-heartbeat: backlog
-  e7-s5-live-read-once-overlay-copy: backlog
-  e7-s6-pending-retry-row-render-test: backlog
-  e7-s7-about-translation-engines-block: backlog
-  e7-s8-readme-and-about-copy: backlog
+  epic-7: in-progress
+  # B.2 ORDER (2026-09-07, Amelia CS): s2 -> s1 -> s3 -> s4 -> s5 -> s6 -> s7 -> s8.
+  # s2 FIRST, inverting the sketched order: E1.S6's deviation D3 ({t}) cannot be restored without the
+  # formatter, and epics.md makes e7-s1 depend on e7-s2 explicitly. Splitting the UserMessages restore
+  # across two stories would reopen one file twice and risk two spellings of one sentence (UX-DR19's
+  # exact failure), so the whole D1-D4 restore lands once, in s1, on top of s2.
+  # Then s3 (the chip, which consumes s1's names and s2's clock), s4 (the paused indicator that must
+  # agree with the chip), s5 (the copy pass over every seam E3/E5 shipped provisionally), s6 (the
+  # render-test guard, needs e5-s3's queue), s7 (the About block, the chip's 4th placement), s8 (docs).
+  # NOTE: the post-update toast + LastRunVersion are E9.S10, NOT E7 — epics.md puts them out of scope.
+  e7-s1-one-sentence-per-error-kind: ready-for-dev        # order 2 — restores E1.S6's D1/D2/D3/D4; D5 still Sally's (default: ship §3.1 verbatim)
+  e7-s2-one-per-window-countdown: ready-for-dev           # order 1 — the formatter every {t} in E7 renders through; retires A.2's coarse in-tick countdown
+  e7-s3-provider-chip-and-tooltip: ready-for-dev          # order 3 — LastOutcome + Snapshot() already ship; MUST route the snapshot via Services/ or TP-START-02 fails by construction
+  e7-s4-paused-state-and-frozen-heartbeat: ready-for-dev  # order 4 — closes R-02; the overlay's 600 ms _beat is the half E5.S1 left; AC 5 vs I10 flagged for Winston
+  e7-s5-live-read-once-overlay-copy: ready-for-dev        # order 5 — §3.2's 7th string is UNREACHABLE under ruling E5-d; ReplyOutcome must carry the Kind
+  e7-s6-pending-retry-row-render-test: ready-for-dev      # order 6 — the Run.Text TwoWay guard; AC 2's wording over-claims vs what E5.S3 shipped
+  e7-s7-about-translation-engines-block: ready-for-dev    # order 7 — Chain line must not claim Edge (E3-d) or Bergamot (E8); two chains, not one
+  e7-s8-readme-and-about-copy: ready-for-dev              # order 8 — bounded by U4/U5, not blocked; carries an evidence register
   epic-7-retrospective: optional
 
   # ---- Release C · increment 7 · prototype branch, merges only on go ------------
