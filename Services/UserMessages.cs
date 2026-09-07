@@ -657,6 +657,99 @@ internal static class UserMessages
     public static string ReadFailed(Exception error)
         => Terminated($"Could not read the screen: {LowerAtJoin(For(error))}");
 
+    // ---- the About tab's "Translation engines" block (ux-mode-degrade.md §4.2, E7.S7) ----------
+    //
+    // T5's RULE, written down because the tension is real: the About tab's page prose is XAML
+    // literals with Hyperlinks in them, and moving all of it into a code table would be silly. So —
+    // the SENTENCES §3 and §4 specify live here, where the UX-DR19 scan can see them and E7.S8's
+    // README can quote the same words; the static page prose (the two key paragraphs and their
+    // links, the shortcut list, the author links) stays in the XAML. Headings and row labels are
+    // labels, not sentences, and stay in the XAML with the rest of the block's layout.
+
+    /// <summary>§4.2's opening sentence, and AC 3's first literal. It is the block's whole promise
+    /// to the majority of players — principle 2's "many users will never open this tab" is only
+    /// acceptable because nothing here has to be done.</summary>
+    public static string AboutEnginesIntro()
+        => "By default everything runs on free engines — no key, no signup, nothing to set up.";
+
+    /// <summary>§4.2's keys-block sentence, AC 3's second literal. Both halves matter: what a key
+    /// buys (quota of your own) and where it lives (this PC, and nowhere else).</summary>
+    public static string AboutKeysIntro()
+        => "A key gives you better translations and your own quota, instead of sharing a free door "
+         + "with everyone else. Keys are stored only on your PC.";
+
+    /// <summary>§4.2's offline block, as the placeholder T6 recommends: the line ships, the
+    /// <c>[ Download the offline engine ]</c> button does not. <b>E8.S3 owns the behaviour</b> and
+    /// E8 is gated on U6/U7 and R-12, so a visible Download button that does nothing would be worse
+    /// than an absent one. Ruling <b>R-4</b> governs the setting when it arrives:
+    /// <c>OfflineFallbackEnabled</c> is written by Download and Remove — there is no checkbox.</summary>
+    public static string AboutOfflineNotInstalled()
+        => "○ Not installed — about 50 MB to download, works with no internet at all. Used only "
+         + "when every online engine is unavailable.";
+
+    /// <summary>
+    /// <b>Amendment A10 — the cache privacy sentence</b> (ruling E4-c). The technical half was
+    /// already true: <c>translation-cache.json</c> is never logged and never reaches
+    /// <c>CopyErrorReport_Click</c>. What was missing is that <b>nobody told the user the file
+    /// exists</b>, and it holds other players' chat.
+    ///
+    /// <para>Verbatim in the About tab and, from E7.S8, as a README bullet — one string, so the two
+    /// cannot drift.</para>
+    /// </summary>
+    public static string CachePrivacyLine()
+        => @"Translations you have already seen are saved in %AppData%\PWRUHelper\ so the same chat "
+         + "line is never translated twice — they hold chat text, they never leave your PC, and "
+         + "they are never included in the error report.";
+
+    /// <summary>A10's one control. A statement that the app stores your chat with no way to remove
+    /// it is the exact shape principle 2 forbids — "what can you do about it" must be written, not
+    /// implied.</summary>
+    public static string ClearCacheLabel() => "Clear cache";
+
+    /// <summary>…and its answer, on a status line and never a <c>MessageBox</c> (§4.3). There is no
+    /// confirmation dialog either: unlike removing the offline engine, clearing the cache destroys
+    /// nothing the app cannot rebuild — the cost is a few extra requests.</summary>
+    public static string CacheClearedStatus(int removed)
+        => $"Cache cleared — {removed.ToString(CultureInfo.InvariantCulture)} saved translation(s) removed.";
+
+    /// <summary>
+    /// §4.2's <b>Chain</b> line: the tiers the app really built, in chain order, in §3.0's names.
+    ///
+    /// <para><b>It lists what exists and nothing else.</b> §4.2's mockup reads
+    /// <c>Google → Edge → Google (backup) → Offline engine (not installed)</c>, and two of those are
+    /// not shipped — Edge (ruling <b>E3-d</b>, U2 owner-blocked) and Bergamot (E8). An arrow
+    /// pointing at an engine the app cannot call is precisely "a chain the app does not have", so
+    /// they are omitted; the offline engine's absence is stated in full by its own block on this
+    /// same tab, and the chip's tooltip lists every id in <see cref="ProviderIds.All"/> with
+    /// <c>— not available</c> / <c>— not installed</c>. No surface claims a tier the builders did
+    /// not construct, which is the half of UX-DR19 that matters here.</para>
+    ///
+    /// <para><b>Two lines, not one.</b> §4.2 shows a single Chain row; the app has two chains and
+    /// <b>I8</b> makes them structurally different (DeepL can never be on the read one). The labels
+    /// are the block's, in the XAML; this composes either.</para>
+    /// </summary>
+    public static string EngineChainLine(IReadOnlyList<string> tierIds)
+    {
+        ArgumentNullException.ThrowIfNull(tierIds);
+
+        var names = new List<string>(tierIds.Count);
+        foreach (var id in tierIds) names.Add(ProviderNames.Display(id) ?? id);
+        return string.Join(" → ", names);
+    }
+
+    /// <summary>
+    /// §4.2's reason column — <c>Google is paused, retries in 0:58</c>. It renders beside the
+    /// <c>In use now</c> chip and only when the chip is not itself about the pause: in §2.1's
+    /// <b>S2</b> the chip names the backup that answered, and this names the engine that was
+    /// skipped, which is the half the player cannot otherwise see.
+    ///
+    /// <para><paramref name="countdown"/> is handed in already rendered (<b>I2</b>) and is null
+    /// when the surface may not show a clock — §2.4's one countdown per window — in which case the
+    /// clause states the pause and stops, exactly as the chip's own S3 arm does.</para></summary>
+    public static string EnginePausedReason(string? providerId, string? countdown)
+        => (ProviderNames.Display(providerId) ?? SomeEngine) + " is paused"
+           + (countdown is null ? "" : ", retries in " + countdown);
+
     // ---- the About tab's key boxes (ux-mode-degrade.md §3.7, ruling GAP-4) ---------------------
     //
     // METHODS for the same reason as everything above them, and it is not a style choice: the

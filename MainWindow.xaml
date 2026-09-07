@@ -570,7 +570,12 @@
             </TabItem>
 
             <!-- ===================== TAB 5: ABOUT ===================== -->
-            <TabItem Header="About">
+            <!-- x:Name (E7.S7): the "In use now" line shows its countdown only while THIS tab is
+                 the selected one — §2.4's one clock per window. Every countdown surface on the main
+                 window lives inside a tab and tabs are mutually exclusive, so the rule is a
+                 reference comparison and not a hardcoded index. The tab ORDER is unchanged
+                 (Phrasebook 0 · Squad 1 · Translator 2 · Screen OCR 3 · About 4). -->
+            <TabItem Header="About" x:Name="AboutTab">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="2,0,6,0">
                     <StackPanel Margin="4,14,4,4">
 
@@ -629,15 +634,90 @@
                         <TextBlock x:Name="HotkeyWarning" Margin="0,8,0,0" TextWrapping="Wrap"
                                    Visibility="Collapsed" Foreground="{StaticResource GoldBrush}"/>
 
-                        <!-- optional DeepL key -->
-                        <TextBlock Text="Better translations (optional)" FontSize="15" FontWeight="Bold"
+                        <!-- ======================================================================
+                             TRANSLATION ENGINES (ux-mode-degrade.md §4.1-§4.3, E7.S7)
+
+                             UX-DR15 / §4.1: everything stays in the About tab — no settings window,
+                             no sixth tab. This region is the old "Better translations (optional)"
+                             heading, re-headed and reordered into §4.2's blocks; E6.S3/E6.S4/E6.S5
+                             built the rows, this story arranges them and adds what was missing.
+
+                             Copy: the SENTENCES §3/§4 specify come from UserMessages (ruling GAP-4,
+                             UX-DR19) and are written by SetAboutBlockCopy(); headings, row labels
+                             and the two paragraphs with Hyperlinks in them are static page prose and
+                             stay here. No new brush, font, image or colour (UX-DR18).
+                             ====================================================================== -->
+                        <TextBlock Text="Translation engines" FontSize="15" FontWeight="Bold"
                                    Foreground="{StaticResource GoldBrush}" Margin="0,18,0,6"/>
+                        <!-- Text from UserMessages.AboutEnginesIntro() (AC 3). -->
+                        <TextBlock x:Name="EnginesIntroText" TextWrapping="Wrap"
+                                   Foreground="{StaticResource TextMutedBrush}" Margin="0,0,0,6"/>
+
+                        <!-- §4.2's read-only pair: what is being used, and what the order is. Both
+                             are written from code (RefreshAboutEngineLines), never bound — a
+                             Run.Text binding would be TwoWay by default (I15, the v0.11.2 crash). -->
+                        <Grid Margin="0,2,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="In use now" Margin="0,0,14,3"
+                                       Foreground="{StaticResource TextMutedBrush}"/>
+                            <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,3">
+                                <!-- The chip's FOURTH placement (E7.S3): same pure composer, same
+                                     words — the tab and the chip cannot disagree. -->
+                                <TextBlock x:Name="EngineInUseText" TextWrapping="Wrap"
+                                           Foreground="{StaticResource TextMutedBrush}"
+                                           AutomationProperties.Name="Translation engine status"/>
+                                <!-- §4.2's reason column, on its OWN TextBlock: it appears and
+                                     disappears with the state, and sharing one line with the chip is
+                                     how a transient clause clobbers a standing one (E6.S3's finding,
+                                     which this story owns). -->
+                                <TextBlock x:Name="EngineReasonText" TextWrapping="Wrap" Margin="14,0,0,0"
+                                           Foreground="{StaticResource TextMutedBrush}"/>
+                            </StackPanel>
+
+                            <!-- TWO chain lines and not §4.2's one: the app has two chains and I8
+                                 makes them structurally different (DeepL can never read the screen),
+                                 which is the whole point of the opt-in below. -->
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="When you write" Margin="0,0,14,3"
+                                       Foreground="{StaticResource TextMutedBrush}"/>
+                            <TextBlock x:Name="EngineChainWriteText" Grid.Row="1" Grid.Column="1" TextWrapping="Wrap"
+                                       Margin="0,0,0,3" Foreground="{StaticResource TextMutedBrush}"/>
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="When reading the screen" Margin="0,0,14,3"
+                                       Foreground="{StaticResource TextMutedBrush}"/>
+                            <TextBlock x:Name="EngineChainReadText" Grid.Row="2" Grid.Column="1" TextWrapping="Wrap"
+                                       Margin="0,0,0,3" Foreground="{StaticResource TextMutedBrush}"/>
+                        </Grid>
+
+                        <!-- ==== Your keys (optional) ======================================== -->
+                        <TextBlock Text="Your keys (optional)" FontSize="15" FontWeight="Bold"
+                                   Foreground="{StaticResource GoldBrush}" Margin="0,18,0,6"/>
+                        <!-- Text from UserMessages.AboutKeysIntro() (AC 3). It is where the block
+                             says the keys never leave this PC, which is why neither paragraph below
+                             says it a second time (UX-DR19). -->
+                        <TextBlock x:Name="KeysIntroText" TextWrapping="Wrap"
+                                   Foreground="{StaticResource TextMutedBrush}" Margin="0,0,0,6"/>
+
+                        <!-- E7.S7 retires the sentence this paragraph used to end with: "Reading the
+                             screen with OCR ALWAYS uses the free Google engine, so a busy live feed
+                             can never burn through your DeepL quota." Its DeepL half is still true
+                             and structural (I8 — BuildRead cannot construct a DeepL tier at all);
+                             the claim about "OCR" stopped being true the moment E6.S4's opt-in
+                             shipped. What each key is used for is now said per key, and the two
+                             Chain lines above show it. -->
                         <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextMutedBrush}" Margin="0,0,0,6">
-                            <Run Text="By default translation uses Google (free, no setup). If you have a free "/><Hyperlink
+                            <Run Text="If you have a free "/><Hyperlink
                                     NavigateUri="https://www.deepl.com/pro-api" RequestNavigate="OpenLink"
                                     Foreground="{StaticResource TealBrush}">DeepL API key</Hyperlink><Run
-                                    Text=" you can paste it here for higher-quality translations — the app falls back to Google if DeepL is unavailable. The key is stored only on your PC."/><LineBreak/><Run
-                                    Text="DeepL is used only for what YOU write (the Translator tab and the compact overlay's quick reply). Reading the screen with OCR always uses the free Google engine, so a busy live feed can never burn through your DeepL quota."/>
+                                    Text=" you can paste it here for higher-quality translations — the app falls back to the free engines if DeepL is unavailable. DeepL is used only for what YOU write (the Translator tab and the compact overlay's quick reply); it is never used to read the screen."/>
                         </TextBlock>
                         <!-- WrapPanel and not a horizontal StackPanel (E6.S5 review). The window
                              ships at Width=640 (MinWidth=460) and the About tab's ScrollViewer
@@ -664,18 +744,23 @@
                              your resource"), which an unwrapped line is exactly what clips. -->
                         <TextBlock x:Name="DeepLStatus" Margin="0,6,0,0" FontSize="12" TextWrapping="Wrap"
                                    Foreground="{StaticResource TextMutedBrush}"/>
+                        <!-- E7.S7 — the STANDING state above, the TRANSIENT answer here. E6.S3's
+                             review recorded one TextBlock carrying both ("what the app will do with
+                             the key it has", a refusal, and a key-test result) and deferred the
+                             split to this story: UpdateEngineStatusUi owns the line above and clears
+                             this one; a refusal or a Test result writes only this one. -->
+                        <TextBlock x:Name="DeepLFeedback" Margin="0,2,0,0" FontSize="12" TextWrapping="Wrap"
+                                   Foreground="{StaticResource TextMutedBrush}"/>
 
                         <!-- optional Azure Translator key (E6). Mirrors the DeepL row above it on
-                             purpose: E7.S7 restructures this whole region into one "Translation
-                             engines" block, so anything decorative added here is work thrown away.
-                             The region combo is IsEditable (UX-DR16): the nine below are the ones
-                             people actually pick, and anything else can be typed. -->
+                             purpose. The region combo is IsEditable (UX-DR16): the nine below are
+                             the ones people actually pick, and anything else can be typed. -->
                         <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextMutedBrush}" Margin="0,14,0,6">
                             <Run Text="Or paste a free "/><Hyperlink
                                     NavigateUri="https://azure.microsoft.com/products/ai-services/ai-translator"
                                     RequestNavigate="OpenLink"
                                     Foreground="{StaticResource TealBrush}">Azure Translator key</Hyperlink><Run
-                                    Text=" — Azure needs BOTH the key and the region your resource was created in (both are on its Keys and Endpoint page). A key without its region cannot work, so the app asks for the pair. Like the DeepL key, it is stored only on your PC and is used only for what YOU write."/>
+                                    Text=" — Azure needs BOTH the key and the region your resource was created in (both are on its Keys and Endpoint page). A key without its region cannot work, so the app asks for the pair. Azure is used for what you write, and for reading the screen only if you tick the box below."/>
                         </TextBlock>
                         <!-- WrapPanel, for the reason spelled out over the DeepL row above. This is
                              the row that actually overflowed: key box + region combo + Save + the
@@ -706,6 +791,10 @@
                         </WrapPanel>
                         <TextBlock x:Name="AzureStatus" Margin="0,6,0,0" FontSize="12" TextWrapping="Wrap"
                                    Foreground="{StaticResource TextMutedBrush}"/>
+                        <!-- The transient half of the Azure block — see DeepLFeedback above. It is
+                             where AC 5's refusal goes, which is what ruling E6-e deferred here. -->
+                        <TextBlock x:Name="AzureFeedback" Margin="0,2,0,0" FontSize="12" TextWrapping="Wrap"
+                                   Foreground="{StaticResource TextMutedBrush}"/>
 
                         <!-- E6.S4 — the opt-in that lets the SCREEN READER spend the Azure key.
                              Both Checked and Unchecked: a CheckBox raises them separately, and
@@ -720,6 +809,39 @@
                                   ToolTip="Off by default: live mode reads every new chat line, so it spends a metered key much faster than the Translator tab does."/>
                         <TextBlock x:Name="AzureForReadingHint" TextWrapping="Wrap" FontSize="12"
                                    Margin="22,4,0,0" Foreground="{StaticResource TextMutedBrush}"/>
+
+                        <!-- ==== Offline engine (optional) ==================================== -->
+                        <!-- §4.2's third block, as a PLACEHOLDER: the line ships, the
+                             [ Download the offline engine ] button does NOT. E8.S3 owns the
+                             behaviour and the consent dialog (§3.6), E8 is gated on U6/U7 and on
+                             R-12, and a visible Download button that does nothing is worse than an
+                             absent one. Ruling R-4 governs the setting when it arrives:
+                             OfflineFallbackEnabled is written by Download and Remove — no checkbox. -->
+                        <TextBlock Text="Offline engine (optional)" FontSize="15" FontWeight="Bold"
+                                   Foreground="{StaticResource GoldBrush}" Margin="0,18,0,6"/>
+                        <TextBlock x:Name="OfflineEngineText" TextWrapping="Wrap"
+                                   Foreground="{StaticResource TextMutedBrush}"/>
+
+                        <!-- ==== Saved translations (amendment A10, ruling E4-c) ============== -->
+                        <!-- The cache holds other players' chat and nothing ever told the user the
+                             file existed. The sentence states it; the button is the "what can you do
+                             about it" principle 2 requires. No confirmation dialog (§4.3): clearing
+                             destroys nothing the app cannot rebuild — the cost is a few extra
+                             requests. Nothing here is persisted, so there is no _restoringSettings
+                             handler and no SettingsVersion step (I12/I13). -->
+                        <TextBlock Text="Saved translations" FontSize="15" FontWeight="Bold"
+                                   Foreground="{StaticResource GoldBrush}" Margin="0,18,0,6"/>
+                        <TextBlock x:Name="CachePrivacyText" TextWrapping="Wrap"
+                                   Foreground="{StaticResource TextMutedBrush}" Margin="0,0,0,6"/>
+                        <WrapPanel Margin="0,2,0,0">
+                            <!-- Content from UserMessages (GAP-4), like the two Test buttons above,
+                                 and a WrapPanel for the reason those rows have one. -->
+                            <Button x:Name="ClearCacheButton" Style="{StaticResource GhostButton}"
+                                    Padding="12,4" Margin="0,0,0,4" Click="ClearCache_Click"/>
+                            <TextBlock x:Name="CacheStatus" VerticalAlignment="Center" Margin="10,0,0,4"
+                                       FontSize="12" TextWrapping="Wrap"
+                                       Foreground="{StaticResource TextMutedBrush}"/>
+                        </WrapPanel>
 
                         <!-- troubleshooting -->
                         <TextBlock Text="Something went wrong?" FontSize="15" FontWeight="Bold"

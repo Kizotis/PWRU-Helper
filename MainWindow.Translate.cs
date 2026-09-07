@@ -396,7 +396,7 @@ public partial class MainWindow
         var problem = TranslationChains.AzureCredentialProblem(key, region);
         if (problem != null)
         {
-            AzureStatus.Text = problem;
+            AzureFeedback.Text = problem;   // transient (E7.S7): AzureStatus keeps the standing state
             return;
         }
 
@@ -526,7 +526,7 @@ public partial class MainWindow
             return;
         }
 
-        await RunKeyTestAsync(DeepLTestButton, DeepLStatus, ProviderIds.DeepL, "",
+        await RunKeyTestAsync(DeepLTestButton, DeepLFeedback, ProviderIds.DeepL, "",
             ct => new DeepLTranslator(key).TestKeyAsync(ct));
     }
 
@@ -553,11 +553,11 @@ public partial class MainWindow
         var problem = TranslationChains.AzureCredentialProblem(key, region);
         if (problem != null)
         {
-            AzureStatus.Text = problem;
+            AzureFeedback.Text = problem;   // transient (E7.S7): AzureStatus keeps the standing state
             return;
         }
 
-        await RunKeyTestAsync(AzureTestButton, AzureStatus, ProviderIds.Azure, region,
+        await RunKeyTestAsync(AzureTestButton, AzureFeedback, ProviderIds.Azure, region,
             ct => new AzureTranslator(key, region).TestKeyAsync(ct));
     }
 
@@ -671,8 +671,13 @@ public partial class MainWindow
         UpdateEngineChip();
 
         var region = (_settings.AzureRegion ?? "").Trim();
-        var hasKey = (_settings.AzureApiKey ?? "").Trim().Length > 0;
-        var configured = hasKey && region.Length > 0;
+        // E7.S7 — the SENDABILITY predicate, not `hasKey && region.Length > 0`. E6.S4's review
+        // recorded that expression as not the rule the builder applies: a region carrying a control
+        // character (a line break pasted from the portal, persisted by AzureRegionCombo_Changed,
+        // which trims and lower-cases but does not filter) made this line claim an engine BuildWrite
+        // adds no tier for. One expression of the rule, in TranslationChains, shared with the Save
+        // button's refusal and with the read chain's own predicate below.
+        var configured = TranslationChains.AzureWritesWhatYouType(_settings);
         // Both halves, matching what TranslationChains.BuildWrite actually does with them: a status
         // line claiming a configured engine over a credential that adds no tier is the lie this
         // story is here to prevent.
@@ -694,7 +699,62 @@ public partial class MainWindow
         // because ApplySettings suppresses the handler that would otherwise have done it.
         AzureForReadingCheck.IsEnabled = configured;
         AzureForReadingHint.Text = UserMessages.AzureForReadingHint();
+
+        // E7.S7 — the transient lines are cleared by the same refresh that rewrites the standing
+        // ones. Every caller of this method is an event that SUPERSEDES a transient answer: a key
+        // save, a region change, the opt-in toggling, the restore. A refusal or a Test result that
+        // survived one of those would be an answer about credentials that are no longer current —
+        // which is the ownership problem E6.S3's review recorded when both shared one TextBlock.
+        DeepLFeedback.Text = "";
+        AzureFeedback.Text = "";
     }
+
+    /// <summary>
+    /// The About block's static copy, set ONCE from the constructor — the same shape and the same
+    /// reason as <see cref="SetKeyTestLabels"/>: the sentences <c>ux</c> §4.2 specifies live in
+    /// <see cref="UserMessages"/> (ruling GAP-4 / UX-DR19) so the "exactly once" scan can see them
+    /// and E7.S8's README can quote the same words, and none of them is persisted state, so
+    /// <c>_restoringSettings</c> has nothing to say about them (I12).
+    ///
+    /// <para><b>T5's rule, written down</b>: the sentences §3/§4 specify go here; the About tab's
+    /// static page prose — the two key paragraphs with their <c>Hyperlink</c>s, the shortcut list,
+    /// the author links — stays in the XAML. Moving all of it into a code table would be silly, and
+    /// leaving the specified sentences in the XAML would make UX-DR19 unassertable.</para>
+    /// </summary>
+    private void SetAboutBlockCopy()
+    {
+        EnginesIntroText.Text = UserMessages.AboutEnginesIntro();
+        KeysIntroText.Text = UserMessages.AboutKeysIntro();
+        OfflineEngineText.Text = UserMessages.AboutOfflineNotInstalled();
+        CachePrivacyText.Text = UserMessages.CachePrivacyLine();
+        ClearCacheButton.Content = UserMessages.ClearCacheLabel();
+    }
+
+    /// <summary>
+    /// <b>Amendment A10's button.</b> A statement that the app stores your chat with no way to
+    /// remove it is the exact shape principle 2 forbids, so the privacy sentence above it comes with
+    /// this: the store is emptied in memory and its file deleted, and the count comes back for the
+    /// sentence that reports it.
+    ///
+    /// <para><b>No confirmation dialog</b> (§4.3) — unlike <c>Remove</c> for the offline engine,
+    /// clearing the cache destroys nothing the app cannot rebuild; the cost is a few extra requests.
+    /// <b>No <c>MessageBox</c> either</b>: the answer goes to this block's own status line, like
+    /// every other result on this tab.</para>
+    ///
+    /// <para><b>It names a chain and never a store.</b>
+    /// <c>TranslationCachePersistenceTests.No_source_outside_Services_names_the_store…</c> asserts
+    /// that no production source outside <c>Services/</c> mentions the store type at all — the same
+    /// rule that keeps <c>ProviderGates</c> out of this file (ruling E3-c) — so the facade is
+    /// <c>TranslationChains.ClearCache()</c>, and the ordering that makes a save queued before the
+    /// click unable to resurrect the file lives with the store itself.</para>
+    ///
+    /// <para>Nothing is persisted, so there is no <c>_restoringSettings</c> guard and no
+    /// <c>SettingsVersion</c> step (I12/I13). Synchronous on purpose: the delete is one file
+    /// operation and the load it may do first is ≈10 ms for a full cache (E4.S3/E4.S5), on a gesture
+    /// the player is waiting for an answer to.</para>
+    /// </summary>
+    private void ClearCache_Click(object sender, RoutedEventArgs e)
+        => CacheStatus.Text = UserMessages.CacheClearedStatus(TranslationChains.ClearCache());
 
     private void UpdateDeepLStatus()
     {

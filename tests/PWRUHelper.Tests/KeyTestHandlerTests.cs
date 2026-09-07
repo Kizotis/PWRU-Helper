@@ -278,7 +278,11 @@ public class KeyTestHandlerTests
 
             Click(window, "AzureTestKey_Click");
 
-            Assert.Equal(UserMessages.AzureNeedsARegion(), window.AzureStatus.Text);
+            // E7.S7: the refusal is TRANSIENT and goes to the feedback line; the status line above
+            // it keeps saying what the app will actually do with the key it has. E6.S3's review
+            // recorded one TextBlock carrying both and deferred the split to this story.
+            Assert.Equal(UserMessages.AzureNeedsARegion(), window.AzureFeedback.Text);
+            Assert.Equal(UserMessages.AzureNoKeyStatus(), window.AzureStatus.Text);
         });
     }
 

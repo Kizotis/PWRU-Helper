@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -612,6 +613,121 @@ public class TemplateRenderTests
             Assert.NotEqual(DependencyProperty.UnsetValue,
                             window.ReadChip.ReadLocalValue(TextBlock.ForegroundProperty));
         });
+    }
+
+    /// <summary>
+    /// <b>TP-RENDER-08 (E7.S7) — the About tab's "Translation engines" block, rendered.</b> One
+    /// window, one layout pass, a loop over §2.1's states: the block is measured and arranged once
+    /// per state and WPF may report no binding error at any point (CI-4 — the whole <c>WPF</c>
+    /// collection stays under 15 s, so this renders the block ONCE and drives the states through
+    /// the same tree rather than building eight windows).
+    ///
+    /// <para>What it pins beyond "it renders": the four read-only lines really carry text (a block
+    /// whose composer was never called would render four empty <c>TextBlock</c>s and pass every
+    /// assertion that only counted binding errors), the <c>In use now</c> row says exactly what the
+    /// chip says, the Chain lines name no tier the app does not ship, and §4.2's static copy is on
+    /// screen from the deck rather than from a XAML attribute.</para>
+    /// </summary>
+    [Fact]
+    public void TP_RENDER_08_the_about_engines_block_renders_in_every_state()
+    {
+        using var _ = new TempSettings("""{ "SettingsVersion": 3 }""");
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+            var refresh = typeof(MainWindow).GetMethod("RefreshAboutEngineLines",
+                BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+            var errors = new BindingErrorListener();
+            PresentationTraceSources.Refresh();
+            PresentationTraceSources.DataBindingSource.Listeners.Add(errors);
+            PresentationTraceSources.DataBindingSource.Switch.Level = SourceLevels.Warning;
+            try
+            {
+                foreach (var status in EveryEngineStatus())
+                {
+                    refresh.Invoke(window, new object?[] { status });
+
+                    foreach (var line in new[]
+                             {
+                                 window.EngineInUseText, window.EngineChainWriteText,
+                                 window.EngineChainReadText, window.EnginesIntroText,
+                                 window.CachePrivacyText, window.OfflineEngineText,
+                             })
+                    {
+                        line.Measure(new Size(600, 1000));
+                        line.Arrange(new Rect(0, 0, 600, 1000));
+                        line.UpdateLayout();
+                        Assert.False(string.IsNullOrWhiteSpace(line.Text),
+                                     "an About-block line rendered empty");
+                    }
+
+                    // The chip's fourth placement, agreeing with the other three word for word. The
+                    // About tab is not the selected one here (LastTab defaults to 0), so the line
+                    // deliberately carries no clock — §2.4's one countdown per window.
+                    Assert.Equal(MainWindow.AboutChipFor(status, showTheClock: false).Label,
+                                 window.EngineInUseText.Text);
+
+                    foreach (var chain in new[] { window.EngineChainWriteText, window.EngineChainReadText })
+                    {
+                        Assert.DoesNotContain("Edge", chain.Text);        // ruling E3-d
+                        Assert.DoesNotContain("Offline", chain.Text);     // E8 has not shipped
+                    }
+                }
+                Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.Background);
+
+                // §4.2's specified copy is on screen, from the deck (GAP-4 / UX-DR19) — a XAML
+                // attribute would put a second spelling of it one file away from the scan.
+                Assert.Equal(UserMessages.AboutEnginesIntro(), window.EnginesIntroText.Text);
+                Assert.Equal(UserMessages.AboutKeysIntro(), window.KeysIntroText.Text);
+                Assert.Equal(UserMessages.AboutOfflineNotInstalled(), window.OfflineEngineText.Text);
+                Assert.Equal(UserMessages.CachePrivacyLine(), window.CachePrivacyText.Text);
+                Assert.Equal(UserMessages.ClearCacheLabel(), window.ClearCacheButton.Content);
+
+                // The offline block is the PLACEHOLDER T6 recommends: E8.S3 owns the download, so
+                // there is no button here to press. A visible one that did nothing would be worse.
+                Assert.DoesNotContain("Download", window.OfflineEngineText.Text);
+            }
+            finally
+            {
+                PresentationTraceSources.DataBindingSource.Listeners.Remove(errors);
+            }
+
+            Assert.True(errors.Messages.Count == 0,
+                "WPF reported binding errors while rendering the About block:\n" + errors.Dump());
+        });
+    }
+
+    /// <summary>The same states <see cref="EveryState"/> builds chips from, as the records
+    /// themselves — the About block is drawn from an <c>EngineStatus</c> and not from a chip.</summary>
+    private static IEnumerable<EngineStatus> EveryEngineStatus()
+    {
+        var now = new DateTimeOffset(2026, 9, 7, 12, 0, 0, TimeSpan.Zero);
+        var free = new[] { ProviderIds.GoogleDict, ProviderIds.GoogleGtx };
+        var none = new Dictionary<string, GateSnapshot>(StringComparer.Ordinal);
+
+        ChainTranslator.Outcome Answered(string id, params string[] skipped)
+            => new(id, skipped.Select(s => (ProviderId: s, Reason: "Paused")).ToList(), null, null);
+
+        yield return EngineStatus.Of(free, none, free, null, stateKnown: false, now);        // checking…
+        yield return EngineStatus.Of(free, none, free, Answered(ProviderIds.GoogleDict), true, now);
+        yield return EngineStatus.Of(free,
+            new Dictionary<string, GateSnapshot>(StringComparer.Ordinal)
+            {
+                [ProviderIds.GoogleDict] = new(GateState.Open, now.AddSeconds(58), 1,
+                                               TranslationErrorKind.RateLimited),
+            },
+            free, Answered(ProviderIds.GoogleGtx, ProviderIds.GoogleDict), true, now);
+        yield return EngineStatus.Of(free,
+            new Dictionary<string, GateSnapshot>(StringComparer.Ordinal)
+            {
+                [ProviderIds.GoogleDict] = new(GateState.Open, now.AddSeconds(200), 1,
+                                               TranslationErrorKind.Network),
+                [ProviderIds.GoogleGtx] = new(GateState.Open, now.AddSeconds(260), 1,
+                                              TranslationErrorKind.Network),
+            },
+            free, null, true, now);
     }
 
     /// <summary>§2.1's eight states as eight chips, built through the real pure function so this

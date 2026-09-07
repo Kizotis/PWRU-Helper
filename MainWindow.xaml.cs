@@ -210,6 +210,11 @@ public partial class MainWindow : Window
         // in-flight finally is about to restore. Nothing persisted, so _restoringSettings does not
         // apply — but it must run after InitializeComponent, because the buttons exist only then.
         SetKeyTestLabels();
+        // E7.S7 — the About block's static copy (§4.2's two intros, the offline placeholder, the
+        // cache privacy sentence and the Clear cache label), for the same reason and in the same
+        // place: the sentences §3/§4 specify live in UserMessages (GAP-4, UX-DR19), none of them is
+        // persisted state, and the controls exist only after InitializeComponent.
+        SetAboutBlockCopy();
         // …and A8's read-once button, from the deck for the same reason (GAP-4): its copy CHANGES —
         // it becomes "Cancel read" while a read is in flight — so a XAML Content attribute would be
         // a second spelling of it. Idle at construction; the read path owns every write after that.
@@ -982,6 +987,10 @@ public partial class MainWindow : Window
         var chip = ChipFor(status, statusLineOwnsTheClock: _liveCts != null && status.AllReadTiersPaused);
         PaintEngineChip(chip, EngineTooltip(status));
 
+        // E7.S7 — the About tab's own lines, from the SAME status record, so the tab and the chip
+        // cannot disagree and the 1 Hz tick steps both without a second timer.
+        RefreshAboutEngineLines(status);
+
         // §3.5's notices, once per switch, written AFTER the chip so the two agree — and only when
         // a degraded state was really observed first, otherwise every session's first translation
         // would announce a recovery from nothing.
@@ -1037,20 +1046,98 @@ public partial class MainWindow : Window
     internal static string? FallbackNotice(EngineStatus status)
     {
         ArgumentNullException.ThrowIfNull(status);
+        return SkippedPause(status) is { } paused
+            ? UserMessages.TranslatedBy(status.LastAnswered, paused.ProviderId)
+            : null;
+    }
+
+    /// <summary>
+    /// <b>The tier that was passed over while a lower one answered</b>, or null when there is no
+    /// such thing — the evidence half of §3.5's notice and of §4.2's About-tab reason column,
+    /// extracted by E7.S7 so the two surfaces cannot come to name different engines on one window.
+    ///
+    /// <para>Two conditions, both from ruling <b>E3-b</b>: a lower tier really answered
+    /// (<see cref="EngineStatus.FellBack"/> over <c>LastOutcome.Skipped</c>) and one of the tiers at
+    /// or above it is really inside a window. It is the same walk <see cref="ChipFor"/>'s S3 arm
+    /// makes — a tier paused BELOW the engine that answered costs the player nothing — with the one
+    /// exclusion that walk deliberately does not make: <b>never the engine that is serving</b>.
+    /// <c>PreferredPause</c> counts the serving tier's own window on purpose, which is right for the
+    /// chip (the player is about to feel it) and self-contradictory in a sentence
+    /// ("Translated by Google — Google is paused."). It is reachable the ordinary way round: the
+    /// tier that answered a moment ago closes behind the answer while the tier above it reopens.</para>
+    /// </summary>
+    private static EngineLine? SkippedPause(EngineStatus status)
+    {
         if (!status.FellBack || status.LastAnswered is not { } serving) return null;
 
         var readLines = status.ReadTiers.Select(status.For).OfType<EngineLine>().ToList();
-        // The same walk ChipFor's S3 arm makes: a tier paused BELOW the engine that answered costs
-        // the player nothing and is not what this sentence is about.
         var paused = PreferredPause(readLines, serving);
-        // …and never the engine that is SERVING (review). That walk deliberately counts the serving
-        // tier's own window — for the chip, which is right: the player is about to feel it — but
-        // "Translated by Google — Google is paused." is a sentence that contradicts itself in six
-        // words. It is reachable the ordinary way round: the tier that answered a moment ago closes
-        // behind the answer while the tier above it reopens.
-        if (paused is null || string.Equals(paused.ProviderId, serving, StringComparison.Ordinal))
-            return null;
-        return UserMessages.TranslatedBy(serving, paused.ProviderId);
+        return paused is null || string.Equals(paused.ProviderId, serving, StringComparison.Ordinal)
+            ? null : paused;
+    }
+
+    // ============================================================
+    //  THE ABOUT TAB'S ENGINE LINES (ux-mode-degrade §4.2, E7.S7)
+    // ============================================================
+
+    /// <summary>
+    /// <b>The chip's fourth placement</b> — §4.2's <c>In use now</c> row, from the SAME pure
+    /// composer as the three E7.S3 shipped. It is a function of values, so the tab and the chip
+    /// cannot come to describe one state two ways (UX-DR19 applied across surfaces), and
+    /// <c>EngineStatusTests</c> pins the two strings equal for every state.
+    /// </summary>
+    /// <param name="showTheClock"><b>§2.4's one countdown per window, decided here.</b> Every
+    /// countdown surface on the main window — both chips and both LIVE status lines — lives inside a
+    /// tab, and tabs are mutually exclusive, so the About line may carry the clock exactly while the
+    /// About tab is the selected one and no second clock can be on screen with it. It is also what
+    /// makes the 1 Hz repaint free while the player is on another tab: the line's text is then
+    /// constant and <see cref="SetIfChanged"/> assigns nothing (NFR7).</param>
+    internal static EngineChip AboutChipFor(EngineStatus status, bool showTheClock)
+        => ChipFor(status, statusLineOwnsTheClock: !showTheClock);
+
+    /// <summary>§4.2's reason column — <c>Google is paused, retries in 0:58</c>. It renders only
+    /// where it adds something the chip beside it does not already say: the chip names the engine
+    /// that is ANSWERING, this names the one that was skipped (<see cref="SkippedPause"/>). In every
+    /// other state the chip is itself about the pause, and a second sentence saying so would be the
+    /// same news twice.</summary>
+    internal static string? EngineReasonLine(EngineStatus status, bool showTheClock)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+        return SkippedPause(status) is { } paused
+            ? UserMessages.EnginePausedReason(paused.ProviderId,
+                  showTheClock ? Countdown(paused.PausedUntil, status.Now) : null)
+            : null;
+    }
+
+    /// <summary>
+    /// The four read-only lines of §4.2's first block, repainted from the status
+    /// <see cref="RefreshEngineChip"/> has already built — which is why it is called from there and
+    /// not from <c>UpdateEngineStatusUi</c>: the 1 Hz tick goes through <c>RefreshEngineChip</c>
+    /// directly (it owns the STOP decision), so hanging the About lines off it is what steps their
+    /// countdown without a second timer and without a repaint path that could restart one.
+    ///
+    /// <para>Everything through <see cref="SetIfChanged"/>, foreground included (NFR7): above the
+    /// 90-second band the rendered string changes once a minute, and on any tab but About it never
+    /// changes at all.</para>
+    ///
+    /// <para>The two Chain lines are composed from <c>TranslationChains</c>' tier lists and not from
+    /// a literal — the tab is the only place the app states its own composition, so an inaccurate
+    /// one is a support burden rather than a typo. The code-behind names a chain facade and never
+    /// <c>ProviderGates</c> (TP-START-02).</para>
+    /// </summary>
+    private void RefreshAboutEngineLines(EngineStatus status)
+    {
+        var chip = AboutChipFor(status, showTheClock: ReferenceEquals(MainTabs.SelectedItem, AboutTab));
+        if (SetIfChanged(EngineInUseText, chip.Label))
+            EngineInUseText.SetResourceReference(TextBlock.ForegroundProperty, chip.BrushKey);
+
+        SetIfChanged(EngineReasonText,
+            EngineReasonLine(status, ReferenceEquals(MainTabs.SelectedItem, AboutTab)) ?? "");
+
+        SetIfChanged(EngineChainWriteText,
+            UserMessages.EngineChainLine(TranslationChains.WriteTierIds(_settings)));
+        SetIfChanged(EngineChainReadText,
+            UserMessages.EngineChainLine(TranslationChains.ReadTierIds(_settings)));
     }
 
     /// <summary>Where §3.5's one-time notice goes, which is <b>the surface that owns the state</b>.

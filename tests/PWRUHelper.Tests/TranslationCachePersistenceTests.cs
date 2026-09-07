@@ -785,6 +785,90 @@ public class TranslationCachePersistenceTests
         Assert.Equal(new[] { "TranslationChains.cs" }, optIns);
     }
 
+    // ---- A10: "Clear cache" (E7.S7) --------------------------------------------------------------
+
+    /// <summary>
+    /// <b>Amendment A10's whole mechanic</b>: the in-memory store <b>and</b> the file, in that
+    /// order, so a debounced save queued before the click cannot resurrect what was cleared — and
+    /// the count the feedback sentence reports is the real number of entries removed.
+    ///
+    /// <para>Here and not in <c>EngineStatusTests</c> for the reason this class's header gives: it
+    /// is the only one in the suite that writes <see cref="TranslationCacheStore.PathOverride"/>,
+    /// and a <c>TempCache</c> opened from a class that runs in parallel with it would move the path
+    /// under a case running here (IS-3).</para>
+    /// </summary>
+    [Fact]
+    public void A10_Clear_cache_empties_the_store_and_deletes_the_file()
+    {
+        using var cache = new TempCache();
+        try
+        {
+            var store = TranslationChains.Cache;
+            store.Store("ru|en|привет", "hello");
+            store.Store("ru|en|пока", "bye");
+            TranslationChains.FlushCache();
+            Assert.True(File.Exists(cache.Path));
+
+            // One more store, so a save really IS pending when the button is pressed — the case A10
+            // names ("a debounced save queued before the click").
+            store.Store("ru|en|го", "go");
+
+            Assert.Equal(3, TranslationChains.ClearCache());
+
+            Assert.Equal(0, store.Count);
+            Assert.False(File.Exists(cache.Path), "the file survived a Clear cache");
+            Assert.False(store.TryGet("ru|en|привет", out _), "a cleared entry came back");
+
+            // The pending save may not write the map back afterwards, and neither may the flush
+            // MainWindow.OnClosing makes.
+            store.SaveNow();
+            TranslationChains.FlushCache();
+            Assert.False(File.Exists(cache.Path), "a queued save resurrected the cleared file");
+
+            // …and the store still works: the next translation re-populates it, file included.
+            store.Store("ru|en|снова", "again");
+            Assert.True(store.TryGet("ru|en|снова", out var back));
+            Assert.Equal("again", back);
+            TranslationChains.FlushCache();
+            Assert.True(File.Exists(cache.Path));
+            Assert.Equal(1, store.Count);
+        }
+        finally
+        {
+            TranslationChains.ResetCacheForTests();
+        }
+    }
+
+    /// <summary>
+    /// The count is honest about a file this session never had to read. The store loads lazily, on
+    /// the first MISS (I10, <see cref="Neither_a_store_nor_a_Count_loads_the_file_only_a_miss_does"/>),
+    /// so a player who clears the cache before translating anything would otherwise be told
+    /// "0 removed" over a file holding a thousand lines of their own chat. Clearing therefore loads
+    /// first — a one-off cost on an explicit gesture, and the only way the sentence can be true.
+    /// </summary>
+    [Fact]
+    public void A10_The_cleared_count_includes_entries_this_session_never_loaded()
+    {
+        using var cache = new TempCache();
+        try
+        {
+            var first = TranslationChains.Cache;
+            first.Store("ru|en|привет", "hello");
+            first.Store("ru|en|пока", "bye");
+            TranslationChains.FlushCache();
+            TranslationChains.ResetCacheForTests();       // a restart: nothing is loaded yet
+
+            var restarted = TranslationChains.Cache;
+            Assert.Equal(0, restarted.Count);             // …and a Count deliberately does not load
+            Assert.Equal(2, TranslationChains.ClearCache());
+            Assert.False(File.Exists(cache.Path));
+        }
+        finally
+        {
+            TranslationChains.ResetCacheForTests();
+        }
+    }
+
     // ---- I10 / I11 as scans ---------------------------------------------------------------------
 
     [Fact]

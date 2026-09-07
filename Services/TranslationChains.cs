@@ -387,6 +387,91 @@ internal static class TranslationChains
             readChain.LastOutcome, stateKnown, readChain.Now());
     }
 
+    // =============================================================================================
+    //  What the About tab renders — E7.S7
+    // =============================================================================================
+
+    /// <summary>
+    /// <b>§4.2's "Chain" line for the write path</b>, as ids: what <see cref="BuildWrite"/> would
+    /// really construct for these settings, in chain order.
+    ///
+    /// <para><b>Ids and not a chain</b>, deliberately. The About tab is refreshed from
+    /// <c>ApplySettings</c>, from every key save and from E7.S2's 1 Hz tick while a provider is
+    /// paused; building a real chain there would construct four providers a second and throw them
+    /// away. It is also the reason this lives here and not in the code-behind: the composition is
+    /// <c>Services/</c>' (ruling E3-c) and <c>MainWindow</c> may not name <see cref="ProviderGates"/>
+    /// (TP-START-02).</para>
+    ///
+    /// <para><b>It is a second expression of §8.1's order, and that is a real risk</b> — so it is
+    /// pinned rather than trusted: <c>EngineStatusTests</c> asserts these ids equal the ids of the
+    /// chain the builder actually returns, over every settings shape
+    /// <c>ChainCompositionTests.EveryPermutation()</c> knows and at both read priorities. A tier
+    /// added to a builder without a line here fails that case.</para>
+    /// </summary>
+    internal static IReadOnlyList<string> WriteTierIds(AppSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        var ids = new List<string>(4);
+        if ((settings.DeepLApiKey ?? "").Trim().Length > 0) ids.Add(ProviderIds.DeepL);
+        if (AzureWritesWhatYouType(settings)) ids.Add(ProviderIds.Azure);
+        ids.Add(ProviderIds.GoogleDict);
+        // [Edge — ruling E3-d: no EdgeTranslator exists, so the tab may not name one.]
+        ids.Add(ProviderIds.GoogleGtx);
+        // [Bergamot — E8.S3; the offline block on this same tab says it is not installed.]
+        return ids;
+    }
+
+    /// <summary>The same for the READ path — and the reason §4.2's single Chain row became two
+    /// (I8): <see cref="BuildRead"/> cannot construct a DeepL tier at all, so the two lines differ
+    /// structurally and a player who has just been told their key is for what they WRITE can see
+    /// it.</summary>
+    internal static IReadOnlyList<string> ReadTierIds(AppSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        var ids = new List<string>(3);
+        if (AzureReadsTheScreen(settings)) ids.Add(ProviderIds.Azure);
+        ids.Add(ProviderIds.GoogleDict);
+        ids.Add(ProviderIds.GoogleGtx);
+        return ids;
+    }
+
+    /// <summary>
+    /// Does <see cref="BuildWrite"/> put the user's Azure key on the write path for these settings?
+    /// The About tab's status line asks THIS and no longer <c>hasKey &amp;&amp; region.Length > 0</c>
+    /// — E6.S4's review recorded that expression as not the sendability predicate, and E7.S7 owns
+    /// the block that carried it. A region carrying a control character (pasted with a line break,
+    /// persisted by the combo handler, which trims but does not filter) made the line say
+    /// "Azure key set — used for what you write" over a credential the builder adds <b>no tier</b>
+    /// for. Same rule, one expression, and it is the same one
+    /// <see cref="AzureCredentialProblem"/> and <see cref="AzureReadsTheScreen"/> already share.
+    /// </summary>
+    internal static bool AzureWritesWhatYouType(AppSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        return IsSendableAzureCredential((settings.AzureApiKey ?? "").Trim(),
+                                         (settings.AzureRegion ?? "").Trim());
+    }
+
+    /// <summary>
+    /// <b>Amendment A10's button, behind the facade the code-behind already uses</b> — the store is
+    /// emptied in memory and its file is deleted, in that order, and the number of entries removed
+    /// comes back for the sentence that reports it (§4.2). No confirmation dialog: clearing the
+    /// cache destroys nothing the app cannot rebuild, and the cost is a few extra requests.
+    ///
+    /// <para>Here and not in <c>MainWindow.Translate.cs</c> for the reason
+    /// <see cref="FlushCache"/> is: <c>TranslationCachePersistenceTests</c> asserts, over every
+    /// production source outside <c>Services/</c>, that nothing names
+    /// <see cref="TranslationCacheStore"/> at all. The code-behind names a chain; this class names
+    /// the store.</para>
+    ///
+    /// <para><see cref="Cache"/> and not <c>?.</c>: a user pressing the button before any chain has
+    /// translated anything still means "remove what is on disk", and the store's own
+    /// <c>Clear</c> loads the file first so the count it reports is the truth.</para>
+    /// </summary>
+    internal static int ClearCache() => Cache.Clear();
+
     /// <summary>
     /// Is this pair one <see cref="BuildWrite"/> would actually build a tier from? One predicate,
     /// so the builder and the About tab's Save button cannot drift: the UI must refuse exactly what

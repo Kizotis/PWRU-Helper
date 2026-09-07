@@ -398,7 +398,10 @@ public class AzureSettingsTests
             window.AzureKeyBox.Password = RealLookingKey;
             Save(window);
 
-            Assert.Equal(UserMessages.AzureNeedsARegion(), window.AzureStatus.Text);
+            // E7.S7 split the two: the refusal is transient (the feedback line) and the standing
+            // state — what the app will do with the key it has — keeps the status line above it.
+            Assert.Equal(UserMessages.AzureNeedsARegion(), window.AzureFeedback.Text);
+            Assert.Equal(UserMessages.AzureNoKeyStatus(), window.AzureStatus.Text);
             // NOTHING was rebuilt — all four references are the ones the constructor made.
             var after = Chains(window);
             for (var i = 0; i < before.Length; i++) Assert.Same(before[i], after[i]);
@@ -789,6 +792,7 @@ public class AzureSettingsTests
             var original = settingsField.GetValue(window);
 
             var bothSidesSeen = new HashSet<bool>();
+            var bothWriteSidesSeen = new HashSet<bool>();
             try
             {
                 foreach (var settings in permutations)
@@ -796,14 +800,31 @@ public class AzureSettingsTests
                     settingsField.SetValue(window, settings);
                     refresh.Invoke(window, null);
 
+                    var region = (settings.AzureRegion ?? "").Trim();
                     var lineSaysAzureReads = window.AzureStatus.Text ==
-                        UserMessages.AzureKeySetForReadingStatus((settings.AzureRegion ?? "").Trim());
+                        UserMessages.AzureKeySetForReadingStatus(region);
                     bothSidesSeen.Add(lineSaysAzureReads);
 
                     foreach (var priority in new[] { RequestPriority.Background, RequestPriority.Interactive })
                         Assert.Equal(lineSaysAzureReads,
                             ChainCompositionTests.IdsOf(TranslationChains.BuildRead(settings, priority))[0]
                                 == ProviderIds.Azure);
+
+                    // E7.S7 — the same equivalence for the WRITE half, which E6.S4's review recorded
+                    // as missing: the line used `hasKey && region.Length > 0` and not the
+                    // sendability predicate, so a region carrying a control character made it claim
+                    // an engine BuildWrite adds no tier for. Either configured line means "Azure is
+                    // on the write chain"; the no-key line means it is not.
+                    var lineSaysAzureWrites = window.AzureStatus.Text == UserMessages.AzureKeySetStatus(region)
+                                           || lineSaysAzureReads;
+                    bothWriteSidesSeen.Add(lineSaysAzureWrites);
+                    Assert.Equal(lineSaysAzureWrites,
+                        ChainCompositionTests.IdsOf(TranslationChains.BuildWrite(settings))
+                            .Contains(ProviderIds.Azure));
+
+                    // …and the opt-in may only be tickable when there is something to opt into —
+                    // the same predicate again, at the control.
+                    Assert.Equal(lineSaysAzureWrites, window.AzureForReadingCheck.IsEnabled);
                 }
             }
             finally { settingsField.SetValue(window, original); }
@@ -811,6 +832,7 @@ public class AzureSettingsTests
             // Non-vacuity: an equivalence both of whose sides were always false would pass over a
             // predicate that answered "no" to everything.
             Assert.Equal(2, bothSidesSeen.Count);
+            Assert.Equal(2, bothWriteSidesSeen.Count);
         });
     }
 

@@ -1191,6 +1191,19 @@ public class UserMessagesTests : GatesTestBase
             // A8's button copy (E7.S5). The XAML no longer carries any of it — a label that changes
             // cannot live in an attribute, and these fragments are what would catch it coming back.
             "Cancel read", "👁 Read once", "Draw a box over Russian text and read it once",
+            // §4.2's About-tab block (E7.S7). AC 3's two literals are the first two; A10's privacy
+            // sentence, its button and its answer are the last three. The rule T5 wrote down is
+            // what makes this scannable at all: the sentences §3/§4 specify live in the deck, the
+            // About tab's static page prose (paragraphs with Hyperlinks in them) stays in the XAML.
+            "By default everything runs on free engines",
+            "and your own quota, instead of sharing a free door", "Keys are stored only on your PC.",
+            "Not installed — about 50 MB to download",
+            "they hold chat text, they never leave your PC",
+            "Clear cache", "Cache cleared — ", " saved translation(s) removed.",
+            // §4.2's reason column. Only the clause is scanned: the row is composed from a provider
+            // NAME plus this, so the rendered sentence is not a contiguous literal anywhere — which
+            // is UX-DR19 one level down, exactly as §3.1's nine rows are assembled from fragments.
+            ", retries in ",
             // ("Select area & read once" is deliberately NOT scanned: the Translator tab's
             //  empty-state hint QUOTES the button by name — "Use “Select area & read once” above…" —
             //  and that paragraph is tab copy no deck section owns. E7.S8's README/About pass is

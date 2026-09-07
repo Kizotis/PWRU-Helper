@@ -299,6 +299,74 @@ internal sealed class TranslationCacheStore
     }
 
     /// <summary>
+    /// <b>Amendment A10 — "Clear cache".</b> Empties the map and deletes the file, and answers with
+    /// the number of entries that were removed. Reached only through
+    /// <c>TranslationChains.ClearCache()</c>: the code-behind names a chain, never a store.
+    ///
+    /// <para><b>The order is the whole of it.</b> The pending save is cancelled and the map emptied
+    /// under <see cref="_gate"/>, and the snapshot counter is bumped there too — so a
+    /// <see cref="SaveNow"/> that had already snapshotted and is waiting on <see cref="_io"/> finds
+    /// its sequence stale and writes nothing. Then the file is deleted under <see cref="_io"/>, so
+    /// nothing can land between the two. Without that, A10's own scenario — a debounced save queued
+    /// by the translation the player made a second before pressing the button — would resurrect the
+    /// file they just cleared.</para>
+    ///
+    /// <para><b>It loads first, and that is deliberate.</b> The store reads lazily, on the first MISS
+    /// (I10), so a player who clears the cache before translating anything would otherwise be told
+    /// "0 removed" over a file holding a thousand lines of their own chat. A one-off synchronous
+    /// read (≈10 ms for a full cache, measured in E4.S3/E4.S5) on an explicit gesture is the only
+    /// way the sentence can be true.</para>
+    ///
+    /// <para><see cref="_keepFile"/> is cleared too: it means "this process could not READ the file,
+    /// so do not overwrite what the user has earned" — and the user has just asked for exactly that
+    /// file to go. The delete is best-effort like every other I/O here; a cache is a convenience and
+    /// may never be the reason a click fails (R-01).</para>
+    /// </summary>
+    internal int Clear()
+    {
+        int removed;
+        long seq;
+        string path;
+
+        lock (_gate)
+        {
+            EnsureLoaded();                       // so the count is of everything, file included
+
+            _savePending = false;
+            _saveTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+
+            removed = _map.Count;
+            _map.Clear();
+            _order.Clear();
+
+            _loaded = true;                       // there is nothing left on disk to load
+            _keepFile = false;                    // the user asked for the file to go
+            seq = ++_snapshotSeq;                 // an older snapshot may no longer write
+            path = ResolvePath();
+        }
+
+        lock (_io)
+        {
+            _writtenSeq = seq;
+            try
+            {
+                if (File.Exists(path)) File.Delete(path);
+                // The half-written swap file of an interrupted save, if there is one: leaving it
+                // would be a copy of the user's chat text under a name nothing ever reads again.
+                var tmp = path + ".tmp";
+                if (File.Exists(tmp)) File.Delete(tmp);
+            }
+            catch (Exception)
+            {
+                // Held open by an AV or a sync agent — the map is empty either way, and the next
+                // save rewrites the file from it.
+            }
+        }
+
+        return removed;
+    }
+
+    /// <summary>
     /// IS-4's second half, for tests: drop the pending save and the timer with it. Without it a
     /// write queued by one case lands during the next one — in the next case's temp directory, or
     /// after <see cref="PathOverride"/> has gone back to the developer's real <c>%AppData%</c>.
