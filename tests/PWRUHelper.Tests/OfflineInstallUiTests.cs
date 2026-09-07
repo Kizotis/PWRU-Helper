@@ -199,6 +199,23 @@ public class OfflineInstallUiTests : GatesTestBase
                     d => Body(code, gesture).Contains(d, StringComparison.Ordinal));
         }
 
+        // …and the transitive half (review): AC 2 is about a PATH, and both of the files above call
+        // out of themselves on every tick — into the translation chain, the gates, the store, the
+        // dedup. Every one of those callees is under Services/, which is I2's own boundary, so the
+        // sweep is the whole directory with no carve-out at all: a dialog API anywhere in it would
+        // be reachable from the LIVE loop by construction.
+        foreach (var service in ProductionSources()
+                     .Where(f => f.Contains($"{Path.DirectorySeparatorChar}Services{Path.DirectorySeparatorChar}",
+                                            StringComparison.Ordinal)))
+        {
+            var code = Code(File.ReadAllText(service));
+            foreach (var dialog in dialogApis)
+                Assert.False(code.Contains(dialog, StringComparison.Ordinal),
+                    $"{Path.GetFileName(service)} can open a modal (\"{dialog}\") — Services/ is what "
+                    + "the LIVE and OCR loops call, so a dialog there is a dialog on a background "
+                    + "path (AC 2 / NFR12, and I2)");
+        }
+
         // …and the two dialogs this story adds are reachable from the About tab's own gestures and
         // nowhere else: one Click handler for consent, one private method for Remove that only that
         // handler calls.

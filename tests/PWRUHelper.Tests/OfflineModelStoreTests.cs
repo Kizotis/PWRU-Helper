@@ -84,6 +84,11 @@ public class OfflineModelStoreTests : GatesTestBase
         Assert.Equal(2, handler.Requests);
         Assert.All(handler.Calls, c => Assert.Equal("github.com", c.Uri.Host));
 
+        // …and every one of them identifies the app (review, E1's seam lesson): UpdateService's two
+        // clients name themselves for the same host, an anonymous 50 MB pull is the shape a mirror
+        // rate-limits first, and a header nobody asserts is a header the next refactor drops.
+        Assert.All(handler.Calls, c => Assert.Equal("PWRUHelper-OfflineEngine", c.Headers["User-Agent"]));
+
         // A percentage really was reported and it ended at 100.
         Assert.NotEmpty(seen);
         Assert.All(seen, p => Assert.NotNull(p));
@@ -429,6 +434,76 @@ public class OfflineModelStoreTests : GatesTestBase
 
         Assert.False(OfflineModelStore.IsVerifiedNative(Path.Combine(temp.Root, "nope.dll")));
         Assert.False(OfflineModelStore.IsVerifiedNative(null));
+    }
+
+    /// <summary>
+    /// <b>The dependency half of ruling E8-f</b> (review). Hashing <c>bergamot.dll</c> proves
+    /// nothing about the files Windows loads BECAUSE of it: <c>NativeLibrary.Load</c> on an absolute
+    /// path uses <c>LOAD_WITH_ALTERED_SEARCH_PATH</c>, so the library's own directory goes to the
+    /// front of the import search — and <c>bergamot.dll</c> imports <c>dbghelp</c>, which is not a
+    /// KnownDLL. Dropping one beside a byte-perfect library is code execution inside the app without
+    /// touching the file the digest covers, which is the attack the ruling's own remark describes.
+    /// A dependency has no digest in the manifest to be checked against, so what is asserted is that
+    /// there is nothing there to load: an install leaves exactly one <c>.dll</c> in that directory.
+    /// </summary>
+    [Fact]
+    public void A_dll_planted_beside_the_library_refuses_the_load()
+    {
+        var manifest = Good();
+        using var temp = new TempModels(manifest);
+        temp.Install(manifest, Native, Model);
+
+        var dll = Path.Combine(temp.Root, OfflineModelManifest.NativeFileName);
+        Assert.True(OfflineModelStore.IsVerifiedNative(dll), "the fixture is not a verified install");
+
+        // The library itself is untouched — its digest still matches — and the load is refused
+        // anyway, because the bytes that would run are not only its own.
+        var planted = Path.Combine(temp.Root, "dbghelp.dll");
+        File.WriteAllBytes(planted, TempModels.Blob(13, 64));
+        Assert.False(OfflineModelStore.IsVerifiedNative(dll));
+        Assert.Equal(TempModels.Sha256(Native), TempModels.Sha256(File.ReadAllBytes(dll)));
+
+        File.Delete(planted);
+        Assert.True(OfflineModelStore.IsVerifiedNative(dll));
+
+        // A side-by-side manifest steers the same search, so it is refused for the same reason.
+        var sxs = Path.Combine(temp.Root, "bergamot.dll.manifest");
+        File.WriteAllText(sxs, "<assembly/>");
+        Assert.False(OfflineModelStore.IsVerifiedNative(dll));
+        File.Delete(sxs);
+
+        // …and the check is narrow on purpose: a marker an antivirus or the shell drops in the
+        // directory may not silently disable the engine.
+        File.WriteAllText(Path.Combine(temp.Root, "desktop.ini"), "[.ShellClassInfo]");
+        Assert.True(OfflineModelStore.IsVerifiedNative(dll));
+    }
+
+    /// <summary>
+    /// <b>The refusal <c>InstallAsync</c>'s own contract promises</b> (review): every failure path
+    /// in it deletes the WHOLE root, which is only honest while it cannot be running over an install
+    /// that was already there. The About tab makes that true by showing Remove instead of Download —
+    /// but the store is headless (I2) and a contract that depends on a caller's button label is not
+    /// a contract. Before the fix, one flaky response over an existing engine deleted 45 MB the user
+    /// had already waited for.
+    /// </summary>
+    [Fact]
+    public async Task An_install_that_is_already_there_is_never_downloaded_over()
+    {
+        var manifest = Good();
+        using var temp = new TempModels(manifest);
+        temp.Install(manifest, Native, Model);
+        var before = temp.Files();
+
+        // A handler that fails on the first byte: the shape that used to take the existing install
+        // down with it.
+        var handler = new FakeHandler().Throws(new HttpRequestException("no route"));
+        var result = await new OfflineModelStore(handler, manifest).InstallAsync();
+
+        Assert.True(result.Installed);              // it is installed — that is the honest answer
+        Assert.False(result.Cancelled);
+        Assert.Equal(0, handler.Requests);          // and not one byte was asked for
+        Assert.Equal(before, temp.Files());
+        Assert.True(new OfflineModelStore(manifest: manifest).IsInstalled);
     }
 
     /// <summary>…and the resolver really consults it. A behaviour test would have to load 22 MB of

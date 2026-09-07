@@ -208,6 +208,20 @@ internal sealed class OfflineModelStore
     /// successful resolve and never asks again), which is a price worth paying for a check that
     /// cannot be faked.</para>
     ///
+    /// <para><b>And the library's own dependencies, which is the other half of the same hole</b>
+    /// (review). Hashing the file that is named proves nothing about the files Windows loads
+    /// BECAUSE of it: <c>NativeLibrary.Load</c> on an absolute path uses
+    /// <c>LOAD_WITH_ALTERED_SEARCH_PATH</c>, so the library's directory replaces the app's at the
+    /// front of the import search — and dropping a <c>dbghelp.dll</c> beside a byte-perfect
+    /// <c>bergamot.dll</c> is code execution inside the app without touching the file this method
+    /// hashes. There is nothing to hash there (the manifest describes four files and none of them is
+    /// a dependency), so what is checked instead is that there is nothing there at all: the
+    /// directory an install produces holds exactly one <c>.dll</c>, and a second one — or a
+    /// side-by-side <c>.manifest</c>, which redirects the same search — refuses the load. The scan
+    /// is one non-recursive enumeration of a four-entry directory, and it is deliberately narrow:
+    /// only the extensions that can steer a native load, so an antivirus dropping a marker or a
+    /// <c>desktop.ini</c> cannot silently disable the engine.</para>
+    ///
     /// <para>False, never a throw, and false when the manifest has no digest yet: a build whose
     /// manifest is unpopulated refuses to load rather than loading silently.</para>
     /// </summary>
@@ -223,7 +237,10 @@ internal sealed class OfflineModelStore
         {
             var info = new FileInfo(path);
             if (!info.Exists || info.Length != expected.Size) return false;
-            return string.Equals(Sha256Of(path), expected.Sha256, StringComparison.OrdinalIgnoreCase);
+            if (!string.Equals(Sha256Of(path), expected.Sha256, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            return NoStrangerBesideIt(info);
         }
         catch (Exception)
         {
@@ -231,6 +248,31 @@ internal sealed class OfflineModelStore
             // own remark. An unreadable file is not a verified one.
             return false;
         }
+    }
+
+    /// <summary>The extensions that can steer a native load: a DLL the import table will find
+    /// first, and a side-by-side manifest that can redirect one. Anything else in the directory is
+    /// somebody's marker file and is none of this check's business.</summary>
+    private static readonly string[] LoadSteeringExtensions = { ".dll", ".manifest" };
+
+    /// <summary>Is the verified library alone in its directory, as an install leaves it? See
+    /// <see cref="IsVerifiedNative"/>'s remarks — this is the dependency half of ruling E8-f, and it
+    /// is a check for ABSENCE because a dependency has no digest in the manifest to be checked
+    /// against.</summary>
+    private static bool NoStrangerBesideIt(FileInfo library)
+    {
+        var directory = library.Directory;
+        if (directory is null || !directory.Exists) return false;
+
+        foreach (var neighbour in directory.EnumerateFiles("*", SearchOption.TopDirectoryOnly))
+        {
+            if (string.Equals(neighbour.Name, library.Name, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (LoadSteeringExtensions.Contains(neighbour.Extension, StringComparer.OrdinalIgnoreCase))
+                return false;
+        }
+
+        return true;
     }
 
     // =============================================================================================
@@ -265,6 +307,14 @@ internal sealed class OfflineModelStore
     {
         if (!_manifest.IsVerifiable)
             return OfflineInstallResult.Failed(OfflineInstallFailure.Verification);
+
+        // The refusal the remarks above promise, and it is load-bearing rather than tidy (review):
+        // every failure path here deletes the WHOLE root, which is only honest while this method
+        // cannot be running over an install that was already there. The About tab makes that true by
+        // showing Remove instead of Download — but the store is a headless unit (I2) and its own
+        // contract may not depend on a caller's button label. Already installed is a success: there
+        // is nothing to download and the caller's "downloaded ⇒ enabled" is the right end state.
+        if (IsInstalled) return OfflineInstallResult.Ok;
 
         // Every URL, checked before a single request is made (AC 6). The manifest composes them all
         // from one host constant, so this cannot fail in production — which is the point: the check
