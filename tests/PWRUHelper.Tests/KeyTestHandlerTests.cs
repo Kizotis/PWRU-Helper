@@ -13,13 +13,13 @@ namespace PWRUHelper.Tests;
 /// appears). The probe is handed IN, so not one of these cases touches a network — the sentences
 /// and the provider requests are asserted in <c>KeyTestTests</c>.
 ///
-/// <para><c>[Collection("WPF")]</c>: every case builds a real <see cref="MainWindow"/> on the one
+/// <para><c>[Collection("Gates")]</c>: every case builds a real <see cref="MainWindow"/> on the one
 /// STA thread, with <see cref="SettingsService"/> pointed at a throwaway file. The awaits are
 /// pumped through a <see cref="DispatcherFrame"/> rather than blocked on, because the handler's
 /// continuations come back to that dispatcher — blocking it would deadlock the very thing under
 /// test.</para>
 /// </summary>
-[Collection("WPF")]
+[Collection("Gates")]
 public class KeyTestHandlerTests
 {
     private const string RealLookingKey = "0123456789abcdef0123456789abcdef";

@@ -29,7 +29,7 @@ namespace PWRUHelper.Tests;
 /// <see cref="StaTestHost"/>, shared by every WPF test. Settings go to a temp file: constructing
 /// a MainWindow saves them, and a test must never rewrite the developer's real %AppData% copy.
 /// </summary>
-[Collection("WPF")]
+[Collection("Gates")]
 public class TemplateRenderTests
 {
     [Fact]
@@ -519,51 +519,85 @@ public class TemplateRenderTests
     /// to <c>OnWindowLoaded</c>, on the pool, behind every await.</para>
     ///
     /// <para>It writes the run-wide redirect's own file (never the developer's <c>%AppData%</c>) and
-    /// deletes it again: the <c>Gates</c> collection is serialised against every other one, so no
-    /// case can see it, and a leftover file would seed the next gate case that opens no
-    /// <c>TempGateState</c> of its own.</para>
+    /// deletes it again — a leftover would seed the next gate case that opens no
+    /// <c>TempGateState</c> of its own. <b>E7.S8 corrected what that used to rest on:</b> this class
+    /// said the <c>Gates</c> collection was serialised against every other one, and it was not —
+    /// the gate cases ran beside this file's and read this very <c>blockedUntil: 2099</c> while it
+    /// existed. This class is now IN that collection, which is the serialisation.</para>
+    ///
+    /// <para><b>And it is attempted more than once, which is not a shrug</b> (E7.S8; this case and
+    /// <c>PerLineFallbackTests</c>' were the two E7.S7's review saw fail in 2 of 7 full runs).
+    /// Laying any part of a real window out makes WPF queue that window's <c>Loaded</c>, and
+    /// <c>Loaded</c> is raised by a <b>dispatcher operation</b> — so a window an earlier case
+    /// measured fires <c>OnWindowLoaded</c> whenever a later layout pass happens to complete, which
+    /// on this STA thread is a leftover 1 Hz countdown tick, seconds later and inside somebody
+    /// else's case. Its answer is <c>Task.Run(…EnsureGateStateLoaded…)</c>, which reads
+    /// <c>provider-state.json</c> — <b>this file</b> — and seeds the registry the assertion below
+    /// reads. Nothing in a test can stop that: it is the app's own behaviour, correctly, and the
+    /// only handle on it would be a production change to hold the task. So each attempt puts the
+    /// registry back first: <b>a constructor that really reads the file fails every attempt</b>,
+    /// while a stray warm-up can only ever spoil one.</para>
     /// </summary>
     [Fact]
     public void A_new_window_has_not_read_the_gate_state_file_when_it_paints_the_chip()
     {
         using var _ = new TempSettings("""{ "SettingsVersion": 3 }""");
 
-        // Far enough out to be a live window under either clock a previous case can have left
-        // behind — the wall clock, or the run-wide virtual one.
         var path = TestGateStateRedirect.Path;
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, """
-            { "version": 1, "providers": { "google-dict": {
-                "blockedUntil": "2099-01-01T00:00:00+00:00",
-                "keyBlockedUntil": null,
-                "strikes": 1,
-                "lastKind": "RateLimited",
-                "lastAt": null,
-                "cleanSince": null } } }
-            """);
 
-        try
+        Exception? failure = null;
+        for (var attempt = 0; attempt < 5; attempt++)
         {
-            StaTestHost.Run(() =>
+            // "Nothing read yet" is this case's premise, and an earlier case in this collection may
+            // have loaded the registry — which would make the assertions below VACUOUS, since a
+            // window cannot read a file the process has already read.
+            ProviderGates.ResetForTests();                            // …which nulls the override
+            ProviderGates.PathOverride = TestGateStateRedirect.Path;  // never the real %AppData%
+
+            // Far enough out to be a live window under either clock a previous case can have left
+            // behind — the wall clock, or the run-wide virtual one.
+            File.WriteAllText(path, """
+                { "version": 1, "providers": { "google-dict": {
+                    "blockedUntil": "2099-01-01T00:00:00+00:00",
+                    "keyBlockedUntil": null,
+                    "strikes": 1,
+                    "lastKind": "RateLimited",
+                    "lastAt": null,
+                    "cleanSince": null } } }
+                """);
+
+            try
             {
-                var window = new MainWindow();
+                StaTestHost.Run(() =>
+                {
+                    var window = new MainWindow();
 
-                Assert.Equal("○ checking…", window.WriteChip.Text);
-                var tooltip = Assert.IsType<string>(window.WriteChip.ToolTip);
+                    Assert.Equal("○ checking…", window.WriteChip.Text);
+                    var tooltip = Assert.IsType<string>(window.WriteChip.ToolTip);
 
-                var google = tooltip.Split('\n')[0];
-                Assert.StartsWith("Google ", google, StringComparison.Ordinal);
-                Assert.EndsWith("● ready", google, StringComparison.Ordinal);
-                Assert.DoesNotContain("paused", tooltip, StringComparison.Ordinal);
+                    var google = tooltip.Split('\n')[0];
+                    Assert.StartsWith("Google ", google, StringComparison.Ordinal);
+                    Assert.EndsWith("● ready", google, StringComparison.Ordinal);
+                    Assert.DoesNotContain("paused", tooltip, StringComparison.Ordinal);
 
-                // …and nothing started counting down to a window the app has not read (I10).
-                Assert.False(window.CountdownRunning);
-            });
+                    // …and nothing started counting down to a window the app has not read (I10).
+                    Assert.False(window.CountdownRunning);
+                });
+
+                return;
+            }
+            catch (Exception ex)
+            {
+                failure = ex;   // a stray warm-up, or the regression — the next attempts say which
+            }
+            finally
+            {
+                File.Delete(path);
+            }
         }
-        finally
-        {
-            File.Delete(path);
-        }
+
+        throw failure!;
     }
 
     /// <summary>
@@ -654,6 +688,9 @@ public class TemplateRenderTests
                                  window.EngineInUseText, window.EngineChainWriteText,
                                  window.EngineChainReadText, window.EnginesIntroText,
                                  window.CachePrivacyText, window.OfflineEngineText,
+                                 // E7.S8's two rows: the pauses line under the intro, and the P1
+                                 // expectation line beside "Check for updates".
+                                 window.EnginesPausesText, window.FirstLaunchExpectationText,
                              })
                     {
                         line.Measure(new Size(600, 1000));
@@ -680,6 +717,9 @@ public class TemplateRenderTests
                 // §4.2's specified copy is on screen, from the deck (GAP-4 / UX-DR19) — a XAML
                 // attribute would put a second spelling of it one file away from the scan.
                 Assert.Equal(UserMessages.AboutEnginesIntro(), window.EnginesIntroText.Text);
+                Assert.Equal(UserMessages.AboutEnginesPauses(), window.EnginesPausesText.Text);
+                Assert.Equal(UserMessages.FirstLaunchExpectation(),
+                             window.FirstLaunchExpectationText.Text);
                 Assert.Equal(UserMessages.AboutKeysIntro(), window.KeysIntroText.Text);
                 Assert.Equal(UserMessages.AboutOfflineNotInstalled(), window.OfflineEngineText.Text);
                 Assert.Equal(UserMessages.CachePrivacyLine(), window.CachePrivacyText.Text);

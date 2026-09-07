@@ -1197,6 +1197,11 @@ public class UserMessagesTests : GatesTestBase
             // About tab's static page prose (paragraphs with Hyperlinks in them) stays in the XAML.
             "By default everything runs on free engines",
             "and your own quota, instead of sharing a free door", "Keys are stored only on your PC.",
+            // E7.S8's two About rows. Both are quoted word for word in README.md, which is not
+            // production source and is not scanned — the point of the scan is that the app has ONE
+            // spelling of each, so that the README has something to quote.
+            "it is paused for a few minutes and the next one takes over",
+            "can take up to about 10 ", "seconds, with nothing on screen.",
             "Not installed — about 50 MB to download",
             "they hold chat text, they never leave your PC",
             "Clear cache", "Cache cleared — ", " saved translation(s) removed.",

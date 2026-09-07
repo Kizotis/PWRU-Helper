@@ -30,7 +30,7 @@ namespace PWRUHelper.Tests;
 /// gates, so it needs no <c>Gates</c> collection either. The instants are this file's own
 /// (IS-6: an injected clock, never <c>DateTimeOffset.UtcNow</c>).</para>
 /// </summary>
-[Collection("WPF")]
+[Collection("Gates")]
 public class CountdownTests
 {
     private static readonly DateTimeOffset Now = new(2026, 9, 7, 12, 0, 0, TimeSpan.Zero);
@@ -305,8 +305,10 @@ public class CountdownTests
         // is bounded by two calls that unambiguously bracket this one inside it. Both are unique in
         // the file, and NEITHER is the registry flush that also sits in there: writing the literal
         // "ProviderGates." in this file's code — even inside a scan's needle — makes
-        // ProviderGatesTests' own guard read this class as a registry toucher and demand it join the
-        // "Gates" collection, which it cannot (it is already in "WPF") and does not need to.
+        // ProviderGatesTests' own guard read this class as a registry toucher. This class now IS in
+        // the "Gates" collection (E7.S8), so that would no longer be a failure — but the needle is
+        // still split, because naming the registry here would claim a dependency this file does not
+        // have.
         int cancelKeyTests = main.IndexOf("CancelKeyTests();", StringComparison.Ordinal);
         int flushCache = main.IndexOf("TranslationChains.FlushCache();", StringComparison.Ordinal);
         Assert.True(cancelKeyTests >= 0 && flushCache > cancelKeyTests,

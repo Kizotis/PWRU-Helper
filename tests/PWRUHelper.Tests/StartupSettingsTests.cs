@@ -17,7 +17,7 @@ namespace PWRUHelper.Tests;
 ///
 /// So: construct the real window against a saved file and assert the file is unchanged.
 /// </summary>
-[Collection("WPF")]
+[Collection("Gates")]
 public class StartupSettingsTests
 {
     // A saved file from a user who deliberately picked "Boost contrast" (and is on the current

@@ -6,19 +6,31 @@ namespace PWRUHelper.Tests;
 /// <summary>
 /// IS-5 / risk R-08. <c>ProviderGates</c> is static, and xUnit parallelises <b>collections</b> by
 /// default: two cases in different collections would otherwise hand each other a half-open gate or
-/// a fake clock. Everything that touches <c>ProviderGates</c> joins this collection, exactly as
-/// everything that touches the WPF host joins <c>WpfCollection</c> (<c>StaTestHost.cs:73-74</c>).
+/// a fake clock. Everything that touches <c>ProviderGates</c> joins this collection — <b>and since
+/// E7.S8 that includes every STA class</b>, because a real <c>MainWindow</c> reaches the registry
+/// through <c>TranslationChains</c> whether or not the test file names it.
 ///
-/// <para>A second non-parallel collection is the accepted, bounded cost of a second static facade
-/// (CI-5). <b>Do not change the runner's default parallelism to work around it</b> — the suite must
-/// stay green with no <c>xunit.runner.json</c> at all, which is this story's definition of done.</para>
+/// <para><b>Measured, and the reason the "WPF" collection no longer exists.</b>
+/// <c>DisableParallelization</c> did <b>not</b> keep this collection from running beside the STA
+/// one. Reproduced deterministically (E7.S8): a 2.5 s sleep inserted into
+/// <c>TemplateRenderTests.A_new_window_has_not_read_the_gate_state_file_when_it_paints_the_chip</c>
+/// — between writing the redirected <c>provider-state.json</c> and building the window — made that
+/// case fail on a <b>30-minute rate-limit pause opened by a <c>PerLineFallbackTests</c> case in
+/// THIS collection</b>, with only those two classes selected. The two collections interleave; the
+/// attribute is kept because it also serialises this collection against itself, but it is not what
+/// makes the suite safe. <b>One collection is.</b> That race is the flake E7.S7's review saw in 2
+/// of 7 full runs, in both directions: the STA case reading a pause a gate case had just opened,
+/// and the gate cases reading the <c>blockedUntil: 2099</c> file the STA case writes.</para>
 ///
-/// <para><c>DisableParallelization</c> also keeps this collection from running beside any other one
-/// (<c>WpfCollection</c> does not set it, so "two non-parallel collections" would overstate what is
-/// there); it costs nothing — these cases are pure arithmetic — and it means a future test that
-/// reaches <c>ProviderGates</c> without joining the collection is a bug this file can still survive.
-/// <c>ProviderGatesTests.Every_test_class_that_touches_the_registry_joins_this_collection</c> is what
-/// stops that bug from being written in the first place.</para>
+/// <para>A single non-parallel collection is the accepted, bounded cost of a static facade plus a
+/// single-threaded STA host (CI-5). <b>Do not change the runner's default parallelism to work
+/// around it</b> — the suite must stay green with no <c>xunit.runner.json</c> at all, which is that
+/// story's definition of done, and the ~40 pure-logic classes still run in parallel.</para>
+///
+/// <para><c>ProviderGatesTests.Every_test_class_that_touches_the_registry_joins_this_collection</c>
+/// is what stops the hole from being re-opened: it triggers on the registry, on
+/// <c>GatesTestBase</c>, on the redirected gate-state <b>file</b> (which is how
+/// <c>TemplateRenderTests</c> slipped past it) and on the STA host.</para>
 /// </summary>
 [CollectionDefinition("Gates", DisableParallelization = true)]
 public class GatesCollection { }

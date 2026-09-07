@@ -35,7 +35,7 @@ namespace PWRUHelper.Tests;
 /// so nothing joins the registry and nothing reads <c>provider-state.json</c>; the windows use
 /// <c>TempSettings</c>, so no test writes the developer's own <c>%AppData%</c>.</para>
 /// </summary>
-[Collection("WPF")]
+[Collection("Gates")]
 public class PausedStateTests
 {
     private static readonly DateTimeOffset Now = new(2026, 9, 7, 12, 0, 0, TimeSpan.Zero);

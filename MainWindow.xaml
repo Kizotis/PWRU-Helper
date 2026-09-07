@@ -587,6 +587,14 @@
                         </StackPanel>
                         <TextBlock Text="A free helper for the Perfect World RU (pwonline.ru) community."
                                    Foreground="{StaticResource TextMutedBrush}" Margin="0,2,0,0" TextWrapping="Wrap"/>
+                        <!-- NFR10 / AC 3 (E7.S8): the application's own licence, stated in the app and
+                             not only in the repo. The MPL-2.0 half of that AC has nothing to declare
+                             while E8 does not ship — there is no offline engine, no models and no
+                             wrapper here — and inventing a licence block for an absent dependency
+                             would be the same kind of lie as a Chain line naming a tier the app
+                             cannot call. E8.S3 adds it beside this line when it lands. -->
+                        <TextBlock Text="Free and open source, under the MIT licence."
+                                   Foreground="{StaticResource TextMutedBrush}" Margin="0,2,0,0" TextWrapping="Wrap"/>
 
                         <!-- updates -->
                         <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
@@ -595,6 +603,13 @@
                             <TextBlock x:Name="UpdateStatus" VerticalAlignment="Center" Margin="10,0,0,0"
                                        TextWrapping="Wrap" Foreground="{StaticResource TextMutedBrush}"/>
                         </StackPanel>
+                        <!-- The P1 expectation copy (ux §3.8), here because this is where a player
+                             stands the moment before it happens to them: the update they are about
+                             to install is a brand-new file, and Windows will check it. Text from
+                             UserMessages (GAP-4) — the README quotes the same words, and §3.8's
+                             third placement (the one-time toast, with LastRunVersion) is E9.S10's. -->
+                        <TextBlock x:Name="FirstLaunchExpectationText" TextWrapping="Wrap" FontSize="12"
+                                   Foreground="{StaticResource TextMutedBrush}" Margin="0,6,0,0"/>
 
                         <!-- free-project message -->
                         <Border Background="{StaticResource PanelBrush}" CornerRadius="8"
@@ -651,6 +666,12 @@
                                    Foreground="{StaticResource GoldBrush}" Margin="0,18,0,6"/>
                         <!-- Text from UserMessages.AboutEnginesIntro() (AC 3). -->
                         <TextBlock x:Name="EnginesIntroText" TextWrapping="Wrap"
+                                   Foreground="{StaticResource TextMutedBrush}" Margin="0,0,0,6"/>
+                        <!-- E7.S8: what happens when one of them stops answering, which is the half
+                             §4.2's block never said out loud. Principle 2's third question, answered
+                             "no" — so it points at the line below rather than at a button. Text from
+                             UserMessages; the README quotes the same words (UX-DR19). -->
+                        <TextBlock x:Name="EnginesPausesText" TextWrapping="Wrap"
                                    Foreground="{StaticResource TextMutedBrush}" Margin="0,0,0,6"/>
 
                         <!-- §4.2's read-only pair: what is being used, and what the order is. Both

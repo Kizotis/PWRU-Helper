@@ -538,7 +538,13 @@ internal static class UserMessages
 
     /// <summary>The main window's read-once button while nothing is reading. The shipped wording is
     /// kept rather than taking A8's paraphrase ("Read the area once"): it is the phrase the README
-    /// walks a new player through by name, and renaming it is E7.S8's call, not this pass's.</summary>
+    /// walks a new player through by name.
+    ///
+    /// <para><b>E7.S8 made that call and closed it.</b> The three surfaces are reconciled ON THE
+    /// SHIPPED LABEL: this button, the Translator tab's empty-state hint (which quotes it by name)
+    /// and the README all read <i>Select area &amp; read once</i>. A8's paraphrase is retired — the
+    /// deck's job is the sentences, and renaming a control a public README has walked users through
+    /// since v0.9 buys nothing a reader can use.</para></summary>
     public static string ReadOnceLabel() => "Select area & read once";
 
     public static string ReadOnceTooltip()
@@ -671,6 +677,38 @@ internal static class UserMessages
     /// acceptable because nothing here has to be done.</summary>
     public static string AboutEnginesIntro()
         => "By default everything runs on free engines — no key, no signup, nothing to set up.";
+
+    /// <summary>
+    /// <b>The second half of the promise: what happens when one of them stops answering</b> (E7.S8;
+    /// §4.2's block explains the state, §3.1's rows explain one failure, and neither says the thing
+    /// a player actually wants to know before it happens). It is written to principle 2's third
+    /// question — <i>must you act?</i> — and the answer is no, which is why the sentence ends there
+    /// rather than pointing at a button (amendment <b>A4</b>: the chain's progress is told by the
+    /// chip and the one-time notice, never promised in advance).
+    ///
+    /// <para>Quoted word for word in the README's "How translation works" section, which is why it
+    /// is here and not in the XAML (UX-DR19 / GAP-4).</para>
+    /// </summary>
+    public static string AboutEnginesPauses()
+        => "If an engine stops answering it is paused for a few minutes and the next one takes over "
+         + "on its own — nothing needs pressing, and a paused engine comes back by itself.";
+
+    /// <summary>
+    /// <b>The P1 expectation copy</b> (<c>ux-mode-degrade.md</c> §3.8; <c>recommandations.md</c> §3.1
+    /// ranks it as the whole of what can ship without touching a line of C#). Nothing in the app can
+    /// shorten this wait — it happens <b>before the process exists</b>, so a splash screen cannot
+    /// help and must not be proposed as a fix. Expectation is the only lever there is.
+    ///
+    /// <para>§3.8's README wording, verbatim, because §3.8 gives the SAME words to the README and to
+    /// the app: one spelling, one home (UX-DR19). §3.8's third placement — the one-time toast after
+    /// a version change, and the <c>LastRunVersion</c> it needs — is <b>E9.S10</b>'s and is
+    /// deliberately not here.</para>
+    /// </summary>
+    public static string FirstLaunchExpectation()
+        => "The first launch after downloading — and after every update — can take up to about 10 "
+         + "seconds, with nothing on screen. Windows checks a file it has never seen before. Later "
+         + "launches are fast (about a second). Every update is a brand-new file as far as Windows "
+         + "is concerned, so the check happens again after each one.";
 
     /// <summary>§4.2's keys-block sentence, AC 3's second literal. Both halves matter: what a key
     /// buys (quota of your own) and where it lives (this PC, and nowhere else).</summary>

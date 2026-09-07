@@ -13,7 +13,7 @@ namespace PWRUHelper.Tests;
 /// what was translated into the game. So the load-bearing assertion is that the rendered document
 /// reads back character-for-character identical to the translation.
 /// </summary>
-[Collection("WPF")]
+[Collection("Gates")]
 public class TranslatorOutputRenderTests
 {
     [Fact]

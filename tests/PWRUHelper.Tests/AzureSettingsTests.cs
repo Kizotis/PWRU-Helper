@@ -23,13 +23,14 @@ namespace PWRUHelper.Tests;
 /// change handler bails on <c>_restoringSettings</c> (I12 — the v0.12.3 clobber, whose end-to-end
 /// case is <c>StartupSettingsTests</c>' and is the one that matters).</para>
 ///
-/// <para><c>[Collection("WPF")]</c>: half the cases construct a real <see cref="MainWindow"/>, and
-/// all of them point <see cref="SettingsService"/> at a temp file — one STA thread, one static
-/// path override. Nothing here names <c>ProviderGates</c>: the key save reaches the registry
-/// through <c>TranslationChains.OnKeySaved</c>, and the gate half of AC 6 is asserted where that
-/// facade lives, in <c>ChainCompositionTests</c> (the "Gates" collection).</para>
+/// <para><c>[Collection("Gates")]</c>: half the cases construct a real <see cref="MainWindow"/>,
+/// and all of them point <see cref="SettingsService"/> at a temp file — one STA thread, one static
+/// path override. It is the same collection the registry cases use, and deliberately so
+/// (E7.S8): a real <c>MainWindow</c> reaches <c>ProviderGates</c> through
+/// <c>TranslationChains</c> whether or not this file names it, so the STA classes and the gate
+/// classes have to be serialised against each other — see <c>GatesCollection</c>.</para>
 /// </summary>
-[Collection("WPF")]
+[Collection("Gates")]
 public class AzureSettingsTests
 {
     private const string RealLookingKey = "0123456789abcdef0123456789abcdef";

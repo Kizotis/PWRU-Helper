@@ -32,7 +32,7 @@ namespace PWRUHelper.Tests;
 /// sleeps (CI-3, IS-6). The loop-level facts a headless suite cannot execute are pinned in the
 /// source, the shape <c>LivePauseTests</c> and <c>ChainCompositionTests</c> already use.</para>
 /// </summary>
-[Collection("WPF")]
+[Collection("Gates")]
 public class ReadOnceStatusTests
 {
     /// <summary>Enough settings to build a <c>MainWindow</c> without touching the developer's own

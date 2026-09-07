@@ -11,7 +11,7 @@ namespace PWRUHelper.Tests;
 /// only ever reaches NEW installs — everyone else sits on numbers nobody chose. The reset button is
 /// the way back, and this drives the real window to prove it works end to end.
 /// </summary>
-[Collection("WPF")]
+[Collection("Gates")]
 public class ResetTuningTests
 {
     // Verbatim from the developer's own settings.json: values frozen since before v0.12.1, which

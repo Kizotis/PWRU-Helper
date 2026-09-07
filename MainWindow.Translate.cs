@@ -724,6 +724,8 @@ public partial class MainWindow
     private void SetAboutBlockCopy()
     {
         EnginesIntroText.Text = UserMessages.AboutEnginesIntro();
+        EnginesPausesText.Text = UserMessages.AboutEnginesPauses();
+        FirstLaunchExpectationText.Text = UserMessages.FirstLaunchExpectation();
         KeysIntroText.Text = UserMessages.AboutKeysIntro();
         OfflineEngineText.Text = UserMessages.AboutOfflineNotInstalled();
         CachePrivacyText.Text = UserMessages.CachePrivacyLine();
