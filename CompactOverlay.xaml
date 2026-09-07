@@ -27,10 +27,10 @@
                                FontWeight="Bold" VerticalAlignment="Center" Visibility="Collapsed"/>
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <!-- Copy from the deck, not from here (A8): this button becomes the cancel while
+                         a read is in flight — see MainWindow.SetReadOnceCancelMode. -->
                     <Button x:Name="ReadOnceButton" Style="{StaticResource GhostButton}" Padding="8,2"
-                            Margin="0,0,6,0" Content="👁 Read once" Click="ReadOnce_Click"
-                            ToolTip="Draw a box over Russian text and read it once — the result appears framed in the feed below. Stays in compact mode."
-                            AutomationProperties.Name="Select an area and read it once"/>
+                            Margin="0,0,6,0" Click="ReadOnce_Click"/>
                     <Button x:Name="LiveToggleButton" Style="{StaticResource GhostButton}" Padding="8,2"
                             Content="▶ Live" Click="LiveToggle_Click"
                             ToolTip="Start / stop live translation on your last area (Ctrl+Alt+L)"

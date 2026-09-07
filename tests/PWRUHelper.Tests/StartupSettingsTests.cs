@@ -17,7 +17,7 @@ namespace PWRUHelper.Tests;
 ///
 /// So: construct the real window against a saved file and assert the file is unchanged.
 /// </summary>
-[Collection("WPF")]
+[Collection("Gates")]
 public class StartupSettingsTests
 {
     // A saved file from a user who deliberately picked "Boost contrast" (and is on the current
@@ -50,6 +50,65 @@ public class StartupSettingsTests
         // …and, the part that actually broke, the file on disk must still say so.
         using var saved = JsonDocument.Parse(File.ReadAllText(settings.Path));
         Assert.Equal("contrast", saved.RootElement.GetProperty("OcrFilterMode").GetString());
+    }
+
+    // The same file, for the controls E6.S3 adds. The region is deliberately NOT one of the nine
+    // seeded ones: `SelectTag` silently does nothing when no item matches, so a free-text region is
+    // the case a seeded-list-only test would miss — and the one that would come back blank while
+    // the file still held it.
+    private const string AzureSettings = """
+    {
+      "AzureApiKey": "0123456789abcdef0123456789abcdef",
+      "AzureRegion": "norwayeast",
+      "UseKeyForReading": true,
+      "OcrFilterMode": "contrast",
+      "SettingsVersion": 3
+    }
+    """;
+
+    /// <summary>
+    /// TP-SET-05 — the clobber test for E6.S3's controls, and the DoD of that story. Same shape as
+    /// the case above because it is the same bug: a change handler firing during
+    /// <c>InitializeComponent()</c> (the region combo's <c>SelectionChanged</c>) writing the
+    /// not-yet-restored UI back to disk.
+    ///
+    /// <para>Asserting the restored control is the half that already passed while the bug shipped —
+    /// so the file on disk is re-read afterwards and must be untouched, key, region and opt-in
+    /// alike.</para>
+    /// </summary>
+    [Fact]
+    public void Starting_the_app_does_not_overwrite_the_saved_azure_key_and_region()
+    {
+        using var settings = new TempSettings(AzureSettings);
+        var beforeStartup = settings.Read();
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+
+            Assert.Equal("0123456789abcdef0123456789abcdef", window.AzureKeyBox.Password);
+            Assert.Null(window.AzureRegionCombo.SelectedItem);           // free text: no item matches
+            Assert.Equal("norwayeast", window.AzureRegionCombo.Text);
+            // E6.S4's control, and it is the one with money behind it: a saved opt-in that came
+            // back unticked would silently move the LIVE loop off the user's key, and a handler
+            // firing during InitializeComponent() would write that false back over the file.
+            Assert.True(window.AzureForReadingCheck.IsChecked);
+            Assert.True(window.AzureForReadingCheck.IsEnabled);          // there IS a key to opt into
+        });
+
+        // TP-SET-05's own wording is "the file on disk is byte-identical", and the stronger assert
+        // is worth the strictness: a clobbering handler that happened to write the SAME values back
+        // would satisfy every value assert below while proving the guard did not hold. Starting the
+        // app must not write settings.json at all — this file is already at the current version, so
+        // no migration is owed either (AC 2).
+        Assert.Equal(beforeStartup, settings.Read());
+
+        using var saved = JsonDocument.Parse(File.ReadAllText(settings.Path));
+        Assert.Equal("0123456789abcdef0123456789abcdef",
+                     saved.RootElement.GetProperty("AzureApiKey").GetString());
+        Assert.Equal("norwayeast", saved.RootElement.GetProperty("AzureRegion").GetString());
+        Assert.True(saved.RootElement.GetProperty("UseKeyForReading").GetBoolean());
+        Assert.Equal(3, saved.RootElement.GetProperty("SettingsVersion").GetInt32());
     }
 
     [Fact]

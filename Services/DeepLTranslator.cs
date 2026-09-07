@@ -24,6 +24,11 @@ public class DeepLTranslator : ITranslator
     private readonly string _key;
     private readonly string _endpoint;
 
+    /// <summary>The key check of E6.S5, on the same host the translation would use. See
+    /// <see cref="TestKeyAsync"/> — it is authenticated, it is free, and it is the reason DeepL's
+    /// button can honestly say "Test key" while Azure's cannot.</summary>
+    private readonly string _usageEndpoint;
+
     /// <summary>§7.0's shared pipeline. DeepL had none of it: one send, no retry, no log line and
     /// no gate. What stays in this file is DeepL's: the host choice, the form, the auth header, the
     /// parser and the count-mismatch throw.</summary>
@@ -42,6 +47,12 @@ public class DeepLTranslator : ITranslator
         _endpoint = FreeKey(_key)
             ? "https://api-free.deepl.com/v2/translate"
             : "https://api.deepl.com/v2/translate";
+        // Same host selection, same rule: a ":fx" key on api.deepl.com is a 403 whichever path
+        // asks. One expression would be tidier and would put the host choice in two places the
+        // day one of them grows a condition, so both read FreeKey and neither derives the other.
+        _usageEndpoint = FreeKey(_key)
+            ? "https://api-free.deepl.com/v2/usage"
+            : "https://api.deepl.com/v2/usage";
         _http = handler == null ? Http : CreateClient(handler);
         _core = new HttpProviderCore(Options(_key), _http, gate);
     }
@@ -92,7 +103,17 @@ public class DeepLTranslator : ITranslator
         text = text.Trim();
         if (text.Length == 0) return "";
         var outp = await RequestAsync(new[] { text }, source, target, ct).ConfigureAwait(false);
-        return outp.Count > 0 ? outp[0] : "";
+
+        // One input, one translation — the same 1:1 contract the batch path below enforces, and
+        // aligned with it by ruling E6-d. `outp.Count > 0 ? outp[0] : ""` padded with a BLANK,
+        // which is worse than padding with the source: an empty string is not a failure placeholder,
+        // so it does not start with "(", so the chain counts this tier as a success and no fallback
+        // runs, and CachingTranslator stores "" as that line's translation for the session (I4's
+        // rule cannot see a blank). A count that is not exactly one is a BadResponse.
+        if (outp.Count != 1)
+            throw new TranslationException(TranslationErrorKind.BadResponse,
+                "DeepL returned an unexpected response.");
+        return outp[0];
     }
 
     public async Task<List<string>> TranslateLinesAsync(IReadOnlyList<string> lines,
@@ -109,6 +130,106 @@ public class DeepLTranslator : ITranslator
         // bypassed the fallback AND cached raw Russian source as if it were a translation.)
         throw new TranslationException(TranslationErrorKind.BadResponse,
             "DeepL returned an unexpected response.");
+    }
+
+    // =============================================================================================
+    //  E6.S5 — "Test key", the half that is genuinely free
+    // =============================================================================================
+
+    /// <summary>
+    /// Validate the key without translating a character. <c>GET {host}/v2/usage</c> takes the same
+    /// <c>Authorization</c> header as a translation, spends nothing, and answers
+    /// <c>{"character_count":…,"character_limit":…}</c> — so it settles BOTH §3.7 rows this button
+    /// has to decide: whether the key is accepted, and whether its quota is spent. That is ruling
+    /// <b>E6-b</b>, and it is why DeepL's button can honestly read "Test key" while Azure's cannot.
+    ///
+    /// <para><b>Through <see cref="HttpProviderCore"/>, not around it</b> — the answer to the
+    /// story's OQ-f, recorded here beside the send because the next reader will ask. The core is
+    /// what redacts the key out of any body head before the §10.1 line (I11): a probe sent on the
+    /// bare client would have no scrubber, and E1.S5's review found a credential leak in exactly
+    /// this class. It also means the gate is consulted, so a paused DeepL answers "paused" instead
+    /// of a sentence about a key nobody asked about — E6-b's third clause. The cost is real and
+    /// accepted: this probe cannot diagnose a provider while its own window is open. Nothing is
+    /// reported to the gate that a translation would not have reported.</para>
+    ///
+    /// <para>A genuine cancel travels out untouched (I3): the only catches here are typed, and the
+    /// core's own filtered one is what tells a 12 s HttpClient timeout from a user's cancel.</para>
+    /// </summary>
+    internal async Task<KeyTestResult> TestKeyAsync(CancellationToken ct = default)
+    {
+        // Nothing to test, and nothing is sent: an empty key would earn a real 401 and — through
+        // the core — a real AuthFailed gate strike, for a mistake no request can fix. Same guard as
+        // RequestAsync's, in the same place in the method, for the same reason.
+        if (string.IsNullOrEmpty(_key)) return KeyTestResult.Failed(TranslationErrorKind.AuthFailed);
+
+        var uri = new Uri(_usageEndpoint);
+
+        // A fresh message per attempt (the core may make two), and the key in a HEADER only — never
+        // in the query, which §10.1 renders and proxies keep (I11).
+        HttpRequestMessage Build()
+        {
+            var req = new HttpRequestMessage(HttpMethod.Get, uri);
+            req.Headers.TryAddWithoutValidation("Authorization", "DeepL-Auth-Key " + _key);
+            return req;
+        }
+
+        try
+        {
+            // No text and no direction: this is not a translation, so the §10.1 line's bytes/lines
+            // are zero and `dir=` renders "-" rather than claiming a language pair.
+            return await _core.SendAsync(uri, Build, ParseUsage, "", "", null,
+                RequestPriority.Interactive, ct).ConfigureAwait(false);
+        }
+        catch (TranslationException ex) when (ex.NotSent)
+        {
+            // The gate refused it before anything left the machine (ruling E3-b). The seconds are
+            // counted here and formatted by the UI (I2).
+            return KeyTestResult.PausedFor(ex.Kind, LiveTickPolicy.CountdownSeconds(ex.RetryAt, _core.Now));
+        }
+        catch (TranslationException ex)
+        {
+            return KeyTestResult.Failed(ex.Kind);
+        }
+    }
+
+    /// <summary>
+    /// The <c>/v2/usage</c> body. <c>character_limit</c> is what turns a 200 into the quota row
+    /// without a translation ever being sent — DeepL answers 456 only on the translate path, so a
+    /// key whose allowance is spent would otherwise test as perfectly healthy and then fail in a
+    /// raid, which is the exact thing this button exists to prevent.
+    /// </summary>
+    internal static KeyTestResult ParseUsage(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var used = doc.RootElement.GetProperty("character_count").GetInt64();
+            // A limit that is not POSITIVE is not a limit: unmetered plans answer 0, and a negative
+            // one is a body nobody should quote back. Both become "no limit reported", which the
+            // sentence below already words correctly — the review found the `cap > 0` guard on the
+            // DECISION arriving one line too late to keep "500,000 of 0 characters used." off the
+            // screen.
+            long? limit = doc.RootElement.TryGetProperty("character_limit", out var el)
+                          && el.TryGetInt64(out var value) && value > 0 ? value : null;
+
+            var usage = UserMessages.DeepLUsage(used < 0 ? 0 : used, limit);
+            return limit is { } cap && used >= cap
+                ? KeyTestResult.Failed(TranslationErrorKind.QuotaExhausted, usage)
+                : KeyTestResult.Works(usage);
+        }
+        // FormatException is the one the review found missing, and ParseUsage is the first parser
+        // under this filter to read a NUMBER: JsonElement.GetInt64 raises it — not
+        // InvalidOperationException — for a number-shaped value it cannot represent (a decimal, or
+        // one past long.MaxValue). Escaping here cost twice: the gate heard `Unknown` for a body
+        // that is plainly a BadResponse, and the raw .NET message reached the status line.
+        catch (Exception ex) when (ex is JsonException or KeyNotFoundException
+                                      or InvalidOperationException or FormatException or OverflowException)
+        {
+            // Same rule as Parse above: a success whose body is not the provider's shape is a
+            // BadResponse, stated here because this method has no response to hand the mapper.
+            throw new TranslationException(TranslationErrorKind.BadResponse,
+                "DeepL returned an unexpected response.");
+        }
     }
 
     /// <summary>One logical call: this method owns the form, the auth header and the parser, and

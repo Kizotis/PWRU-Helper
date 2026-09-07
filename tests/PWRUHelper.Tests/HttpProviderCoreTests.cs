@@ -683,8 +683,35 @@ public class HttpProviderCoreTests : GatesTestBase
         // scan by existing. A hand-written list would have gone blind to it in exactly the way a
         // list of file names goes stale — which is what E3.S6's rename cost this test in the first
         // place. The filter reproduces today's seven files and nothing else.
+        // The derivation has a second arm since E6.S4 (ruling E6-d), and it is not a hand-written
+        // list creeping back. The request path starts one decorator FURTHER OUT than
+        // HttpProviderCore's own consumers: since E4.S4 both builders return a CachingTranslator, so
+        // every translation the app makes is awaited through it before any tier is reached. It names
+        // no provider — a cache is provider-agnostic by design (ruling E4-a) — so the "consults
+        // HttpProviderCore" arm structurally cannot find it, and its two awaits sat unscanned above
+        // seven files that are. The decorators the builders return are named here, and the floor
+        // below keeps them honest.
+        var decorators = new[] { "CachingTranslator.cs" };
+
+        bool NamesTheCore(string file) =>
+            File.ReadAllText(file).Contains("HttpProviderCore", StringComparison.Ordinal);
+
+        // …and the arm has to be LOAD-BEARING, which review of E6.S4 found it was not. The first arm
+        // matches on the file's RAW TEXT — comments included, deliberately, because RequestLog.cs,
+        // ChainTranslator.cs and PerLineFallback.cs are on the request path and name the core only in
+        // prose — so a single sentence in a decorator mentioning the core (as CachingTranslator.cs's
+        // own ConfigureAwait comment did, via "HttpProviderCoreTests") silently made this second arm
+        // dead code. Nothing failed and nothing would have: the file stayed scanned, by accident,
+        // until the day that comment was reworded. Asserted rather than remembered, and it is the
+        // mutation Winston asked for made permanent — delete the arm and the floor below goes red.
+        foreach (var decorator in decorators)
+            Assert.False(NamesTheCore(Path.Combine(ServicesDir(), decorator)),
+                $"{decorator} names HttpProviderCore, so the `decorators` arm it is listed in adds "
+              + "nothing — reword the mention or drop the arm; do not leave a dead derivation.");
+
         var onTheRequestPath = Directory.EnumerateFiles(ServicesDir(), "*.cs")
-            .Where(f => File.ReadAllText(f).Contains("HttpProviderCore", StringComparison.Ordinal))
+            .Where(f => NamesTheCore(f)
+                     || decorators.Contains(Path.GetFileName(f), StringComparer.Ordinal))
             .Where(f => Statements(f).Any(s => Regex.IsMatch(s, @"(^|[^\w.])await\s")))
             .OrderBy(Path.GetFileName, StringComparer.Ordinal)
             .ToList();
@@ -700,8 +727,15 @@ public class HttpProviderCoreTests : GatesTestBase
         // every per-line request in the app goes through its two awaits. It is on the derived list
         // because it names HttpProviderCore (it rethrows the core's NotSent refusals by contract),
         // and it is on this floor so that losing that reference silently un-scans the loop.
+        // AzureTranslator.cs joined with E6.S2 — by existing, which is the design: it names
+        // HttpProviderCore and it awaits, so the derivation above finds it. It is on the floor so
+        // that losing either reference cannot silently un-scan a keyed provider's request path.
+        // CachingTranslator.cs joined the floor with E6.S4 / ruling E6-d — through the `decorators`
+        // arm above, because it is the outermost await of every translation and cannot be derived
+        // from a provider reference it deliberately does not have.
         foreach (var known in new[] { "HttpProviderCore.cs", "GoogleGtxTranslator.cs",
                                       "GoogleDictTranslator.cs", "DeepLTranslator.cs",
+                                      "AzureTranslator.cs", "CachingTranslator.cs",
                                       "RequestLog.cs", "ChainTranslator.cs",
                                       "PerLineFallback.cs" })
             Assert.Contains(known, names);

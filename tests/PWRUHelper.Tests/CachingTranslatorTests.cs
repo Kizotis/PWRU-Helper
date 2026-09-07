@@ -19,11 +19,19 @@ public class CachingTranslatorTests
             return Task.FromResult(Transform(text));
         }
 
+        /// <summary>How badly the inner translator mis-counts its answer: -1 is one line short,
+        /// +1 is one too many. Ruling E6-d's whole subject — a 1:1 contract broken one layer below
+        /// the decorator.</summary>
+        public int Drift;
+
         public Task<List<string>> TranslateLinesAsync(IReadOnlyList<string> lines, string source, string target,
             CancellationToken ct = default)
         {
             BatchRequests.Add(lines.ToList());
-            return Task.FromResult(lines.Select(Transform).ToList());
+            var outp = lines.Select(Transform).ToList();
+            if (Drift < 0) outp.RemoveRange(outp.Count + Drift, -Drift);
+            for (var i = 0; i < Drift; i++) outp.Add("T:extra");
+            return Task.FromResult(outp);
         }
     }
 
@@ -127,5 +135,111 @@ public class CachingTranslatorTests
 
         await cache.TranslateAsync("b", "ru", "en");   // was evicted → re-fetched
         Assert.Equal(4, inner.SingleCalls);
+    }
+
+    // =============================================================================================
+    //  Ruling E6-d — I5 one layer above every provider: a mis-counted batch is never padded
+    // =============================================================================================
+
+    /// <summary>
+    /// <b>Ruling E6-d.</b> This decorator used to splice <c>j &lt; fresh.Count ? fresh[j] : missLines[j]</c>
+    /// — it padded a short inner answer with the <b>untranslated source line</b> and handed it back
+    /// as a translation. That is the exact bug I5 exists for, one layer higher than the provider it
+    /// was fixed in: <c>DeepLTranslator</c> stopped padding after it "bypassed the fallback AND
+    /// cached raw Russian source as if it were a translation", and the same splice sat here, above
+    /// <i>every</i> provider, unreached only because each of them throws first.
+    ///
+    /// <para>Unreachable is not the same as absent: since E4.S4 this decorator wraps the WHOLE
+    /// chain, so the day a tier answers 1:1-wrong without throwing — a future provider, a per-line
+    /// fallback that drops a line — the padding would be the app's answer and nothing would see it.
+    /// A short or long inner list is a <c>BadResponse</c>, and the cache keeps nothing from it.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(-1)]   // one line short
+    [InlineData(1)]    // one line too many
+    public async Task A_miscounted_inner_batch_is_a_BadResponse_and_is_never_padded(int drift)
+    {
+        var inner = new CountingTranslator { Drift = drift };
+        var cache = new CachingTranslator(inner);
+        var lines = new[] { "раз", "два", "три" };
+
+        var ex = await Assert.ThrowsAsync<TranslationException>(
+            () => cache.TranslateLinesAsync(lines, "ru", "en"));
+
+        Assert.Equal(TranslationErrorKind.BadResponse, ex.Kind);
+        // I11's habit applied to an exception message: it names the contract, never the text.
+        Assert.All(lines, l => Assert.DoesNotContain(l, ex.Message, StringComparison.Ordinal));
+
+        // …and NOTHING was cached from the bad answer (I4's sibling: a value produced by a broken
+        // contract is not a success). The same batch, from a translator that counts properly, is
+        // three misses again — a decorator that had stored the aligned prefix would ask for fewer.
+        inner.Drift = 0;
+        var second = await cache.TranslateLinesAsync(lines, "ru", "en");
+
+        Assert.Equal(new[] { "T:раз", "T:два", "T:три" }, second);
+        Assert.Equal(2, inner.BatchRequests.Count);
+        Assert.Equal(lines, inner.BatchRequests[1]);
+    }
+
+    /// <summary>
+    /// <b>The decision E6-d leaves open, pinned rather than discovered</b> (review of E6.S4): a
+    /// batch that is PART cache hit and part miss, where the miss batch comes back mis-counted.
+    /// The hits were already in hand — should they be served, with the misses left as failure
+    /// placeholders, or does the whole call fail?
+    ///
+    /// <para><b>The whole call fails, deliberately.</b> I5's rule is "never pad", and every way to
+    /// return the hits alone is a padding of some shape: a partial list breaks the 1:1 contract this
+    /// method's callers rely on (they zip the answer against the lines they asked for), and filling
+    /// the gaps with anything — placeholders included — is the decorator inventing a translation
+    /// nobody produced. A <c>BadResponse</c> is what the caller can actually act on: the chain's
+    /// next tier gets the whole batch, and it will serve the hits from this same cache for free.
+    /// Nothing is lost by throwing, which is what makes throwing the cheap answer as well as the
+    /// honest one.</para>
+    ///
+    /// <para>And the hits themselves are NOT lost — the throw is a refusal to answer, never an
+    /// eviction: the same lines come straight back out of the store on the next call, and the inner
+    /// translator is asked only for what is still missing.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_batch_of_hits_and_a_miscounted_miss_fails_whole_and_keeps_the_hits()
+    {
+        var inner = new CountingTranslator();
+        var cache = new CachingTranslator(inner);
+
+        await cache.TranslateLinesAsync(new[] { "раз", "два" }, "ru", "en");   // warm two lines
+        inner.Drift = -1;
+
+        var ex = await Assert.ThrowsAsync<TranslationException>(
+            () => cache.TranslateLinesAsync(new[] { "раз", "два", "три" }, "ru", "en"));
+        Assert.Equal(TranslationErrorKind.BadResponse, ex.Kind);
+
+        // The inner translator was asked for the ONE miss and nothing else, so the hits really were
+        // hits and the failure really is the miss batch's.
+        Assert.Equal(new[] { "три" }, inner.BatchRequests[1]);
+
+        // …and the two good entries survived it. A retry (the chain's next tier, or the next LIVE
+        // tick) pays only for the line that was never translated.
+        inner.Drift = 0;
+        Assert.Equal(new[] { "T:раз", "T:два", "T:три" },
+                     await cache.TranslateLinesAsync(new[] { "раз", "два", "три" }, "ru", "en"));
+        Assert.Equal(3, inner.BatchRequests.Count);
+        Assert.Equal(new[] { "три" }, inner.BatchRequests[2]);
+    }
+
+    /// <summary>The cache half of the same ruling from the other side: the throw must not become a
+    /// way to lose entries that were already good. A batch whose lines are all cached never reaches
+    /// the inner translator at all, so a mis-counting inner cannot even be asked.</summary>
+    [Fact]
+    public async Task A_miscounting_inner_translator_cannot_spoil_what_is_already_cached()
+    {
+        var inner = new CountingTranslator();
+        var cache = new CachingTranslator(inner);
+        var lines = new[] { "раз", "два" };
+
+        await cache.TranslateLinesAsync(lines, "ru", "en");     // warm, while it still counts
+        inner.Drift = -1;
+
+        Assert.Equal(new[] { "T:раз", "T:два" }, await cache.TranslateLinesAsync(lines, "ru", "en"));
+        Assert.Single(inner.BatchRequests);
     }
 }

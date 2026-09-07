@@ -49,7 +49,7 @@ Stop. Either way, the results appear on the **Translator** tab. Russian **gaming
 underneath** each translation — e.g. `В ПП хил` shows *🔑 В = LFM · ПП = Full Moon
 Pavilion · хил = heal* — and known slang is also **expanded before translating** so the
 English reads properly ("need a healer", not "need a hil"). Repeated messages are served
-from a local cache, so LFM spam translates instantly without re-asking Google.
+from a local cache, so LFM spam translates instantly without asking an engine twice.
 
 **3. Translator** — one page for **reading + writing**: type in your language and get
 Russian instantly (or the other way around) at the top, and see the live screen
@@ -83,9 +83,18 @@ Both builds are on the **[Releases](../../releases)** page — pick whichever yo
   the app into Program Files with **Start-menu and desktop shortcuts**, and shows up in
   *Add or remove programs* for a clean uninstall. Updating just means running the newer MSI.
 
+**Not sure which one? Take the installer.** Windows checks a portable exe you downloaded much more
+strictly than a program an installer put in place, so the MSI usually starts quicker the first time.
+The portable exe is there for when you'd rather not install anything at all.
+
 > Works on Windows 10 & 11. The first time you run it, Windows might warn about an
 > "unknown publisher" — click **More info → Run anyway** (this is normal for small free
 > apps that aren't code-signed).
+
+> **The first launch after downloading — and after every update — can take up to about 10 seconds,
+> with nothing on screen.** Windows checks a file it has never seen before. Later launches are fast
+> (about a second). Every update is a brand-new file as far as Windows is concerned, so the check
+> happens again after each one.
 
 ### Reading Russian from the screen (one-time setup)
 
@@ -97,14 +106,47 @@ The app makes this easy: open the **Screen OCR** tab and click
 
 ---
 
+## 🔤 How translation works
+
+- **By default everything runs on free engines — no key, no signup, nothing to set up.** That goes
+  for what you type and for what the app reads off your screen.
+- **If an engine stops answering it is paused for a few minutes and the next one takes over on its
+  own — nothing needs pressing, and a paused engine comes back by itself.** The little coloured dot
+  next to the Translate button says which engine is answering, and how long a paused one still has
+  to go; the About tab spells the same thing out in full.
+- **Lines you have already seen aren't translated twice.** They're kept in a small file on your PC,
+  so LFM spam and repeated chat come back instantly (see *Privacy* below).
+
+### Optional: your own key
+
+You never need one — the free path is the normal one, and it stays underneath whatever you add: if a
+key is missing, refused or used up, the app falls back to the free engines instead of stopping. If
+you do have a key, paste it in the **About** tab. Keys are stored only on your PC.
+
+- **DeepL** — better wording for **what you write**: the Translator tab and the compact overlay's
+  quick reply. It is never used to read the screen, so a busy live feed can't eat through it. DeepL
+  stopped selling its API plans in July 2026, so this slot is only useful if you already have a key.
+- **[Azure Translator](https://azure.microsoft.com/products/ai-services/ai-translator)** — used for
+  what you write, and for **reading the screen too if you tick the box**. Microsoft's free tier
+  currently gives 2 million characters a month — roughly 20 to 40 hours of busy chat. Screen reading
+  is off by default because live mode reads every new line and can use it up in a few evenings.
+  Signing up needs a card that isn't prepaid, which is the part most people trip over.
+
+---
+
 ## 🔒 Privacy & fair play
 
 - **Screen reading is 100% on your PC.** The Russian OCR runs on Windows' built-in engine
   locally — no screenshot ever leaves your computer.
-- **Translations go through Google Translate.** The text you translate (typed, or read from
-  the screen) is sent to Google's free public translate endpoint to be translated, exactly
-  like using translate.google.com. No account, no API key, and nothing else is sent. If a
-  line is private, don't translate it.
+- **Translations are sent to a translation service.** The text you translate (typed, or read from
+  the screen) goes to Google's free public translation service, exactly like using
+  translate.google.com — no account, no API key. If you've added a key of your own it goes to that
+  engine instead (DeepL for what you write; Azure for what you write, and for screen reading only if
+  you ticked that box). Nothing else is sent. If a line is private, don't translate it.
+- **Translations you have already seen are saved in `%AppData%\PWRUHelper\` so the same chat line is
+  never translated twice — they hold chat text, they never leave your PC, and they are never
+  included in the error report.** You can empty that file whenever you like: About tab →
+  **Clear cache**.
 - **No game memory, no injection, no automation.** The app only takes a picture of a screen
   area you choose and puts text on your clipboard for *you* to paste. It never reads or
   writes the game's memory and never types or clicks for you — so it doesn't touch anything
@@ -124,6 +166,9 @@ The app makes this easy: open the **Screen OCR** tab and click
   button: the overlay just steps aside while you drag a box, then comes straight back with the
   translation waiting in the feed, **outlined** so you can spot it among the live lines. The full
   window never appears.
+- **Changed your mind mid-read?** While a read is running, that same button reads **Cancel read**
+  (**■** in the overlay) — press it, or **Ctrl+Alt+R**, and the read stops instead of leaving you
+  waiting.
 - **Global shortcuts** (work while you're in the game):
   **Ctrl+Alt+P** brings the app to the front · **Ctrl+Alt+T** jumps to the translator ·
   **Ctrl+Alt+L** starts/stops live translation · **Ctrl+Alt+M** toggles the compact overlay ·
@@ -153,11 +198,9 @@ The app makes this easy: open the **Screen OCR** tab and click
 - **Black captures in full-screen?** Switch **Capture method** to *Windows Graphics
   (experimental)* — it can read true full-screen games; if it can't run on your machine the
   app quietly falls back to the normal method.
-- **Better translations (optional):** paste a free [DeepL API key](https://www.deepl.com/pro-api)
-  in the About tab — DeepL (higher quality) is then used for **what you write**: the Translator
-  tab and the compact overlay's quick reply, falling back to Google if DeepL is unavailable.
-  Reading the screen keeps using the free Google engine, so a busy live feed can't burn through
-  your DeepL quota. No key needed for normal use.
+- **Better translations (optional):** you can paste a DeepL or Azure Translator key in the About
+  tab — *How translation works* above says what each one buys and which one touches the screen
+  reader. No key is needed for normal use.
 - **Updating is one click:** when a new version is out, the app offers to download and run the
   installer for you (About tab → *Check for updates*).
 - **Something broke?** About tab → **📋 Copy error report** copies the recent error log so you
@@ -192,7 +235,8 @@ don't expect changes the same day. 🙂
 - **C# / WPF on .NET 8** — a small, native Windows app (very light on CPU/RAM, so no game lag).
 - **Windows built-in OCR** (`Windows.Media.Ocr`) for reading text off the screen — free and
   on-device, no cloud, no GPU.
-- **Google's free translate endpoint** for translations — no API key, no cost.
+- **Free public translation services** for the translations — no API key, no cost. An optional
+  DeepL or Azure key only ever adds to them.
 - Colors taken from the pwonline.ru theme; icon mixes my avatar with the Perfect World logo.
 
 ### Building it yourself

@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -130,7 +131,7 @@ public partial class MainWindow
         _pendingRetry.Clear();
         SetLiveUi(true);
         MainTabs.SelectedIndex = TabTranslator;
-        SetScreenStatus("🔴 Live — watching the area. Translations appear when new text shows up.");
+        SetScreenStatus(UserMessages.LiveStarted());
 
         _liveCts = new CancellationTokenSource();
         _ = LiveLoop(rect, _liveCts.Token);
@@ -195,7 +196,19 @@ public partial class MainWindow
         _liveCts = null;
         _liveRegion = null;
         SetLiveUi(false);
+        // NFR7's "never runs idle", at the one moment it can become false: the countdown paints the
+        // LIVE status line, and there is no longer a LIVE status line to paint. It goes off BEFORE
+        // the line below, so nothing repaints over "Live stopped." (the R-02 shape: a stopped loop
+        // must not keep showing a status that says something is still coming). E7.S2.
+        StopCountdown();
         SetScreenStatus("Live stopped.");
+        // …and then the chip is asked whether IT still needs the tick (E7.S3). Stopping LIVE ends
+        // the loop, not the pause: a provider inside a window keeps counting down whether or not
+        // anything is reading the screen, and the chip is the surface that says so. This is exactly
+        // the second start site E7.S2's code note warned about, and the tick's stop rule was widened
+        // for it — the timer above still goes off first, so "Live stopped." is never repainted over,
+        // and it comes back only if there is something left to count.
+        UpdateEngineChip();
     }
 
     /// <summary>Set the screen-reading status on the main window AND (if shown) the overlay, so the
@@ -204,21 +217,111 @@ public partial class MainWindow
     /// left "Reading…" and every OCR error invisible to someone working from the overlay.</summary>
     private void SetScreenStatus(string msg)
     {
-        ScreenReadStatus.Text = msg;
-        _overlay?.SetStatus(msg);
+        // §3.5's one-time notice RIDES on the next line the loop writes, rather than replacing one
+        // (E7.S4). §3.2's "resumed" row asks for exactly that — "the normal running line, plus
+        // §3.5's one-time `Back on {P}.`" — and it is what keeps the notice from being either
+        // clobbered by the next tick 700 ms later or written over a fresh status of its own.
+        // The overlay's column for that row is "chip cleared, normal status": forty characters do
+        // not stretch to a notice, so it is the main window's line that carries it.
+        ScreenReadStatus.Text = WithNotice(msg, _stateNotice);
+        _stateNotice = null;
+        // The overlay's third placement of the chip (E7.S3 AC 1): it has no TextBlock of its own
+        // there — the window is 360 px wide — so MainWindow composes "{chip}  {status}" and the
+        // overlay renders it (I2). OverlayLine returns the status untouched when the chain is
+        // healthy ("shown only when not healthy") and when the chip is carrying a countdown, which
+        // is E7.S2's AC 4: one line, one clock.
+        _overlay?.SetStatus(OverlayLine(msg));
     }
+
+    /// <summary>§3.2's "resumed" row, as a join: <i>the normal running line, plus §3.5's one-time
+    /// notice</i>. Two spaces and no punctuation of its own — the notice is already a terminated
+    /// sentence (§3.5) and the line it rides on ends in its own stop or ellipsis. Pure, so the
+    /// composition is a unit test rather than something only a running loop could show.
+    ///
+    /// <para><b>And it is BOUNDED</b> (review, Winston): a join of two sentences that are each
+    /// budgeted on their own is not itself budgeted, and the worst case — a paused row (79) plus
+    /// <c>Translated by {P} — {P2} is paused.</c> — already passes <see cref="MainStatusBudget"/>.
+    /// The half that gives way is the <b>status</b>, elided with an ellipsis: it is re-derived on
+    /// the next tick, while the notice is said once per switch and never repeated (§3.5). The cut
+    /// never leaves half a surrogate pair behind — every LIVE line in the deck opens on
+    /// <c>🔴</c>.</para></summary>
+    internal static string WithNotice(string status, string? notice)
+    {
+        if (notice is null) return status;
+        if (string.IsNullOrEmpty(status)) return notice;
+
+        string joined = status + "  " + notice;
+        if (joined.Length <= MainStatusBudget) return joined;
+
+        int room = MainStatusBudget - notice.Length - 3;      // the ellipsis + the two-space join
+        if (room <= 0) return notice;                         // a notice that fills the line alone
+        if (char.IsHighSurrogate(status[room - 1])) room--;   // never cut a pair in half
+        return status[..room].TrimEnd() + "…  " + notice;
+    }
+
+    /// <summary>§3.2's own measure of the main window's status line: <i>"rendered length with the
+    /// longest sentence in the deck is ~120 characters; the main window's status line wraps"</i>.
+    /// It is a budget and not a hard limit for the deck's own rows — every one of them is pinned
+    /// well under it — but a JOIN can grow past it, and an unbounded line is how a status becomes a
+    /// paragraph.</summary>
+    internal const int MainStatusBudget = 120;
 
     private void SetLiveUi(bool on)
     {
-        LiveIndicator.Text = "●  LIVE";
+        // E7.S4 — the PAUSED write is authoritative. This line used to hard-set "●  LIVE" on every
+        // call, so anything that touched the LIVE UI while the read path was paused silently
+        // un-froze the heartbeat (a partially frozen indicator is R-02 again, harder to see).
+        // Starting LIVE into a standing pause therefore shows the paused form at once, rather than
+        // blinking for up to a second until the countdown's first tick.
+        LiveIndicator.Text = _livePaused ? LiveIndicatorPaused : LiveIndicatorRunning;
         LiveIndicator.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        // A notice that was waiting to ride on a running line has nothing to ride on any more:
+        // "Live stopped.  Back on Google." is two states in one sentence.
+        if (!on) _stateNotice = null;
         StopLiveButton.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
         LiveButton.Content = on ? "■  Stop live translation" : "▶  Start live translation";
         UpdateResumeLiveButton();
         LiveStatus.Text = on
             ? "🔴 Live is running — re-reading the area and re-translating whenever the text changes. Press Stop to end."
             : "Live mode keeps watching the chosen area and re-translates automatically whenever the text changes, until you press Stop.";
+        // One of the events the chip is repainted on instead of on a timer (E7.S3 T5): starting or
+        // stopping LIVE changes which window owns the clock, and therefore whether the chip shows
+        // one (E7.S2's AC 4). Polling a breaker every 250 ms is exactly the cost this epic removes.
+        UpdateEngineChip();
     }
+
+    /// <summary>
+    /// <b>E7.S4 / AC 1 and AC 2 — the paused heartbeat, on BOTH surfaces, from ONE decision.</b>
+    /// The main window's <c>LiveIndicator</c> takes the fuller <c>○  LIVE (paused)</c> form (a
+    /// frozen <c>●</c> is still a claim that something is being sent, NFR11: the word carries it,
+    /// not the glyph alone), and the overlay is TOLD — one way, the way <c>SetStatus</c> already
+    /// goes — so its own 600 ms blink timer stops.
+    ///
+    /// <para><b>Who decides.</b> The caller, from <c>ChainTranslator.PauseNow().AllPaused</c> — the
+    /// very call the LIVE loop skips its tick on, so the indicator cannot disagree with the loop
+    /// that owns the tick. S3 <i>with something below still serving</i> is deliberately NOT this:
+    /// requests really are flowing and the heartbeat must keep blinking (flow (a).1). A rate-ceiling
+    /// wait is not this either — it sets no <c>BlockedUntil</c>, so <c>PauseNow()</c> cannot see it
+    /// (rulings E5-a/E5-b).</para>
+    ///
+    /// <para>It is <b>not</b> gated on a running loop: both indicators are <c>Collapsed</c> with
+    /// LIVE off, so there is nothing to get wrong, and remembering the state is what lets
+    /// <see cref="SetLiveUi"/> render the paused form the instant LIVE starts inside a window.</para>
+    ///
+    /// <para>Guarded on the transition, which is AC 4 in its cheapest form: at 1 Hz the countdown
+    /// hands the same answer sixty times a minute and this writes nothing at all.</para></summary>
+    internal void SetLivePaused(bool paused)
+    {
+        if (_livePaused == paused) return;
+        _livePaused = paused;
+        LiveIndicator.Text = paused ? LiveIndicatorPaused : LiveIndicatorRunning;
+        _overlay?.SetPaused(paused);
+    }
+
+    /// <summary>The three forms of the main window's LIVE indicator. <c>(paused)</c> is AC 1's own
+    /// wording and §2.2's: the state is legible with the palette stripped out (NFR11).</summary>
+    internal const string LiveIndicatorRunning = "●  LIVE", LiveIndicatorOff = "○  LIVE",
+                          LiveIndicatorPaused = "○  LIVE (paused)";
 
     private async Task LiveLoop(System.Drawing.Rectangle rect, CancellationToken ct)
     {
@@ -267,16 +370,28 @@ public partial class MainWindow
                     // are E7.S4's — this loop does not reach into CompactOverlay.
                     //
                     // SetScreenStatus writes the main window AND the overlay (:157-161), which is
-                    // all of AC 1's "both surfaces". The countdown is COARSE by design in A.2: it is
-                    // recomputed by the skipped tick itself, so it steps at most every 5 s and there
-                    // is no new timer anywhere. E7.S2 replaces exactly this line with the 1 Hz poll,
-                    // §2.4's granularity bands and the repaint guard.
+                    // all of AC 1's "both surfaces", and it is what makes the FIRST paused tick
+                    // immediate rather than up to a second late.
+                    //
+                    // The STEPPING is E7.S2's, and it is not here: EnsureCountdownRunning starts the
+                    // app's one 1 Hz countdown (MainWindow.xaml.cs) and hands it this same pause, so
+                    // it repaints at once with the overlay's own short form and then once a second —
+                    // in §2.4's bands, and only when the rendered string actually changed. Calling
+                    // it on every skipped tick is deliberate and free: it is a no-op while the
+                    // countdown already runs, so no site has to own it. It stops ITSELF on the first
+                    // tick that finds nothing paused, and StopLive stops it too.
                     //
                     // pause.Now, never DateTimeOffset.UtcNow: RetryAt was produced against the
                     // GATES' clock, and subtracting a different one is the two-clocks bug IS-6 and
-                    // ProviderGate.Now() exist to prevent (review, E5.S1).
+                    // ProviderGate.Now() exist to prevent (review, E5.S1). The countdown asks the
+                    // same PauseNow() for the same reason.
+                    //
+                    // pause.NoNetwork is §2.1's S6 (E7.S4): the same full pause with the one cause
+                    // the player can act on, and it comes from the SAME answer, so the sentence
+                    // cannot come to disagree with the tick that chose it.
                     SetScreenStatus(LivePausedStatus(
-                        LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now)));
+                        LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now), pause.NoNetwork));
+                    EnsureCountdownRunning(pause);
 
                     // The auto-stop is not reached from this branch AT ALL, and that is ruling E5-c
                     // made structural rather than kept true by a value: a SKIPPED tick is neither a
@@ -296,7 +411,12 @@ public partial class MainWindow
                 else
                 {
                     _liveTicks++;
-                    LiveIndicator.Text = (_liveTicks % 2 == 0) ? "●  LIVE" : "○  LIVE";  // heartbeat
+                    // A tick that is NOT skipped is a tick that sends, so the heartbeat comes back
+                    // here rather than up to a second later on the countdown's next tick — both
+                    // surfaces at once (E7.S4), and a no-op on every tick but the first.
+                    SetLivePaused(false);
+                    LiveIndicator.Text = (_liveTicks % 2 == 0)
+                        ? LiveIndicatorRunning : LiveIndicatorOff;                       // heartbeat
 
                     // ---- E5.S3 / §9.3: the rows that failed during the blip go FIRST ----------------
                     // "The first tick after a successful translation" is how §9.3 words it, from before
@@ -401,7 +521,10 @@ public partial class MainWindow
                         $"Live translation auto-stopped — {errors.ConsecutiveFailures} failed reads in a row " +
                         "since the last translated line (refusals and pauses do not count)", ex);
                     StopLive();   // this sets "Live stopped." first…
-                    SetScreenStatus($"Live stopped after repeated errors ({Friendly(ex)}).");   // …then the real reason
+                    // …then the real reason, with the count and the way back in it (amendment A6):
+                    // "repeated" was the app declining to say how many, and ▶ was nowhere in the
+                    // sentence. ConsecutiveFailures is E5-d's five REALLY-SENT failures.
+                    SetScreenStatus(UserMessages.LiveAutoStopped(errors.ConsecutiveFailures, Friendly(ex)));
                     break;
                 }
                 // Ruling E5-f (E5.S3). A tick REFUSED from inside itself cost no request, and until
@@ -418,7 +541,11 @@ public partial class MainWindow
                     pausedWait = LiveTickPolicy.BackoffWaitMs(CurrentLiveIntervalMs(), backoffSteps);
                 backoffSteps = LiveTickPolicy.NextBackoffSteps(backoffSteps, outcome);
 
-                SetScreenStatus($"Live hiccup ({Friendly(ex)}) — retrying…");
+                // §3.2's own row, and the reason it no longer carries the failure's sentence: a
+                // hiccup the loop is already retrying is a STATE, and §1's first principle is one
+                // message per state. The engine that failed is named on the line the player reads
+                // when the loop STOPS — not on one the next tick paints over in 700 ms.
+                SetScreenStatus(UserMessages.LiveOneReadFailed());
             }
 
             // A SKIPPED tick waits the whole back-off (§9.1): there is no read+translate time to
@@ -431,37 +558,147 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>The status a SKIPPED tick shows on both surfaces, with A.2's coarse countdown —
+    /// <summary>The status a SKIPPED tick shows on the MAIN WINDOW, with §2.4's countdown —
     /// <paramref name="secondsLeft"/> is null when there is nothing honest to count down to
     /// (see <see cref="LiveTickPolicy.CountdownSeconds"/>), and the sentence then simply drops the
     /// number rather than inventing one.
     ///
+    /// <para><b>Three forms, and all three are §3.2's own rows</b> (E7.S2). The third exists
+    /// because §2.4's floor renders a <i>clause</i> and not a duration: "next try in about to
+    /// retry" is not a sentence, so under five seconds the deck replaces the whole line rather than
+    /// substituting into it. E7.S1 owns the wording; this story owns only which of the deck's rows
+    /// a given number selects.</para>
+    ///
     /// <para>Static and pure so the copy can be asserted headlessly, exactly like
-    /// <see cref="LiveIntervalMs"/>. The wording is provisional in Sally's §3.2 shape; <b>E7.S2</b>
-    /// owns the final form together with the 1 Hz timer and §2.4's granularity bands. It is written
-    /// here rather than in <c>UserMessages</c> because that table is keyed by
-    /// <c>TranslationErrorKind</c> and this is a LIVE <i>status</i>, not a failure — and because a
-    /// countdown is formatting, which stays out of <c>Services/</c>.</para></summary>
-    internal static string LivePausedStatus(int? secondsLeft)
+    /// <see cref="LiveIntervalMs"/>. It is written here rather than in <c>UserMessages</c> because
+    /// that table is keyed by <c>TranslationErrorKind</c> and this is a LIVE <i>status</i>, not a
+    /// failure — and because a countdown is formatting, which stays out of
+    /// <c>Services/</c>.</para></summary>
+    /// <param name="noNetwork">§2.1's <b>S6</b> rather than S5 — every rung is inside a window the
+    /// gate recorded for <c>Network</c>, so nothing resolves (<c>ChainPause.NoNetwork</c>, E7.S4).
+    /// It takes the whole line and not a clause: there is no honest countdown to a cable, and
+    /// ruling <b>GAP-3</b> made S6 the same full pause as S5 in every other respect.</param>
+    internal static string LivePausedStatus(int? secondsLeft, bool noNetwork = false)
+        => noNetwork ? UserMessages.LivePausedNoNetwork() : CountdownText(secondsLeft) switch
+        {
+            null            => UserMessages.LivePausedNoCountdown(),
+            AboutToRetry    => UserMessages.LivePausedAboutToRetry(),
+            var t           => UserMessages.LivePausedNextTry(t),
+        };
+
+    /// <summary>§3.2's overlay column for the same three rows, in the compact window's <b>40
+    /// character</b> budget. The overlay has one status line and the chip is a prefix of it, so
+    /// there is structurally one clock on that window (AC 4) — and the long form would wrap it.
+    ///
+    /// <para><c>MainWindow</c> formats and <c>CompactOverlay</c> renders (I2, and the epic's
+    /// technical note): the overlay is handed the finished string through its existing
+    /// <c>SetStatus</c> / <c>SetStatusIfChanged</c> and never learns what a countdown is.</para></summary>
+    /// <param name="noNetwork">S6's own row, in the same 40 characters (E7.S4).</param>
+    internal static string LivePausedOverlayStatus(int? secondsLeft, bool noNetwork = false)
+        => noNetwork ? UserMessages.LivePausedOverlayNoNetwork() : CountdownText(secondsLeft) switch
+        {
+            null            => UserMessages.LivePausedOverlayNoCountdown(),
+            AboutToRetry    => UserMessages.LivePausedOverlayAboutToRetry(),
+            var t           => UserMessages.LivePausedOverlayNextTry(t),
+        };
+
+    /// <summary>§2.4's floor, as a name rather than as a literal in four places: under five seconds
+    /// a countdown stops counting and says what is about to happen instead, because "0:03 · 0:02 ·
+    /// 0:01" is a promise the gate's own clock is under no obligation to keep. It is a CLAUSE,
+    /// which is why the two statuses above fork on it rather than substitute it.</summary>
+    internal const string AboutToRetry = "about to retry";
+
+    /// <summary>The last second that still counts down as a stopwatch (§2.4: "≤ 90 s → m:ss").
+    /// Ninety and not sixty, so a minute-and-a-half wait is watched rather than rounded to a "2 min"
+    /// that is a third longer than the truth.</summary>
+    private const int ClockBandSeconds = 90;
+
+    /// <summary>§2.4's <i>display</i> cap. <b>Not</b> <see cref="LiveTickPolicy.MaxCountdownSeconds"/>
+    /// (3600), which is the <i>honesty</i> guard: beyond an hour there is no number at all and the
+    /// sentence drops it (that is what answers the <see cref="DateTimeOffset.MaxValue"/> sentinel a
+    /// gate stores for <c>AuthFailed</c>). Two different rules, and both stay.</summary>
+    private const int DisplayCapSeconds = 30 * 60;
+
+    /// <summary>The <c>{t}</c> of every paused sentence, in §2.4's four bands (amendment A9):
+    /// <c>about to retry</c> under five seconds · <c>0:58</c> to ninety · <c>about 4 min</c> above
+    /// it, rounded UP inside the band so the number never promises the gate will reopen sooner than
+    /// it will · and <c>about 30 min</c> at the display cap. Null in, null out, for the case where
+    /// there is nothing honest to count down to.
+    ///
+    /// <para><b>The cap says "more than 30 min", and that is ruling E7-a.</b> E7.S2 shipped
+    /// <c>about 30 min</c> there and flagged the collision behind it:
+    /// <c>TranslationPolicy.QuotaOpenMinutes</c> is <b>60</b> while the display cap is 30, and
+    /// <see cref="LiveTickPolicy.CountdownSeconds"/> only drops the number above an hour — so the
+    /// first half of a quota block rendered a frozen "about" for a wait that was really up to twice
+    /// it, which is the one direction §2.4's "rounded UP" promise may not break. "More than" is the
+    /// smallest edit that makes the cap true again: it is still the cap, it is still frozen, and it
+    /// no longer claims the wait is nearly over.</para>
+    ///
+    /// <para><b>Culture-invariant on purpose.</b> The <c>:</c> of a locale-aware time format is the
+    /// culture's <c>TimeSeparator</c> — on a Russian-language Windows that is a real defect, and it
+    /// is the same reason E2.S6's review made the gate log invariant. (Not the digits: .NET ignores
+    /// <c>NativeDigits</c> when formatting an integer, so the separator is the whole of the risk —
+    /// corrected at review, where the test that pins this said otherwise.)</para>
+    ///
+    /// <para>Shared by the LIVE status above, by read-once (E5.S4), by the About tab's key test
+    /// (E6.S5) and by E7.S3's chip, so none of them can come to disagree about what a countdown
+    /// looks like. It stays in the code-behind for the reason <c>UserMessages</c> states: formatting
+    /// a time is not <c>Services/</c>' job (I2) — counting the seconds is, and
+    /// <see cref="LiveTickPolicy.CountdownSeconds"/> is where that happens.</para></summary>
+    internal static string? CountdownText(int? seconds)
     {
-        if (secondsLeft is not { } s)
-            return "○ Live — paused. It resumes on its own; nothing is lost.";
-        var t = CountdownText(s)!;
-        return $"○ Live — paused, next try in {t}. It resumes on its own; nothing is lost.";
+        if (seconds is not { } s) return null;
+        if (s < 5) return AboutToRetry;
+        if (s <= ClockBandSeconds)
+            return (s / 60).ToString(CultureInfo.InvariantCulture) + ":" +
+                   (s % 60).ToString("00", CultureInfo.InvariantCulture);
+
+        return Minutes(s);
     }
 
-    /// <summary>The <c>{t}</c> of every paused sentence: seconds up to a minute, then whole minutes
-    /// rounded up — "in 90 s" reads as a stopwatch, and somebody waiting out a 30-minute window
-    /// wants the shape and not the precision. Null in, null out, for the case where there is
-    /// nothing honest to count down to.
+    /// <summary>§2.4's minute band, shared by <see cref="CountdownText"/> and
+    /// <see cref="CountdownJoinText"/> so the two cannot come to round differently. Rounded UP, so
+    /// the number never promises the gate will reopen sooner than it will.
     ///
-    /// <para>Shared by the LIVE status above and by read-once's (E5.S4) so the two cannot come to
-    /// disagree about what a countdown looks like. It stays in the code-behind for the reason
-    /// <c>UserMessages</c> states: formatting a time is not <c>Services/</c>' job (I2).</para></summary>
-    internal static string? CountdownText(int? seconds)
-        => seconds is not { } s ? null
-           : s < 60 ? $"{s} s"
-           : $"{(s + 59) / 60} min";
+    /// <para>Ruling <b>E7-a</b> at the cap: there the number is not an approximation of the wait,
+    /// it is a FLOOR under it, and the sentence says so. <c>QuotaOpenMinutes</c> is 60 against a
+    /// 30-minute display cap, so "about 30 min" was rounding a possible hour DOWN — the one
+    /// direction "rounded up" may not break.</para></summary>
+    private static string Minutes(int seconds)
+    {
+        // Clamped BEFORE the ceiling arithmetic: `int.MaxValue + 59` overflows to a negative, and a
+        // negative minute count would sail past the cap Math.Min is there to apply.
+        int capped = Math.Min(seconds, DisplayCapSeconds);
+        return (seconds >= DisplayCapSeconds ? "more than " : "about ")
+             + ((capped + 59) / 60).ToString(CultureInfo.InvariantCulture) + " min";
+    }
+
+    /// <summary>The <c>{t}</c> of a sentence that is written <b>once and never ticks</b> — the
+    /// read-once summary, the About tab's key test, the deck's own <c>{t}</c>-bearing rows on the
+    /// Translator tab and in the overlay. It is <see cref="CountdownText"/>'s COARSE band, and that
+    /// is ruling <b>E7-a</b>: a frozen "0:05" on a line nobody repaints reads as a live clock, so
+    /// under a minute there is no number at all and amendment <b>A12</b>'s substitution ("in {t}" →
+    /// "shortly", "for {t}" → "briefly") does the talking. Only the 1 Hz LIVE status lines, which
+    /// really are repainted every second, use <c>m:ss</c>.
+    ///
+    /// <para>It also answers the grammar problem it was written for (E7.S2): under §2.4's floor
+    /// <see cref="CountdownText"/> renders a clause, and "Try again in about to retry." is not
+    /// English. Both cases now take the same exit, because they are the same case — there is no
+    /// duration worth joining.</para>
+    ///
+    /// <para>Not a second band table: the minute arithmetic is <see cref="Minutes"/>, which
+    /// <see cref="CountdownText"/> calls for the same band, so the two cannot come to round
+    /// differently. What differs is only where each stops having something worth writing — the
+    /// ticking line at <see cref="ClockBandSeconds"/>, this one at
+    /// <see cref="CoarseFloorSeconds"/>.</para></summary>
+    internal static string? CountdownJoinText(int? seconds)
+        => seconds is { } s && s >= CoarseFloorSeconds ? Minutes(s) : null;
+
+    /// <summary>Ruling E7-a's floor: under a minute a non-ticking sentence shows no number at all
+    /// and A12's clause takes over. It is <b>not</b> <see cref="ClockBandSeconds"/> — that is where
+    /// the stopwatch stops being a stopwatch, and this is where a written-once sentence stops
+    /// having anything worth writing.</summary>
+    private const int CoarseFloorSeconds = 60;
 
     /// <summary>Add placeholder items, translate the batch (one request when possible),
     /// keep the last MaxHistory, and auto-scroll. Respects the live cancellation token.</summary>
@@ -520,10 +757,26 @@ public partial class MainWindow
                     items[i].TranslationBody = UserMessages.PendingRetryRow();
                     EnqueueForRetry(items[i], parts[i].Body, target);
                 }
+            // Don't leave the placeholders stuck on "…" forever (e.g. a body we could not read):
+            // mark them, then let the loop's error handling show the reason on the STATUS LINE.
+            //
+            // Amendment A5 — a row carries no §3.1 sentence, no provider name and no countdown, and
+            // three row texts exist in the whole app. This used to stamp "({Friendly(ex)})", which
+            // put the whole failure sentence on every row of the batch; the status line above them
+            // was already saying it, once, which is §1's first principle.
+            //
+            // And the cancel arm is E1.S6's recorded finding (E7.S1 owns it): a user Stop landing
+            // mid-batch reached this branch — an OperationCanceledException is not retryable — and
+            // painted a timeout sentence over rows the player had abandoned, in the CLR's own
+            // localised wording on a non-English Windows. §2.1 says a cancel must render nothing at
+            // all; a row cannot render nothing (it would sit on "…" for ever with nothing coming),
+            // so it renders the one thing that is true — the player stopped this.
+            else if (ct.IsCancellationRequested)
+                foreach (var it in items) it.TranslationBody = $"({UserMessages.ReadCancelledRow()})";
             else
-                // Don't leave the placeholders stuck on "…" forever (e.g. a body we could not read):
-                // mark them, then let the loop's error handling show the reason.
-                foreach (var it in items) it.TranslationBody = $"({Friendly(ex)})";
+                // Through GiveUpRow, so "given up" is written in exactly one place and cannot come
+                // to mean two things in two of the branches that reach it (TP-LIVE-12's pin).
+                foreach (var it in items) GiveUpRow(it);
             // Still rethrown, and that is load-bearing: E5.S2's tracker owes the counter its
             // increment and the status line its sentence, whichever branch above ran.
             throw;

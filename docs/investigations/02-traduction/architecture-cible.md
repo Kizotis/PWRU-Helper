@@ -1190,6 +1190,18 @@ a very different support cost.
 | **U8** | ~~The cost of loading a 2000-entry cache file, measured against G6~~ — **SETTLED 2026-09-07** (E4.S3, `03-stories/spikes/U8-cache-load.md`) | the cache capacity | **981 KB, 17.8 ms, ≈1 MB of heap, warm, on the first miss's own thread ⇒ capacity 2000 stands and is now `[MEASURED]`.** The spike also found the file 3.3× the estimate (Cyrillic `\uXXXX` escaping) and raised `MaxBytes` 1 MB → 4 MB; **E4.S5 then fixed the escaping** (non-escaping encoder ⇒ **277 B/entry, 541 KB, 9.7 ms**, U8 §8) and left the bound at 4 MB. Open half: the cold, Defender-only personal machine — owner's hand-off, does not gate A.2. |
 | **U9** | Are the §5.6 windows right? 60 s / ×2 / 30 min cap / 10 min clean reset are all **[ASSUMED]**, calibrated to a REPORTED range | nothing — they ship, instrumented | Field logs from increment 1, then tuned. This is deliberate: instrument first, tune after. |
 
+**OQ-6 (key validation) — SETTLED 2026-09-07, ruling E6-b, shipped in E6.S5.** *Can a key be validated
+without spending quota?* **DeepL: yes.** `GET {host}/v2/usage` — same `Authorization: DeepL-Auth-Key` header, same
+`:fx` host selection as §7.4's translate call — is authenticated, free, and returns
+`{"character_count":…,"character_limit":…}`, which settles both the "is the key accepted" row and the "is the quota
+spent" row of `ux-mode-degrade.md` §3.7 without translating a character. **Azure: no.** §3.7 assumed
+`GET /languages?api-version=3.0` could serve; it cannot — it is the **public** metadata endpoint and takes no
+subscription key, so a 200 from it proves only that the internet works. There is no documented authenticated free
+probe on the Translator plane, so Azure's check is one five-character real translation through §7.5's normal path
+and its button carries the cost in its label. **Both probes go through `HttpProviderCore`** (§7.0): the gate is
+consulted, the key is scrubbed out of the §10.1 line, and a paused provider's test says it is paused rather than
+blaming the key. A test never clears a gate — ruling E2-i gives that to a key **save** alone.
+
 ### 15.2 Risks
 
 | # | Risk | Mitigation |

@@ -57,7 +57,7 @@ public class ChainCompositionTests : GatesTestBase
     /// behind names neither a decorator nor a store. The <c>IsType</c> is deliberate — it makes
     /// every case in this file assert the wrapping as a side effect, so a builder that quietly
     /// stopped caching would fail here as well as in the case that owns it.</para></summary>
-    private static IReadOnlyList<ChainTier> TiersOf(ITranslator chain)
+    internal static IReadOnlyList<ChainTier> TiersOf(ITranslator chain)
     {
         var inner = InnerOf(chain);
 
@@ -89,7 +89,7 @@ public class ChainCompositionTests : GatesTestBase
         (int)store.GetType()
             .GetField("_capacity", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(store)!;
 
-    private static List<string> IdsOf(ITranslator chain) => TiersOf(chain).Select(t => t.ProviderId).ToList();
+    internal static List<string> IdsOf(ITranslator chain) => TiersOf(chain).Select(t => t.ProviderId).ToList();
 
     /// <summary>A provider's per-instance priority. <c>DeepLTranslator</c> has no such field on
     /// purpose — it is a write-path provider that is always <c>Interactive</c> and by I8 can never
@@ -109,7 +109,7 @@ public class ChainCompositionTests : GatesTestBase
     /// come back here. Only strings and bools are touched — an int setting is a slider position and
     /// no chain reads one.
     /// </summary>
-    private static List<AppSettings> EveryPermutation()
+    internal static List<AppSettings> EveryPermutation()
     {
         var all = new List<AppSettings>
         {
@@ -117,6 +117,17 @@ public class ChainCompositionTests : GatesTestBase
             new() { DeepLApiKey = "" },
             new() { DeepLApiKey = "   " },                  // whitespace is not a key
             new() { DeepLApiKey = "abc-123:fx" },
+
+            // E6.S4's triple, BY HAND, and the reason is the loop below: it varies exactly ONE
+            // property per permutation, so "a key AND a region AND the opt-in" — the only shape
+            // that puts a keyed provider on the read path — is a combination it structurally
+            // cannot generate. Written out here, it costs TP-CHN-14 nothing and buys it the sweep
+            // over the one settings shape the read chain has never had before.
+            new() { AzureApiKey = AzureKey, AzureRegion = "westeurope", UseKeyForReading = true },
+            // …and its three negatives, which are what AC 1 is actually about:
+            new() { AzureApiKey = AzureKey, AzureRegion = "westeurope" },       // key, no tick
+            new() { UseKeyForReading = true },                                  // tick, no key
+            new() { AzureApiKey = AzureKey, UseKeyForReading = true },          // tick + key, NO REGION
         };
 
         foreach (var p in typeof(AppSettings).GetProperties()
@@ -231,6 +242,297 @@ public class ChainCompositionTests : GatesTestBase
                      IdsOf(TranslationChains.BuildWrite(new AppSettings { DeepLApiKey = "   " })));
         Assert.Equal(new[] { ProviderIds.DeepL, ProviderIds.GoogleDict, ProviderIds.GoogleGtx },
                      IdsOf(TranslationChains.BuildWrite(new AppSettings { DeepLApiKey = " abc-123:fx " })));
+    }
+
+    // =============================================================================================
+    //  E6.S3 — Azure on the WRITE chain, and the key save that resets its gate
+    // =============================================================================================
+
+    private const string AzureKey = "0123456789abcdef0123456789abcdef";
+
+    /// <summary>
+    /// §8.1's write path with both keys configured, and <c>ux</c> flow (c).6 says the order out
+    /// loud: "DeepL, then Azure, then the free engines". All four key combinations, because the
+    /// order is the whole assertion — a reordering is a silent change of vendor for every line the
+    /// user writes, and nothing else in the app would notice.
+    ///
+    /// <para><c>BuildRead</c> is deliberately not asserted here: Azure reaches it only behind
+    /// <c>UseKeyForReading</c>, which is E6.S4's. TP-CHN-14's sweep already covers the new settings
+    /// from the I8 side.</para>
+    /// </summary>
+    [Fact]
+    public void The_write_chain_gains_the_azure_tier_after_DeepL_and_before_the_free_engines()
+    {
+        Assert.Equal(new[] { ProviderIds.GoogleDict, ProviderIds.GoogleGtx },
+                     IdsOf(TranslationChains.BuildWrite(new AppSettings())));
+
+        Assert.Equal(new[] { ProviderIds.DeepL, ProviderIds.GoogleDict, ProviderIds.GoogleGtx },
+                     IdsOf(TranslationChains.BuildWrite(new AppSettings { DeepLApiKey = "abc-123:fx" })));
+
+        Assert.Equal(new[] { ProviderIds.Azure, ProviderIds.GoogleDict, ProviderIds.GoogleGtx },
+                     IdsOf(TranslationChains.BuildWrite(
+                         new AppSettings { AzureApiKey = AzureKey, AzureRegion = "westeurope" })));
+
+        Assert.Equal(new[] { ProviderIds.DeepL, ProviderIds.Azure,
+                             ProviderIds.GoogleDict, ProviderIds.GoogleGtx },
+                     IdsOf(TranslationChains.BuildWrite(new AppSettings
+                     {
+                         DeepLApiKey = "abc-123:fx",
+                         AzureApiKey = AzureKey,
+                         AzureRegion = " WestEurope ",   // trimmed here as it is at the Save button
+                     })));
+    }
+
+    /// <summary>
+    /// <b>Half of a credential adds no tier at all</b>, and this is E6.S2's review finding rather
+    /// than tidiness: the provider's own guard throws <c>AuthFailed</c> <b>without</b>
+    /// <c>NotSent</c> (ruling E3-b gives that flag one writer), so a tier built from half a
+    /// credential is counted by <see cref="ChainTranslator"/> as a tier that tried and failed — and
+    /// its sentence outranks every skipped tier. The player would be told their key was refused by
+    /// a request that was never worth sending.
+    /// </summary>
+    [Theory]
+    [InlineData(AzureKey, "")]
+    [InlineData("", "westeurope")]
+    [InlineData("   ", "westeurope")]
+    [InlineData(AzureKey, "   ")]
+    [InlineData("abc\u0007def", "westeurope")]      // unsendable: a header may carry no control char
+    [InlineData(AzureKey, "west\u0001europe")]
+    public void A_half_entered_azure_credential_adds_no_tier(string key, string region)
+    {
+        var ids = IdsOf(TranslationChains.BuildWrite(
+            new AppSettings { AzureApiKey = key, AzureRegion = region }));
+
+        Assert.DoesNotContain(ProviderIds.Azure, ids);
+        Assert.Equal(new[] { ProviderIds.GoogleDict, ProviderIds.GoogleGtx }, ids);
+    }
+
+    // =============================================================================================
+    //  E6.S4 — Azure on the READ chain, behind the opt-in and nothing else
+    // =============================================================================================
+
+    /// <summary>
+    /// <b>TP-SET-08, and AC 1 is asserted HERE — on the built chain — for a reason worth keeping.</b>
+    /// The rule is not "a runtime guard refuses to use the key for reading"; it is that with the box
+    /// unticked <c>BuildRead</c> never CONSTRUCTS the tier. A guard is a line someone can move; a
+    /// builder that does not construct the provider cannot be talked into it by a setting, a
+    /// refactor or a future story — which is the same shape I8 gives DeepL, deliberately.
+    ///
+    /// <para>Why the default is off is arithmetic, not caution (risk R-15): Azure F0 is 2 M
+    /// characters a month, a heavy LIVE user reads ≈48 k characters an hour of busy chat, and the
+    /// LIVE loop translates every new line it sees, unattended, for as long as the app is open. An
+    /// opt-in that arrives pre-ticked is not an opt-in (ruling OQ-12).</para>
+    ///
+    /// <para>Both priorities, because the read chain is built TWICE (Background for LIVE,
+    /// Interactive for read-once) and a case that swept only the default would not see a builder
+    /// that keyed the tier off the priority.</para>
+    /// </summary>
+    [Fact]
+    public void TP_SET_08_azure_leads_the_read_chain_only_when_the_opt_in_is_on()
+    {
+        var free = new[] { ProviderIds.GoogleDict, ProviderIds.GoogleGtx };
+        var led = new[] { ProviderIds.Azure, ProviderIds.GoogleDict, ProviderIds.GoogleGtx };
+
+        foreach (var priority in new[] { RequestPriority.Background, RequestPriority.Interactive })
+        {
+            // A saved, usable key with the box unticked: the read path does not know it exists.
+            Assert.Equal(free, IdsOf(TranslationChains.BuildRead(
+                new AppSettings { AzureApiKey = AzureKey, AzureRegion = "westeurope" }, priority)));
+
+            // Ticked: FIRST, ahead of google-dict (§8.1's read path — a key the user has opted in
+            // is the tier they are paying attention to).
+            Assert.Equal(led, IdsOf(TranslationChains.BuildRead(
+                new AppSettings
+                {
+                    AzureApiKey = AzureKey,
+                    AzureRegion = " WestEurope ",   // trimmed here as it is at the Save button
+                    UseKeyForReading = true,
+                }, priority)));
+        }
+    }
+
+    /// <summary>
+    /// The opt-in is a third condition, not a replacement for the other two. A ticked box over half
+    /// a credential must add NOTHING — and on the read chain that matters more than on the write
+    /// one: a guaranteed-401 tier placed FIRST in the LIVE chain would open its own gate on the
+    /// first tick of every session, and every tick after that would be a skipped tier whose
+    /// sentence outranks the free engines actually doing the work.
+    /// </summary>
+    [Theory]
+    [InlineData(AzureKey, "")]
+    [InlineData(AzureKey, "   ")]
+    [InlineData("", "westeurope")]
+    [InlineData("   ", "westeurope")]
+    [InlineData("abc\u0007def", "westeurope")]   // unsendable: a header may carry no control char
+    [InlineData(AzureKey, "west\u0001europe")]
+    public void A_ticked_box_over_half_a_credential_adds_no_read_tier(string key, string region)
+    {
+        var settings = new AppSettings { AzureApiKey = key, AzureRegion = region, UseKeyForReading = true };
+
+        foreach (var priority in new[] { RequestPriority.Background, RequestPriority.Interactive })
+            Assert.Equal(new[] { ProviderIds.GoogleDict, ProviderIds.GoogleGtx },
+                         IdsOf(TranslationChains.BuildRead(settings, priority)));
+    }
+
+    /// <summary>
+    /// <b>The silent one.</b> The read chain is built twice with two different priorities, and the
+    /// new tier has to carry the one it was built with — forgetting <c>priority:</c> gives the LIVE
+    /// loop an <c>Interactive</c> Azure tier, which lets a screen loop take the last token of the
+    /// ceiling's bucket and stand in front of the half-open probe. §5.4's reserve exists precisely
+    /// to stop that, and nothing else in the app would notice.
+    /// </summary>
+    [Fact]
+    public void The_azure_read_tier_carries_the_priority_the_chain_was_built_with()
+    {
+        var settings = new AppSettings
+        {
+            AzureApiKey = AzureKey, AzureRegion = "westeurope", UseKeyForReading = true,
+        };
+
+        var live = TiersOf(TranslationChains.BuildRead(settings));
+        var once = TiersOf(TranslationChains.BuildRead(settings, RequestPriority.Interactive));
+
+        // Non-vacuity first: the tier really is there, and it really has a _priority field to read
+        // (PriorityOf answers Interactive for a provider that has none — see its comment).
+        Assert.Equal(ProviderIds.Azure, live[0].ProviderId);
+        Assert.NotNull(live[0].Translator.GetType()
+            .GetField("_priority", BindingFlags.Instance | BindingFlags.NonPublic));
+
+        Assert.All(live, t => Assert.Equal(RequestPriority.Background, PriorityOf(t.Translator)));
+        Assert.All(once, t => Assert.Equal(RequestPriority.Interactive, PriorityOf(t.Translator)));
+        Assert.All(TiersOf(TranslationChains.BuildWrite(settings)),
+            t => Assert.Equal(RequestPriority.Interactive, PriorityOf(t.Translator)));
+    }
+
+    /// <summary>
+    /// <b>I9 for the first keyed tier that lives on both chains.</b> The read chain's
+    /// <c>AzureTranslator</c> and the write chain's are two objects over ONE gate, and that has a
+    /// consequence worth pinning rather than discovering: a <c>QuotaExhausted</c> earned by the
+    /// Translator tab also pauses the screen reader — which is exactly what a quota means, since
+    /// both are spending the same 2 M characters.
+    /// </summary>
+    [Fact]
+    public void The_read_and_write_azure_tiers_are_two_objects_over_one_gate()
+    {
+        var settings = new AppSettings
+        {
+            AzureApiKey = AzureKey, AzureRegion = "westeurope", UseKeyForReading = true,
+        };
+
+        var read = TiersOf(TranslationChains.BuildRead(settings)).Single(t => t.ProviderId == ProviderIds.Azure);
+        var once = TiersOf(TranslationChains.BuildRead(settings, RequestPriority.Interactive))
+            .Single(t => t.ProviderId == ProviderIds.Azure);
+        var write = TiersOf(TranslationChains.BuildWrite(settings)).Single(t => t.ProviderId == ProviderIds.Azure);
+
+        var expected = ProviderGates.For(ProviderIds.Azure);
+        Assert.Same(expected, read.Gate);
+        Assert.Same(expected, once.Gate);
+        Assert.Same(expected, write.Gate);
+
+        // …and the providers themselves are NOT shared: they differ in the one thing that may not be.
+        Assert.NotSame(read.Translator, write.Translator);
+        Assert.NotSame(read.Translator, once.Translator);
+    }
+
+    /// <summary>
+    /// TP-SET-09 / AC 6, at the facade the code-behind actually calls. Ruling <b>E2-a</b> is why it
+    /// exists — "no state may lock the user out without a way back" — and ruling <b>E2-i</b> is its
+    /// exact bound: a new key lifts the ACCOUNT-scoped block (<c>AuthFailed</c>,
+    /// <c>QuotaExhausted</c>) and never the IP-scoped one (<c>RateLimited</c>, <c>Blocked</c>),
+    /// which is about the address this PC dials from and which no key can change.
+    ///
+    /// <para>It is asserted here, in <c>Services/</c>'s own test file, because that is where the
+    /// registry may be named: <c>MainWindow.Translate.cs</c> calls
+    /// <c>TranslationChains.OnKeySaved</c> and TP-START-02's allow-list stays one line long.</para>
+    /// </summary>
+    [Fact]
+    public void TP_SET_09_Saving_a_key_lifts_that_provider_account_scoped_block_and_nothing_else()
+    {
+        var azure = ProviderGates.For(ProviderIds.Azure);
+        var dict = ProviderGates.For(ProviderIds.GoogleDict);
+
+        azure.ReportFailure(TranslationErrorKind.AuthFailed);
+        dict.ReportFailure(TranslationErrorKind.RateLimited);
+
+        Assert.NotNull(azure.Snapshot().BlockedUntil);
+        var otherProvidersWindow = dict.Snapshot().BlockedUntil;
+        Assert.NotNull(otherProvidersWindow);
+
+        TranslationChains.OnKeySaved(ProviderIds.Azure);
+
+        Assert.Null(azure.Snapshot().BlockedUntil);                       // the key's own block: gone
+        Assert.Equal(otherProvidersWindow, dict.Snapshot().BlockedUntil); // another provider: untouched
+    }
+
+    /// <summary>
+    /// AC 6's ordering trap, found in review — the one that made the fix a two-line method. The
+    /// block a corrected key most often has to lift is the one that came back from disk, and the
+    /// registry reads <c>provider-state.json</c> on the FIRST <c>TryEnter</c>: on the first
+    /// translation of the session, not at startup (I10). Pressing Save before translating anything
+    /// therefore reaches a gate nothing has seeded — <c>ClearAuthBlock</c> clears nothing, records
+    /// nothing, and the load that follows puts the old key's quota window on the new key. So the
+    /// facade loads the file before it clears, and the block never comes back.
+    /// </summary>
+    [Fact]
+    public void TP_SET_09_A_key_saved_before_the_first_request_lifts_the_block_the_file_was_holding()
+    {
+        using var temp = new TempGateState();
+        var until = ProviderGates.Clock() + TimeSpan.FromMinutes(45);   // the OLD key's quota window
+        File.WriteAllText(temp.Path, $$"""
+            { "version": 1, "providers": { "azure": {
+                "blockedUntil": null,
+                "keyBlockedUntil": "{{until:o}}",
+                "strikes": 0,
+                "lastKind": "QuotaExhausted",
+                "lastAt": null,
+                "cleanSince": null } } }
+            """);
+
+        // The state the About tab is actually in: the app is up, nothing has translated, so nothing
+        // has read the file yet.
+        Assert.Null(ProviderGates.Snapshot(ProviderIds.Azure)?.BlockedUntil);
+
+        TranslationChains.OnKeySaved(ProviderIds.Azure);
+
+        // …and the first request of the session may not resurrect it.
+        ProviderGates.EnsureLoaded();
+        Assert.Null(ProviderGates.Snapshot(ProviderIds.Azure)?.BlockedUntil);
+        Assert.Equal(GateOutcome.Allow,
+            ProviderGates.For(ProviderIds.Azure).TryEnter(RequestPriority.Interactive).Outcome);
+    }
+
+    /// <summary>E2-i names <b>two</b> account-scoped rows and the case above drives one of them.
+    /// This is the other: a quota is spent by the KEY, so a new key is a new allowance and its
+    /// block goes with it (§15 R9's hour is what covers the same key trying again).</summary>
+    [Fact]
+    public void TP_SET_09_A_quota_block_is_account_scoped_too_and_a_new_key_lifts_it()
+    {
+        var azure = ProviderGates.For(ProviderIds.Azure);
+        azure.ReportFailure(TranslationErrorKind.QuotaExhausted);
+        Assert.NotNull(azure.Snapshot().BlockedUntil);
+
+        TranslationChains.OnKeySaved(ProviderIds.Azure);
+
+        Assert.Null(azure.Snapshot().BlockedUntil);
+    }
+
+    /// <summary>The other half of E2-i, on the SAME provider: a 429 window is the provider counting
+    /// requests from this IP, and pasting a new key does not move it.</summary>
+    [Fact]
+    public void Saving_a_key_does_not_lift_a_rate_limit_on_the_same_provider()
+    {
+        var azure = ProviderGates.For(ProviderIds.Azure);
+        azure.ReportFailure(TranslationErrorKind.RateLimited);
+        var ipWindow = azure.Snapshot().BlockedUntil;
+        Assert.NotNull(ipWindow);
+
+        azure.ReportFailure(TranslationErrorKind.AuthFailed);
+        Assert.Equal(DateTimeOffset.MaxValue, azure.Snapshot().BlockedUntil);
+
+        TranslationChains.OnKeySaved(ProviderIds.Azure);
+
+        Assert.NotNull(azure.Snapshot().BlockedUntil);
+        Assert.NotEqual(DateTimeOffset.MaxValue, azure.Snapshot().BlockedUntil);
     }
 
     // =============================================================================================
@@ -439,6 +741,131 @@ public class ChainCompositionTests : GatesTestBase
     }
 
     // =============================================================================================
+    //  Ruling E6-a — the gate state, warmed AFTER first paint (E7.S3)
+    // =============================================================================================
+
+    /// <summary>
+    /// <b>TP-START-04, as far as I10 allows it to go.</b> The chip needs a saved pause to be visible
+    /// about a second after the window instead of after the user's first translation — and the file
+    /// may not be read before first paint. <c>EnsureGateStateLoaded</c> is the settlement: it is the
+    /// same read <c>TryEnter</c> would have done, asked for deliberately, from a caller that runs
+    /// after the window is up.
+    ///
+    /// <para>The assertion is the whole of it: before the call the gate carries nothing (that is
+    /// <c>Building_the_chains_touches_no_gate_state_file</c>, one case up), and after it the window
+    /// standing on disk is on the gate the chip polls.</para>
+    /// </summary>
+    [Fact]
+    public void TP_START_04_the_warm_up_seeds_the_gates_from_the_file_after_first_paint()
+    {
+        using var temp = new TempGateState();
+        var until = ProviderGates.Clock() + TimeSpan.FromMinutes(12);
+        File.WriteAllText(temp.Path, $$"""
+            { "version": 1, "providers": { "google-dict": {
+                "blockedUntil": "{{until:o}}",
+                "keyBlockedUntil": null,
+                "strikes": 1,
+                "lastKind": "RateLimited",
+                "lastAt": null,
+                "cleanSince": null } } }
+            """);
+
+        var settings = new AppSettings();
+        TranslationChains.BuildRead(settings, RequestPriority.Background, out var chain);
+        Assert.Null(ProviderGates.Snapshot(ProviderIds.GoogleDict)?.BlockedUntil);
+
+        TranslationChains.EnsureGateStateLoaded(chain);
+
+        Assert.Equal(until, ProviderGates.Snapshot(ProviderIds.GoogleDict)?.BlockedUntil);
+        // …and the chip's own view of it, which is what the story is actually about.
+        var status = TranslationChains.EngineStatus(settings, chain, stateKnown: true);
+        Assert.Equal(EngineState.Paused, status.For(ProviderIds.GoogleDict)!.State);
+        Assert.True(status.NeedsTick);
+
+        // Idempotent: it is a warm-up, and a second caller (the first TryEnter, moments later) must
+        // not re-read the file or re-seed a gate that has since recorded something of its own.
+        TranslationChains.EnsureGateStateLoaded(chain);
+        Assert.Equal(until, ProviderGates.Snapshot(ProviderIds.GoogleDict)?.BlockedUntil);
+    }
+
+    /// <summary>
+    /// A status warm-up may not be able to fail a launch. The store answers empty on any failure by
+    /// contract, so this drives the one shape that reaches the file system differently — a path that
+    /// is a DIRECTORY — and asserts the call is a no-op rather than a throw on the way to the first
+    /// paint the user is waiting for.
+    /// </summary>
+    [Fact]
+    public void The_warm_up_never_throws_at_a_launch()
+    {
+        using var temp = new TempGateState();
+        Directory.CreateDirectory(temp.Path);      // a "file" nothing can read
+
+        var settings = new AppSettings();
+        TranslationChains.BuildRead(settings, RequestPriority.Background, out var chain);
+        TranslationChains.EnsureGateStateLoaded(chain);
+
+        Assert.False(TranslationChains.EngineStatus(settings, chain, stateKnown: true)
+                                      .AllReadTiersPaused);
+    }
+
+    /// <summary>
+    /// <b>Ruling E6-a's other half, and the one a refactor breaks silently: WHERE it is called
+    /// from.</b> A warm-up that drifted into the constructor or into <c>ApplySettings</c> would
+    /// still make every behavioural test above pass, and would put a file read in front of the first
+    /// paint — which is what I10 and P1 exist to stop, and what TP-START-01 measures.
+    ///
+    /// <para>So the scan is positional: <c>OnWindowLoaded</c> only, on a pool thread
+    /// (<c>Task.Run</c>), and AFTER the update check — i.e. behind every existing await, so the
+    /// window has been on screen for as long as this handler has been running. The registry itself
+    /// is still never named outside <c>Services/</c>; that half is
+    /// <c>ProviderStateStoreTests.No_startup_path_mentions_ProviderGates</c>, untouched.</para>
+    /// </summary>
+    [Fact]
+    public void The_warm_up_is_called_from_OnWindowLoaded_on_the_pool_and_from_nowhere_else()
+    {
+        var root = RepoRoot();
+        var main = Code(File.ReadAllText(Path.Combine(root, "MainWindow.xaml.cs")));
+
+        var loaded = BracedBlock(main, main.IndexOf("private async void OnWindowLoaded(",
+                                                   StringComparison.Ordinal));
+        Assert.Contains("await CheckForUpdatesAsync();", loaded, StringComparison.Ordinal);
+
+        int warm = loaded.IndexOf("Task.Run(() => TranslationChains.EnsureGateStateLoaded(chain))",
+                                  StringComparison.Ordinal);
+        Assert.True(warm > loaded.IndexOf("await CheckForUpdatesAsync();", StringComparison.Ordinal),
+            "E6-a: the gate state is warmed AFTER first paint, behind every existing await");
+
+        // Nowhere else in the app, and the constructor least of all.
+        var callers = ProductionSources(root)
+            .SelectMany(f => Code(File.ReadAllText(f)).Split('\n')
+                .Where(l => l.Contains("EnsureGateStateLoaded", StringComparison.Ordinal))
+                .Select(l => Path.GetFileName(f) + ": " + l.Trim()))
+            .Where(l => !l.StartsWith("TranslationChains.cs", StringComparison.Ordinal))
+            .ToList();
+        Assert.Equal(new[]
+        {
+            "MainWindow.xaml.cs: try { await Task.Run(() => TranslationChains.EnsureGateStateLoaded(chain)); }",
+        }, callers);
+    }
+
+    /// <summary>Bound a method body by matching braces from its signature — the shape the other
+    /// source scans in this suite use, so a needle cannot pass because it landed in a later
+    /// method.</summary>
+    private static string BracedBlock(string code, int fromIndex)
+    {
+        Assert.True(fromIndex >= 0, "the scanned method is not where this test expects it");
+        int open = code.IndexOf('{', fromIndex);
+        Assert.True(open > 0, "no body found for the scanned method");
+        int depth = 0;
+        for (int i = open; i < code.Length; i++)
+        {
+            if (code[i] == '{') depth++;
+            else if (code[i] == '}' && --depth == 0) return code[open..(i + 1)];
+        }
+        return code[open..];
+    }
+
+    // =============================================================================================
     //  The wiring in the code-behind
     // =============================================================================================
 
@@ -470,8 +897,9 @@ public class ChainCompositionTests : GatesTestBase
         Assert.Contains("_readOnceTranslator, ct)", ocr, StringComparison.Ordinal);
 
         // Both chains are assigned in the ctor body — never back in a field initializer, where they
-        // would run BEFORE _settings and read a null — and _readTranslator stays readonly so no
-        // handler can swap the LIVE chain for an Interactive one later.
+        // would run BEFORE _settings and read a null. `readonly` is gone since E6.S3 (see below):
+        // what stops a handler swapping the LIVE chain for an Interactive one is now the
+        // occurrence count at the bottom of this case, not the compiler.
         //
         // The line lost its `new CachingTranslator(…)` in E4.S4: the builder returns the chain
         // already wrapped in the decorator that carries the shared store, so this file names a chain
@@ -485,8 +913,17 @@ public class ChainCompositionTests : GatesTestBase
         // the story sketched, before E4.S4 landed first — precisely so the decorator keeps being
         // built inside Services/ and the scan at the bottom of this case stays green. One call, one
         // object graph: a second BuildRead would build a second chain over the same gates.
-        Assert.Contains("private readonly ITranslator _readTranslator;", main, StringComparison.Ordinal);
-        Assert.Contains("private readonly ChainTranslator _readChain;", main, StringComparison.Ordinal);
+        //
+        // E6.S3 dropped `readonly` from the read pair and from _readChain, DELIBERATELY: a key save
+        // has to rebuild the read chain too (its AC 6 — the key may already be opted into reading
+        // from a previous session), and a readonly field cannot be reassigned. What replaces the
+        // compiler's guarantee is the pair of asserts below the ctor ones: RebuildReadChains() is
+        // the only other writer and it reassigns all THREE together. That is the failure `readonly`
+        // never prevented anyway — reassigning two of the three compiles, runs, and leaves
+        // PauseNow() answering for a chain nothing translates through (I9: same gates, so no
+        // behaviour test can see it).
+        Assert.Contains("private ITranslator _readTranslator;", main, StringComparison.Ordinal);
+        Assert.Contains("private ChainTranslator _readChain;", main, StringComparison.Ordinal);
         Assert.Contains(
             "_readTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Background, out _readChain);",
             main, StringComparison.Ordinal);
@@ -500,6 +937,23 @@ public class ChainCompositionTests : GatesTestBase
         var translate = Code(File.ReadAllText(Path.Combine(root, "MainWindow.Translate.cs")));
         Assert.Contains("private ITranslator BuildWriteChain() => TranslationChains.BuildWrite(_settings);",
             translate, StringComparison.Ordinal);
+
+        // …and the READ chain's rebuild, E6.S3's companion to it. All three references are
+        // reassigned in ONE method, and that method is the only writer besides the constructor —
+        // two occurrences of each assignment across the two files, no more. `out _readChain` on the
+        // same line as `_readTranslator =` is what makes "together" structural rather than
+        // remembered.
+        var both = main + "\n" + translate;
+        Assert.Contains("private void RebuildReadChains()", translate, StringComparison.Ordinal);
+        foreach (var assignment in new[]
+                 {
+                     "_readTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Background, out _readChain);",
+                     "_readOnceTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Interactive);",
+                 })
+            Assert.Equal(2, Occurrences(both, assignment));
+
+        foreach (var field in new[] { "_readTranslator =", "_readOnceTranslator =", "_readChain =" })
+            Assert.Equal(field == "_readChain =" ? 0 : 2, Occurrences(both, field));
 
         // NO source outside Services/ names a decorator — the same rule, and the same reason, as
         // TranslationCachePersistenceTests' "no source outside Services/ names the store" and
@@ -520,6 +974,16 @@ public class ChainCompositionTests : GatesTestBase
         Assert.True(decorators.Count == 0,
             "outside Services/ the code names a chain and never a decorator (ruling E3-c): "
             + string.Join(" | ", decorators));
+    }
+
+    /// <summary>How many times <paramref name="needle"/> appears in <paramref name="haystack"/> —
+    /// the "exactly one other writer" assert above needs a count, not a contains.</summary>
+    private static int Occurrences(string haystack, string needle)
+    {
+        var n = 0;
+        for (var i = haystack.IndexOf(needle, StringComparison.Ordinal); i >= 0;
+             i = haystack.IndexOf(needle, i + needle.Length, StringComparison.Ordinal)) n++;
+        return n;
     }
 
     // ---- the source-scan helpers (the shape ChainTranslatorTests already uses) -------------------

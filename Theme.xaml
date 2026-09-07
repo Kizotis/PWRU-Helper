@@ -287,10 +287,26 @@
                             </ToggleButton.Template>
                         </ToggleButton>
 
-                        <ContentPresenter Content="{TemplateBinding SelectionBoxItem}"
+                        <ContentPresenter x:Name="selection" Content="{TemplateBinding SelectionBoxItem}"
                                           ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
                                           IsHitTestVisible="False" VerticalAlignment="Center"
                                           HorizontalAlignment="Left" Margin="10,0,28,0"/>
+
+                        <!-- IsEditable="True" needs a PART_EditableTextBox in the template, by that
+                             exact name: ComboBox looks the part up and, not finding one, silently
+                             renders a box the user cannot type into. Collapsed by default and
+                             swapped with the ContentPresenter above by the trigger below, so every
+                             non-editable combo in the app (all of them until E6.S3's Azure region)
+                             renders exactly as it did. Background/BorderThickness/Padding are
+                             overridden locally because the implicit TextBox style would otherwise
+                             draw a second bordered box inside this one. -->
+                        <TextBox x:Name="PART_EditableTextBox" Visibility="Collapsed"
+                                 Background="Transparent" BorderThickness="0" Padding="0"
+                                 Foreground="{StaticResource TextBrush}" FontSize="13"
+                                 CaretBrush="{StaticResource GoldBrush}"
+                                 VerticalAlignment="Center" VerticalContentAlignment="Center"
+                                 HorizontalAlignment="Stretch" Margin="10,0,28,0"
+                                 IsReadOnly="{TemplateBinding IsReadOnly}"/>
 
                         <Popup x:Name="PART_Popup" Placement="Bottom" Focusable="False"
                                IsOpen="{TemplateBinding IsDropDownOpen}" AllowsTransparency="True"
@@ -305,6 +321,12 @@
                             </Border>
                         </Popup>
                     </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsEditable" Value="True">
+                            <Setter TargetName="PART_EditableTextBox" Property="Visibility" Value="Visible"/>
+                            <Setter TargetName="selection" Property="Visibility" Value="Collapsed"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>

@@ -38,7 +38,15 @@ internal readonly record struct ChainTier(string ProviderId, ProviderGate Gate, 
 /// <para><b>Not an error and not an event</b>: this is a poll (ruling R-2 / OQ-c — <c>Services/</c>
 /// emits nothing), and asking is side-effect free by contract.</para>
 /// </summary>
-internal sealed record ChainPause(bool AllPaused, DateTimeOffset? RetryAt, DateTimeOffset Now);
+/// <param name="NoNetwork"><b>§2.1's S6, and it is the same pause as S5 wearing the one cause a
+/// player can act on</b> (ruling GAP-3: the full pause is universal, so S6 does not read the screen
+/// either). True when EVERY rung of the chain is inside a window that the gate last recorded for
+/// <see cref="TranslationErrorKind.Network"/> — nothing resolves. The predicate above is unchanged:
+/// this flag never decides whether the chain is paused, only which sentence the surfaces write for
+/// the pause it already found. Default <c>false</c>, so the honest reading of "we cannot tell" is
+/// S5's wording rather than an internet diagnosis nobody made.</param>
+internal sealed record ChainPause(bool AllPaused, DateTimeOffset? RetryAt, DateTimeOffset Now,
+                                  bool NoNetwork = false);
 
 /// <summary>
 /// <c>architecture-cible.md</c> §6 — the ordered provider chain, and the second half of Epic 2's
@@ -108,6 +116,7 @@ public sealed class ChainTranslator : ITranslator
     private const string PausedReason = "Paused";
 
     private readonly IReadOnlyList<ChainTier> _tiers;
+    private readonly IReadOnlyList<string> _tierIds;
     private Outcome? _lastOutcome;
 
     /// <summary>Read through <see cref="Volatile"/> because the code-behind may read it from the
@@ -132,6 +141,39 @@ public sealed class ChainTranslator : ITranslator
         // so a live list would be a mid-iteration mutation away from a raw InvalidOperationException
         // thrown OUTSIDE the try, past every catch in RunAsync.
         _tiers = tiers.ToArray();
+        // Materialised ONCE, beside the tier copy and for the same reason: the chip asks for this
+        // at 1 Hz while something is paused, and a per-call Select would allocate a list a second
+        // for a list that cannot change (a rebuilt chain is a NEW ChainTranslator — see
+        // RebuildReadChains). Immutable in, immutable out.
+        _tierIds = _tiers.Select(t => t.ProviderId).ToArray();
+    }
+
+    /// <summary>The chain's provider ids, <b>in chain order</b> — what E7.S3's status chip needs to
+    /// ask "is every rung of the READ path paused?" of a set of snapshots rather than of the gates
+    /// themselves (ruling R-2: the status read is side-effect free).
+    ///
+    /// <para>It is not the tier list: the translators stay private, and <c>ChainCompositionTests</c>
+    /// still reaches those by reflection precisely so nothing in the app has to.</para></summary>
+    internal IReadOnlyList<string> TierIds => _tierIds;
+
+    /// <summary>The GATES' clock — the same instant <see cref="PauseNow"/> answers with (IS-6). A
+    /// status caller that subtracted its own <c>UtcNow</c> from a <c>BlockedUntil</c> this chain
+    /// produced would be comparing two clocks, which is the bug <see cref="ProviderGate.Now"/>
+    /// exists to prevent. <c>_tiers</c> is never empty (the constructor refuses it).</summary>
+    internal DateTimeOffset Now() => _tiers[0].Gate.Now();
+
+    /// <summary>Ruling <b>E6-a</b>: seed every tier's gate from <c>provider-state.json</c>, so a
+    /// pause the user is already inside is on screen about a second after the window instead of
+    /// after the first request. <b>Idempotent</b>, and <see cref="ProviderGate.EnsureStateLoaded"/>
+    /// is the seam E5.S1 added for <see cref="PauseNow"/> — this method only calls it eagerly.
+    ///
+    /// <para><b>It is still not a startup path.</b> The caller is <c>OnWindowLoaded</c>, on a pool
+    /// thread, AFTER first paint, through <see cref="TranslationChains.EnsureGateStateLoaded"/> —
+    /// which is what keeps I10 and TP-START-02 both true. Reading the file any earlier is what P1
+    /// exists to protect.</para></summary>
+    internal void EnsureStateLoaded()
+    {
+        foreach (var tier in _tiers) tier.Gate.EnsureStateLoaded();
     }
 
     /// <summary>
@@ -312,6 +354,11 @@ public sealed class ChainTranslator : ITranslator
         var now = _tiers[0].Gate.Now();
 
         DateTimeOffset? earliest = null;
+        // §2.1's S6 (E7.S4): the SAME pause, with the one cause a player can act on. It is computed
+        // from the snapshot BlockedUntil is already reading — no second Snapshot() call, which would
+        // be a second reading of a state that can change between them — and it starts true only to
+        // be ANDed down: one tier blocked for anything else, and this is S5.
+        bool allNetwork = true;
         foreach (var tier in _tiers)
         {
             // E2.S4's lazy load, reached from a STATUS read (review, E5.S1). TryEnter is still the
@@ -324,12 +371,14 @@ public sealed class ChainTranslator : ITranslator
 
             // One open rung is enough: the chain is not paused, and the remaining gates are not
             // even read. "All" is the whole question — a partially paused chain still translates.
-            if (BlockedUntil(tier, out _) is not { } until) return new ChainPause(false, null, now);
+            if (BlockedUntil(tier, out var snapshot) is not { } until)
+                return new ChainPause(false, null, now);
+            allNetwork &= snapshot.LastKind == TranslationErrorKind.Network;
             if (earliest is null || until < earliest) earliest = until;
         }
         // RetryAt is therefore non-null here — the sentence a paused player reads always has an
         // instant behind it.
-        return new ChainPause(true, earliest, now);
+        return new ChainPause(true, earliest, now, allNetwork);
     }
 
     /// <summary>Ruling <b>E3-a</b>, written ONCE: the instant this tier is blocked until, or null if

@@ -153,6 +153,17 @@ public partial class MainWindow
             _recentsDirty = false;
             RebuildPhraseView();
         }
+
+        // E7.S7 — §2.4's one countdown per window. The About tab's "In use now" line carries the
+        // clock only while that tab is the selected one (every other countdown surface on this
+        // window is inside a different tab, and tabs are mutually exclusive), so a switch either way
+        // has to repaint it and, if a provider is paused, start the 1 Hz tick that steps it.
+        //
+        // Guarded on the restore and not run inside it: ApplySettings restores s.LastTab, which
+        // raises this handler with half the window still unrestored — and I12's rule is that the
+        // restore applies its UI side effects EXPLICITLY, which it does, through
+        // UpdateEngineStatusUi a few lines later. Nothing here writes settings.
+        if (!_restoringSettings) UpdateEngineChip();
     }
 
     private void TogglePin_Click(object sender, RoutedEventArgs e)

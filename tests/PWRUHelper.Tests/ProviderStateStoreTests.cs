@@ -852,8 +852,14 @@ public class ProviderStateStoreTests : GatesTestBase
             Code(Body(main, "protected override void OnClosing(")));
 
         // Nothing else in the app touches the registry either (E2-e). A later story that needs a
-        // second call site — E6.S3 wires ClearAuthBlock to the key save — updates this list on
-        // purpose, which is the point: the next reference must be a decision, not a convenience.
+        // second call site updates this list on purpose, which is the point: the next reference
+        // must be a decision, not a convenience.
+        //
+        // E6.S3 was expected to be that story — it wires ClearAuthBlock to the Azure key save — and
+        // deliberately is NOT: the call went into TranslationChains.OnKeySaved instead, so the
+        // code-behind names a chain builder and never the registry, exactly as it does for the tier
+        // lists and the shared cache (ruling E3-c). The decision was still made; it just came out
+        // the other way, and the list is still one line long.
         var strays = ProductionSources(root)
             .Where(f => !Path.GetDirectoryName(f)!.EndsWith("Services", StringComparison.Ordinal))
             .SelectMany(f => Code(File.ReadAllText(f))

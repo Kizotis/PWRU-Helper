@@ -68,10 +68,11 @@ internal static class StaTestHost
     }
 }
 
-/// <summary>Marker so xUnit serialises every WPF test (one STA thread, one Application,
-/// one static settings-path override).</summary>
-[CollectionDefinition("WPF")]
-public class WpfCollection { }
+// The STA classes used to have a collection of their own, [CollectionDefinition("WPF")]. They do
+// not any more: they join "Gates" (GatesCollection.cs), because a real MainWindow consults the
+// process-global ProviderGates registry and xUnit ran the two collections CONCURRENTLY — see the
+// measured reproduction recorded in GatesCollection.cs. One collection is the serialisation; two
+// were not.
 
 /// <summary>
 /// Points <see cref="SettingsService"/> at a throwaway file for the duration of a test.

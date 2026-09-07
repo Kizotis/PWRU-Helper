@@ -78,16 +78,40 @@ namespace PWRUHelper.Services;
 /// </summary>
 internal static class PerLineFallback
 {
-    /// <summary>What a line that was never asked reads as: the loop latched above it, or the cap
-    /// stopped it. Copy is E7.S1's (E2-d) — and E7.S1 should know that the cap borrows a sentence
-    /// which says "rate-limited" for a reason that is not always a rate limit.</summary>
-    internal const string SkippedMessage = "(skipped — rate-limited, try again shortly)";
+    /// <summary>
+    /// <b>All three per-line placeholders are now one row text, and that is amendment A5</b>
+    /// (E7.S1, ruling E2-d gave this file's copy to it). "A row never carries a §3.1 sentence, a
+    /// provider name or a countdown", and three row texts exist in the whole app — the pending
+    /// "…", the finished "(not translated — the engines did not come back)" and the cancelled one.
+    /// A per-line placeholder is the second of those: this line was not translated and nothing is
+    /// coming for it, which is the one fact a row owes the player. The reason belongs to the status
+    /// line, once, which is §1's first principle.
+    ///
+    /// <para>What that fixes, beyond tidiness. The two "rate-limited" spellings said so on rows
+    /// that may have failed for any reason at all — the cap's, in particular, borrowed a sentence
+    /// about a rate limit for a line nobody had asked — and <c>Failed(ex.Message)</c> could put an
+    /// HTTP status code on screen, which is §3's first rule. Both were recorded in E1.S6's review
+    /// and both are gone. The diagnostic text is not lost: it is what E1.S5's per-request log
+    /// records, and it stops being what the player reads.</para>
+    ///
+    /// <para>The three names survive because the CALL SITES mean three different things and the
+    /// tests read them as three branches. They all render the same row, deliberately.</para>
+    ///
+    /// <para>The "(" is still added HERE and not by the deck (I4): these are a translator's return
+    /// values, so they are the one place <c>CachingTranslator.IsCacheable</c>'s marker really
+    /// matters — a placeholder that lost the parenthesis would be stored as a translation.</para>
+    /// </summary>
+    internal static readonly string SkippedMessage = NotTranslatedRow;
 
     /// <summary>The line the provider actually refused.</summary>
-    internal const string RateLimitedMessage = "(rate-limited — try again shortly)";
+    internal static readonly string RateLimitedMessage = NotTranslatedRow;
 
-    /// <summary>Every other per-line failure, typed or not.</summary>
-    internal static string Failed(string message) => $"(translation failed: {message})";
+    /// <summary>Every other per-line failure, typed or not. <paramref name="message"/> is kept in
+    /// the signature because the call sites have it and the log wants it; it is deliberately not
+    /// rendered (§3: no HTTP status code in a user string).</summary>
+    internal static string Failed(string message) => NotTranslatedRow;
+
+    private static string NotTranslatedRow => $"({UserMessages.RetryGaveUpRow()})";
 
     /// <summary>
     /// Translate <paramref name="lines"/> one at a time, in order, returning a list of exactly the

@@ -128,6 +128,24 @@ internal static class TranslationPolicy
     // S6/A11 (the 14-line → 30-request amplifier) and never measured. Field logs settle it (U9/E2.S7).
     public const int PerLineCap = 8;
 
+    // ---- Azure's native batch (§7.5) ------------------------------------------------------------
+    // Read by Services/AzureTranslator.cs (E6.S2). Azure is the only tier with a true 1:1 array
+    // contract, so its batch is bounded by the DOCUMENTED request limits rather than by a guess:
+    // one POST carries at most this many elements and at most this many characters, and a batch
+    // larger than either is split into several POSTs whose answers are concatenated in order.
+    // Nothing in this app comes near either number (a LIVE tick is ≈2.1 chat lines) — the split
+    // exists so a pathological OCR frame is a second request instead of a 400 nobody can read.
+
+    /// <summary>Elements per Translate call — the array length limit of the documented contract.</summary>
+    // [CONFIRMED] benchmark-fournisseurs.md §5.4 [S19, docs dated 2026-08-11]; architecture-cible.md §7.5
+    public const int AzureMaxTextsPerRequest = 1000;
+
+    /// <summary>Characters per request, across all target languages, of the same contract. Counted
+    /// over the texts themselves: the JSON envelope is a handful of bytes per element and the cap
+    /// is two orders of magnitude above anything this app sends.</summary>
+    // [CONFIRMED] benchmark-fournisseurs.md §5.4 [S19]; architecture-cible.md §7.5
+    public const int AzureMaxCharsPerRequest = 50000;
+
     // ---- the retry policy (§5.6) ---------------------------------------------------------------
     // Read by Services/HttpProviderCore.cs (E2.S5), which replaced the three-attempt / 300 ms-linear
     // loop these two numbers describe the successor of. Both are [ASSUMED] and both are revisited
@@ -296,6 +314,33 @@ internal static class TranslationPolicy
     /// common way a read ends early is still a person ending it.</para></summary>
     // [ASSUMED] architecture-cible.md §9.4 (the number is named there and nowhere measured)
     public const int ReadOnceBudgetSeconds = 30;
+
+    // ---- "Test key" (E6.S5) -------------------------------------------------------------------
+    // Read by MainWindow.Translate.cs, which builds one CancellationTokenSource per press from it.
+
+    /// <summary>How long one press of <b>Test key</b> may run before it gives up and says so.
+    ///
+    /// <para>Like <see cref="ReadOnceBudgetSeconds"/> it is a <b>budget</b> and not a request
+    /// timeout, and the review that added it found the story had used the latter. A key test goes
+    /// through <see cref="HttpProviderCore"/>, so it is ONE LOGICAL CALL — up to
+    /// <see cref="MaxAttempts"/> requests, each bounded by <see cref="RequestTimeoutSeconds"/>,
+    /// plus the admission wait and the jittered back-off between them. Bounding that by a single
+    /// request's timeout does two things nobody wanted: the core's retry becomes structurally
+    /// unreachable from this path (a blip the translation path recovers from is reported to the
+    /// player as "took too long"), and the cut lands as a GENUINE cancel, which the core lets past
+    /// unreported by design — so a granted half-open probe is left outstanding and the provider
+    /// refuses every real translation until <c>ProviderGate.ProbeTimeout</c> re-arms it.</para>
+    ///
+    /// <para>Derived rather than chosen, exactly as <c>ProviderGate.ProbeTimeout</c> is derived
+    /// from the same three numbers, so E2.S7 cannot tune one without the other. Full jitter draws
+    /// below <c>BackoffBaseMs &lt;&lt; n</c>, so the <c>MaxAttempts - 1</c> gaps sum to less than
+    /// <c>BackoffBaseMs * (2^(MaxAttempts-1) - 1)</c>; the milliseconds are rounded up to the
+    /// second so the budget can only ever be generous.</para></summary>
+    // [ASSUMED] derived, not chosen: RequestTimeoutSeconds × MaxAttempts plus the admission wait
+    // and the back-off ceiling, the same three numbers ProviderGate.ProbeTimeout is built from.
+    public const int KeyTestBudgetSeconds =
+        RequestTimeoutSeconds * MaxAttempts
+        + (MaxSpacingWaitMs + BackoffBaseMs * ((1 << (MaxAttempts - 1)) - 1) + 999) / 1000;
 
     // ---- HTML abuse-page markers (§4.3) ------------------------------------------------------
     // Matched lower-cased against DE-TAGGED text — E1.S4 does the de-tagging and lower-casing, so

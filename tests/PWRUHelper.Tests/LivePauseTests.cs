@@ -561,16 +561,19 @@ public class LivePauseTests
     /// <summary>
     /// The stop path itself is unchanged and deliberately so: <c>StopLive()</c> first (it writes
     /// "Live stopped.") and then the real reason over it, composed from the last failure's own
-    /// sentence. E7.S1 owns the copy pass — §3.2's <c>Live stopped — {n} reads in a row failed.
-    /// Press ▶ to try again.</c> and the sentence the deck still has no row for (the window stop) —
-    /// so this story adds no new user-facing string and moves none.
+    /// sentence.
+    ///
+    /// <para><b>E7.S1 did the copy pass</b> (amendment A6, ruling E5-d): the wrapper is now
+    /// <c>UserMessages.LiveAutoStopped(n, reason)</c> — "repeated errors" was the app declining to
+    /// say how many, and ▶ was nowhere in the sentence. The ORDER this case exists for is
+    /// untouched, and the needle moved with the wrapper rather than being deleted.</para>
     /// </summary>
     [Fact]
     public void The_stop_still_names_the_reason_and_leaves_the_ui_cleaned_up()
     {
         var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
 
-        int reason = live.IndexOf("SetScreenStatus($\"Live stopped after repeated errors",
+        int reason = live.IndexOf("SetScreenStatus(UserMessages.LiveAutoStopped(",
                                   StringComparison.Ordinal);
         Assert.True(reason > 0, "the auto-stop must still name the reason it stopped for");
 

@@ -120,6 +120,15 @@ public class TranslationPolicyTests
         // in front of it.
         Assert.Equal(5, TranslationPolicy.LiveAutoStopThreshold);
 
+        // E6.S2's two Azure request limits, and these two are pinned for a different reason than
+        // the rest: they are not tuning knobs at all but the DOCUMENTED contract of someone else's
+        // endpoint ([CONFIRMED], benchmark-fournisseurs.md §5.4 [S19]). AzureTranslatorTests asserts
+        // the SPLIT against the constants themselves, so without these two literals a one-character
+        // edit here would turn every LIVE tick into ten POSTs with the whole suite still green.
+        // They move only when Microsoft's own limits do.
+        Assert.Equal(1000, TranslationPolicy.AzureMaxTextsPerRequest);
+        Assert.Equal(50000, TranslationPolicy.AzureMaxCharsPerRequest);
+
         // OQ-A's shipped answer, pinned so that turning it on is a deliberate act with a red test
         // in front of it rather than a one-character edit nobody reviews. E3.S1's capture flips
         // this line and TP-PRV-04 together, or neither.

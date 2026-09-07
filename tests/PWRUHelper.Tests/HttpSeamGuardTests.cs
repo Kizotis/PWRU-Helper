@@ -74,6 +74,10 @@ public class HttpSeamGuardTests : GatesTestBase
         Assert.Contains(typeof(GoogleGtxTranslator), providers);
         Assert.Contains(typeof(GoogleDictTranslator), providers);
         Assert.Contains(typeof(DeepLTranslator), providers);
+        // E6.S2's addition. The reflection above finds it on its own — the point of putting it on
+        // the floor is that a provider dropping OFF the derived list fails here instead of quietly
+        // widening the network surface CI is allowed to reach.
+        Assert.Contains(typeof(AzureTranslator), providers);
 
         foreach (var t in providers)
         {
@@ -117,10 +121,12 @@ public class HttpSeamGuardTests : GatesTestBase
         Assert.NotNull(SharedClientOf(typeof(GoogleGtxTranslator)));
         Assert.NotNull(SharedClientOf(typeof(GoogleDictTranslator)));
         Assert.NotNull(SharedClientOf(typeof(DeepLTranslator)));
+        Assert.NotNull(SharedClientOf(typeof(AzureTranslator)));
 
         Assert.Same(SharedClientOf(typeof(GoogleGtxTranslator)), ClientOf(new GoogleGtxTranslator()));
         Assert.Same(SharedClientOf(typeof(GoogleDictTranslator)), ClientOf(new GoogleDictTranslator()));
         Assert.Same(SharedClientOf(typeof(DeepLTranslator)), ClientOf(new DeepLTranslator("k:fx")));
+        Assert.Same(SharedClientOf(typeof(AzureTranslator)), ClientOf(new AzureTranslator("k", "westeurope")));
     }
 
     [Fact]
@@ -129,13 +135,16 @@ public class HttpSeamGuardTests : GatesTestBase
         var google = new GoogleGtxTranslator(new FakeHandler());
         var dict = new GoogleDictTranslator(new FakeHandler());
         var deepl = new DeepLTranslator("k:fx", new FakeHandler());
+        var azure = new AzureTranslator("k", "westeurope", new FakeHandler());
 
         Assert.NotNull(ClientOf(google));
         Assert.NotNull(ClientOf(dict));
         Assert.NotNull(ClientOf(deepl));
+        Assert.NotNull(ClientOf(azure));
         Assert.NotSame(SharedClientOf(typeof(GoogleGtxTranslator)), ClientOf(google));
         Assert.NotSame(SharedClientOf(typeof(GoogleDictTranslator)), ClientOf(dict));
         Assert.NotSame(SharedClientOf(typeof(DeepLTranslator)), ClientOf(deepl));
+        Assert.NotSame(SharedClientOf(typeof(AzureTranslator)), ClientOf(azure));
     }
 
     [Fact]

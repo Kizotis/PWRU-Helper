@@ -352,8 +352,10 @@ public class GoogleDictTranslatorTests : GatesTestBase
 
         Assert.Equal(2, fake.Requests);
         Assert.Equal("one", result[0]);
-        Assert.Equal("(rate-limited — try again shortly)", result[1]);
-        Assert.Equal("(skipped — rate-limited, try again shortly)", result[2]);
+        // E7.S1 / amendment A5: one row text for all three per-line branches — the symbols are
+        // what say which branch ran, and the row says the one thing it owes the player.
+        Assert.Equal(PerLineFallback.RateLimitedMessage, result[1]);
+        Assert.Equal(PerLineFallback.SkippedMessage, result[2]);
     }
 
     /// <summary>The other half of E3.S6's narrowing, inherited here: a <c>BadResponse</c> is NOT a
@@ -370,7 +372,7 @@ public class GoogleDictTranslatorTests : GatesTestBase
         var result = await new GoogleDictTranslator(fake)
             .TranslateLinesAsync(new[] { "раз", "два", "три" }, "ru", "en");
 
-        Assert.StartsWith("(translation failed:", result[0]);
+        Assert.Equal(PerLineFallback.Failed(""), result[0]);
         Assert.DoesNotContain("rate-limited", result[0]);
         Assert.Equal("two", result[1]);
         Assert.Equal("three", result[2]);

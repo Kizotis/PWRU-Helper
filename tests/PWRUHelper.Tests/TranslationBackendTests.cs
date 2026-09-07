@@ -88,4 +88,27 @@ public class DeepLTranslatorTests : GatesTestBase
         // stood here read like a padding guard and was a tautology: ex.Message is the constant at
         // DeepLTranslator.cs:111 and could not contain a source line whatever the code did.
     }
+
+    /// <summary>
+    /// <b>Ruling E6-d, the single-line half of the same rule.</b> The batch path has thrown on a
+    /// count mismatch since E3.S8, but <c>TranslateAsync</c> read <c>outp.Count &gt; 0 ? outp[0] : ""</c>
+    /// — padding with a BLANK, which is worse than padding with the source: an empty string is not a
+    /// failure placeholder, so it does not start with <c>(</c>, so the chain counts the tier as a
+    /// success, no fallback runs, and <c>CachingTranslator</c> stores "" as this line's translation
+    /// for the rest of the session (I4 lets it through — the placeholder rule cannot see a blank).
+    /// One answer for one input, or a <c>BadResponse</c>: the same contract as the batch above.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"translations":[]}""")]
+    [InlineData("""{"translations":[{"text":"one"},{"text":"two"}]}""")]
+    public async Task A_single_line_answer_that_is_not_one_line_is_a_BadResponse(string body)
+    {
+        var fake = new FakeHandler().RespondJson(body);
+
+        var ex = await Assert.ThrowsAsync<TranslationException>(
+            () => new DeepLTranslator("k:fx", fake).TranslateAsync("привет", "ru", "en"));
+
+        Assert.Equal(TranslationErrorKind.BadResponse, ex.Kind);
+        Assert.Equal(1, fake.Requests);   // the mismatch is the answer, not a call that never happened
+    }
 }

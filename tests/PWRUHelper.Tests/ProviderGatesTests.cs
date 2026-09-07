@@ -332,9 +332,9 @@ public class ProviderGatesTests : GatesTestBase
         foreach (var file in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
         {
             var name = Path.GetFileName(file);
-            // The two files that ARE the seam, plus anything under bin/obj.
+            // The files that ARE the seam, plus anything under bin/obj.
             if (name is "GatesCollection.cs" or "TempGateState.cs" or "TestGateStateRedirect.cs"
-                     or "TestBackoffRedirect.cs") continue;
+                     or "TestBackoffRedirect.cs" or "StaTestHost.cs") continue;
             if (file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}") ||
                 file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")) continue;
 
@@ -347,13 +347,22 @@ public class ProviderGatesTests : GatesTestBase
                 return cut >= 0 ? l[..cut] : l;
             }));
 
-            // Two triggers, not one. Naming the registry is the obvious way to touch it; DERIVING
-            // GatesTestBase is the other, and it is the one that was quietly routed around — the
+            // FOUR triggers, not one. Naming the registry is the obvious way to touch it; DERIVING
+            // GatesTestBase is the second, and it is the one that was quietly routed around — the
             // base's constructor and Dispose reset the registry and re-point its clock without the
             // derived file ever writing `ProviderGates.`, so a scan keyed on that literal alone
             // could not see it (E2.S5's review).
+            //
+            // The last two were added by E7.S8, and each is a hole the flake actually came through.
+            // Writing the run-wide gate-state FILE seeds the registry of whatever loads it next, and
+            // TemplateRenderTests did exactly that from a collection of its own without ever naming
+            // the registry. And building a real MainWindow on the STA host reaches ProviderGates
+            // through TranslationChains, so an STA class is a registry toucher by construction —
+            // which is why the "WPF" collection was folded into this one rather than left beside it.
             if (!code.Contains("ProviderGates.", StringComparison.Ordinal) &&
-                !code.Contains(": GatesTestBase", StringComparison.Ordinal)) continue;
+                !code.Contains(": GatesTestBase", StringComparison.Ordinal) &&
+                !code.Contains("TestGateStateRedirect.", StringComparison.Ordinal) &&
+                !code.Contains("StaTestHost.", StringComparison.Ordinal)) continue;
 
             // …and two accepted answers. "Gates" is the collection; "log-file" is the one class
             // that legitimately cannot join a second collection (RequestLogTests owns the log-file
@@ -368,8 +377,10 @@ public class ProviderGatesTests : GatesTestBase
         Assert.True(offenders.Count == 0,
             "these test files touch ProviderGates without joining the non-parallel Gates collection: "
             + string.Join(", ", offenders));
-        // …and the scan itself is not vacuous: it must at least have found this file.
+        // …and the scan itself is not vacuous: it must at least have found this file, and each of
+        // E7.S8's two new triggers must still be finding the file it was written for.
         Assert.Contains("ProviderGatesTests.cs", joined);
+        Assert.Contains("TemplateRenderTests.cs", joined);   // the gate-state file, and the STA host
     }
 
     /// <summary>The test project's source directory, walked up from the assembly location the way

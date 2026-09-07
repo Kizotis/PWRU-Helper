@@ -275,6 +275,12 @@ internal static class RequestLog
     private static readonly string[] EchoMarkers =
     {
         "q=", "key=", "auth_key", "api_key", "apikey", "token=", "bearer ", "authorization",
+        // E6.S2: Azure sends its credential in a header of its own name, and a page that quotes it
+        // writes `Ocp-Apim-Subscription-Key: <key>` — a colon, not an `=`, so none of the markers
+        // above sees it. Without this entry Azure would have ONE defence (the provider's own
+        // `ProviderOptions.Secret` scrub) where DeepL has two, on the invariant this repo has paid
+        // the most for. The name is enough on its own: nothing after it is prose worth keeping.
+        "ocp-apim-subscription-key",
     };
 
     /// <summary>
