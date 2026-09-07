@@ -23,9 +23,9 @@ namespace PWRUHelper.Services;
 /// landed — the six breaker numbers arrived with <c>ProviderGate</c> (E2.S1), the four rate-ceiling
 /// numbers with its token bucket (E2.S3), and the two retry numbers with <c>HttpProviderCore</c>
 /// (E2.S5), which is also where the two "…Today" retry constants stopped describing today and were
-/// retired. The rest (<c>PerLineCap</c>, <c>CacheCapacity = 2000</c> …) still arrive with the code
-/// that reads them — E3.S8 for the batch cap, E4 for the cache, E5 for LIVE — because an unused
-/// constant is a constant nobody grades.
+/// retired, and <c>PerLineCap</c> arrived with E3.S8's shared per-line loop. The rest
+/// (<c>CacheCapacity = 2000</c> …) still arrive with the code that reads them — E4 for the cache,
+/// E5 for LIVE — because an unused constant is a constant nobody grades.
 /// Source: <c>docs/investigations/02-traduction/architecture-cible.md</c> §5.6 (the target table),
 /// §4.3 (the HTML markers).
 /// </summary>
@@ -66,6 +66,24 @@ internal static class TranslationPolicy
     /// exists to keep compiled, tested-adjacent and one edit from live.</para></summary>
     // [UNKNOWN] until U1 — architecture-cible.md §7.1; settled by E3.S1's capture, test-plan TP-PRV-04
     public static readonly bool GoogleDictBatchJoinEnabled = false;
+
+    /// <summary>How many lines a per-line fallback may ask for after a batch that failed or came
+    /// back with the wrong count. Read by <see cref="PerLineFallback"/> (E3.S8), which is the one
+    /// loop the join/split providers share; beyond it the remaining lines get the skipped
+    /// placeholder and cost <b>no request at all</b>.
+    ///
+    /// <para>What the number buys: <c>analyse…</c> S6/A11 measured a mismatch on a 14-line LIVE tick
+    /// turning one logical translation into up to 30 requests inside that tick, on a connection that
+    /// was already being throttled. At 8 the worst case is 8 requests, and the measured LIVE batch
+    /// size is ≈2.1 lines — so on a healthy tick this constant never fires at all.</para>
+    ///
+    /// <para><b>It bounds the FALLBACK and never a primary per-line path</b> (ruling E3-e):
+    /// <c>GoogleDictTranslator</c> ships per line by design under OQ-A, whose answer accepts "≈2× the
+    /// LIVE request volume", and capping that would refuse the behaviour the owner approved. That
+    /// path is bounded by the §5.4 rate ceiling and by the gate instead.</para></summary>
+    // [ASSUMED] architecture-cible.md §6.3 / §5.6; calibrated to analyse-implementation-actuelle.md
+    // S6/A11 (the 14-line → 30-request amplifier) and never measured. Field logs settle it (U9/E2.S7).
+    public const int PerLineCap = 8;
 
     // ---- the retry policy (§5.6) ---------------------------------------------------------------
     // Read by Services/HttpProviderCore.cs (E2.S5), which replaced the three-attempt / 300 ms-linear

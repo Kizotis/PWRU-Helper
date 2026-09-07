@@ -84,8 +84,8 @@ public class TranslationPolicyTests
     [Fact]
     public void The_numbers_are_the_ones_the_code_uses_today()
     {
-        // The numbers the code really runs on. The remaining §5.6 targets (cache 2000, PerLineCap
-        // …) are deliberately absent until the code that reads them exists.
+        // The numbers the code really runs on. The remaining §5.6 targets (cache 2000 …) are
+        // deliberately absent until the code that reads them exists.
         Assert.Equal(12, TranslationPolicy.RequestTimeoutSeconds);
         // E2.S5 replaced MaxAttemptsToday = 3 / RetrySpacingBaseMs = 300 with §5.6's targets, in
         // the same commit that changed the loop — E1.S1 said it would. The literals are the point
@@ -95,6 +95,11 @@ public class TranslationPolicyTests
         Assert.Equal(500, TranslationPolicy.BackoffBaseMs);
         Assert.Equal(500, TranslationPolicy.CacheCapacityToday);
         Assert.Equal(1500, TranslationPolicy.MaxQueryBytes);
+
+        // E3.S8's cap, and the literal belongs HERE and nowhere else (U9): PerLineFallbackTests
+        // asserts the RELATIONSHIPS — at the cap every line is asked, one past it exactly one is
+        // not — so a tuning commit that moves this number touches this line alone.
+        Assert.Equal(8, TranslationPolicy.PerLineCap);
 
         // OQ-A's shipped answer, pinned so that turning it on is a deliberate act with a red test
         // in front of it rather than a one-character edit nobody reviews. E3.S1's capture flips

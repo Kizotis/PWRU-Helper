@@ -682,7 +682,7 @@ public class HttpProviderCoreTests : GatesTestBase
         // HttpProviderCore and awaits IS on the request path, so E3.S4's new provider joins this
         // scan by existing. A hand-written list would have gone blind to it in exactly the way a
         // list of file names goes stale — which is what E3.S6's rename cost this test in the first
-        // place. The filter reproduces today's six files and nothing else.
+        // place. The filter reproduces today's seven files and nothing else.
         var onTheRequestPath = Directory.EnumerateFiles(ServicesDir(), "*.cs")
             .Where(f => File.ReadAllText(f).Contains("HttpProviderCore", StringComparison.Ordinal))
             .Where(f => Statements(f).Any(s => Regex.IsMatch(s, @"(^|[^\w.])await\s")))
@@ -696,9 +696,14 @@ public class HttpProviderCoreTests : GatesTestBase
         // out of the derived set fails here, loudly, instead of quietly un-scanning the file every
         // translation the app makes now goes through.
         var names = onTheRequestPath.Select(Path.GetFileName).ToList();
+        // PerLineFallback.cs joined with E3.S8: it is the loop BOTH Google providers now await, so
+        // every per-line request in the app goes through its two awaits. It is on the derived list
+        // because it names HttpProviderCore (it rethrows the core's NotSent refusals by contract),
+        // and it is on this floor so that losing that reference silently un-scans the loop.
         foreach (var known in new[] { "HttpProviderCore.cs", "GoogleGtxTranslator.cs",
                                       "GoogleDictTranslator.cs", "DeepLTranslator.cs",
-                                      "RequestLog.cs", "ChainTranslator.cs" })
+                                      "RequestLog.cs", "ChainTranslator.cs",
+                                      "PerLineFallback.cs" })
             Assert.Contains(known, names);
 
         foreach (var file in onTheRequestPath)

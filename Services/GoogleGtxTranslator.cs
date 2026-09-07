@@ -123,13 +123,29 @@ public class GoogleGtxTranslator : ITranslator
     /// and falls back to one request per line if the batch fails or the line count doesn't
     /// line up. Returns a list the same length as <paramref name="lines"/>; a line that
     /// can't be translated comes back as "(translation failed: …)".
+    ///
+    /// <para><b>The loop below the batch is not here any more</b> (E3.S8): it, <c>SafeOne</c>, the
+    /// latch and the three placeholder strings moved to <see cref="PerLineFallback"/>, which
+    /// <see cref="GoogleDictTranslator"/> shares — they were byte-identical in the two files and the
+    /// Rule of Three was reached. What stays here is what is gtx's: the join, the split and the
+    /// count comparison (§6.3). <c>afterFailedBatch: true</c> is what arms
+    /// <see cref="TranslationPolicy.PerLineCap"/>: this fan-out IS the amplifier E3.S8 bounds.</para>
     /// </summary>
     public async Task<List<string>> TranslateLinesAsync(IReadOnlyList<string> lines,
         string source, string target, CancellationToken ct = default)
     {
         if (lines.Count == 0) return new List<string>();
         if (lines.Count == 1)
-            return new List<string> { await SafeOne(lines[0]).ConfigureAwait(false) };
+            return new List<string>
+            {
+                await PerLineFallback.SafeOneAsync(lines[0], One, ct).ConfigureAwait(false),
+            };
+
+        // Whether a batch was really tried and really failed — which is the ONLY thing that arms the
+        // cap (ruling E3-e). A group too long for one query never had a batch to fail: it takes the
+        // same loop as its PRIMARY strategy, and capping it would drop lines from a big LIVE tick
+        // that nothing had gone wrong with. The rate ceiling and the gate bound that one.
+        bool batchFailed = false;
 
         var joined = string.Join("\n", lines);
         if (Encoding.UTF8.GetByteCount(joined) <= TranslationPolicy.MaxQueryBytes)
@@ -140,68 +156,25 @@ public class GoogleGtxTranslator : ITranslator
                 var parts = full.Split('\n');
                 if (parts.Length == lines.Count)
                     return parts.Select(p => p.Trim()).ToList();
-                // else: segmentation didn't line up — fall through to per-line.
+                // else: segmentation didn't line up — fall through to per-line. NEVER padded (I5).
+                batchFailed = true;
             }
             catch (TranslationException) { throw; }  // rate-limit etc. — let the caller show it
             // A genuine Stop must not be spent on a per-line retry of a batch the user abandoned.
             // The bare catch below is an OCE catch too, and I3 asks every one of them to say so.
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch { /* fall through to per-line */ }
+            catch { batchFailed = true; /* fall through to per-line */ }
         }
 
-        // Per-line fallback. Translate as many as possible and KEEP the successes even if a
-        // later line gets rate-limited — otherwise translating line 30 of 40 and hitting a
-        // 429 would throw away the 29 good translations we already had.
-        var result = new List<string>(lines.Count);
-        bool rateLimited = false;
-        foreach (var l in lines)
-        {
-            if (rateLimited) { result.Add("(skipped — rate-limited, try again shortly)"); continue; }
-            try { result.Add(await TranslateAsync(l, source, target, ct).ConfigureAwait(false)); }
-            // A real cancel must propagate — and ONLY a real one. Unfiltered, this catch rethrew an
-            // HttpClient timeout (an OCE whose token is NOT cancelled) as if the user had pressed
-            // Stop, which threw away every line already translated above it: exactly what the
-            // comment on this loop exists to prevent. RequestAsync now hands timeouts over as a
-            // Timeout-kind TranslationException, so they are caught below as the failure of the one
-            // line they happened on — since E3.S6 without latching the rest of the loop (I3).
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            // AC 4 (E3.S6): ONLY a refusal latches. The latch exists because asking a provider that
-            // just said "stop" for thirteen more lines is how a soft block becomes a hard one — a
-            // reason that holds for RateLimited and Blocked and for nothing else. Unfiltered, it
-            // also fired on a BadResponse or a Timeout on line 3 of 14 and turned lines 4-14 into
-            // "(skipped — rate-limited…)", a sentence that was simply false: nobody was rate-
-            // limiting anything. The latch itself is kept (I16), and a latched line still reads
-            // exactly as it did.
-            //
-            // Be exact about what this buys, because the gate does half of it anyway (E3.S6 review):
-            // a Timeout/Network/Unavailable/Unknown is a §5.3 SoftCooldown, so the gate blocks this
-            // provider for 5 s the moment line 3 fails and lines 4-14 are refused at admission — no
-            // request, but no translation either. What changes for them is only that they stop
-            // claiming a rate limit. The lines genuinely saved are the BadResponse ones, which set
-            // no window until the third in a row; and every failing line now names its own failure.
-            catch (TranslationException tex) when (tex.Kind is TranslationErrorKind.RateLimited
-                                                            or TranslationErrorKind.Blocked)
-            { rateLimited = true; result.Add("(rate-limited — try again shortly)"); }
-            // Every other typed failure is this line's problem and no other line's. Written out
-            // rather than left to fall into the generic catch below — which would render it
-            // identically today — so that the intent survives an edit to that catch: this arm
-            // exists to NOT latch, and the string it borrows is E7.S1's to reword (ruling E2-d).
-            catch (TranslationException tex) { result.Add($"(translation failed: {tex.Message})"); }
-            catch (Exception ex) { result.Add($"(translation failed: {ex.Message})"); }
-        }
-        return result;
+        // The per-line fallback, capped: PerLineFallback owns the loop, the latch, the placeholders
+        // and ruling E3-f's throw. This file owns the join and the split above it, and nothing else.
+        return await PerLineFallback
+            .RunAsync(lines, One, ProviderId, batchFailed, ct).ConfigureAwait(false);
 
-        async Task<string> SafeOne(string line)
-        {
-            try { return await TranslateAsync(line, source, target, ct).ConfigureAwait(false); }
-            catch (TranslationException) { throw; }
-            // The one-line path is a third OCE catch, and I3 asks every one of them to say so: the
-            // generic catch below is what a genuine Stop lands in, and it turned the cancel into a
-            // translation-failed line instead of propagating. A timeout cannot reach here any more
-            // — RequestAsync hands those over as a Timeout-kind TranslationException.
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception ex) { return $"(translation failed: {ex.Message})"; }
-        }
+        // The provider's own one-line call, with the source and target closed over — the whole of
+        // what the shared loop needs to know about gtx.
+        Task<string> One(string line, CancellationToken token)
+            => TranslateAsync(line, source, target, token);
     }
 
     /// <summary>One logical call: this method owns the URL and the parser, and hands everything

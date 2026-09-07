@@ -19,15 +19,13 @@ namespace PWRUHelper.Services;
 /// <para><b>Not wired into any chain here.</b> Composition is E3.S7's; this story adds the provider
 /// and its tests, so that the switch and the wiring can be read — and reverted — separately.</para>
 ///
-/// <para><b>The duplication is deliberate, and it is recorded rather than resolved.</b>
-/// <c>TranslateLinesAsync</c>'s per-line loop and <c>SafeOne</c> are all but verbatim
-/// <see cref="GoogleGtxTranslator"/>'s (~45 lines), and so is the byte-budget chunking above them.
-/// That is TWO copies: the Rule of Three says the shared "batch semantics" helper is extracted when
-/// a third provider needs it — which is E3.S5's Edge tier, if U2 ever lands — and E3.S8 is the story
-/// that owns this loop anyway (<c>PerLineCap</c> bounds exactly this fan-out). Extracting it here
-/// would mean rewriting the shipping provider's loop in the same commit that introduces a new
-/// endpoint, which is two risks in one diff. <b>E3.S8 extraction candidate, named here so nobody has
-/// to rediscover it.</b></para>
+/// <para><b>The duplication this file recorded is now resolved.</b> <c>TranslateLinesAsync</c>'s
+/// per-line loop and <c>SafeOne</c> were all but verbatim <see cref="GoogleGtxTranslator"/>'s
+/// (~57 lines), recorded here as an E3.S8 extraction candidate rather than fixed in the commit that
+/// introduced a new endpoint. E3.S8 collected them into <see cref="PerLineFallback"/> when its own
+/// rule became the third copy. What is still duplicated on purpose: the byte-budget chunking above
+/// them (three lines around <see cref="TextChunker"/>) and the User-Agent, which is a provider
+/// OPTION and pinned equal by a test rather than shared through a constant.</para>
 ///
 /// <para><b>ToS posture, stated once.</b> <c>clients5.google.com/robots.txt</c> carries no
 /// <c>Disallow: /translate_a/</c>, unlike <c>translate.googleapis.com</c> line 162 — strictly better
@@ -147,15 +145,30 @@ public class GoogleDictTranslator : ITranslator
     ///
     /// <para>Returns a list the same length as <paramref name="lines"/>; a line that could not be
     /// translated comes back as a "(…)" placeholder, which <see cref="CachingTranslator"/> never
-    /// stores (I4). The fan-out is bounded three ways and each is somebody's: <c>PerLineCap</c>
-    /// (E3.S8, not yet), the §5.4 rate ceiling (E2.S3, already pacing it) and the gate (E2.S1).</para>
+    /// stores (I4). The fan-out is bounded three ways and each is somebody's: the §5.4 rate ceiling
+    /// (E2.S3, already pacing it), the gate (E2.S1) and — <b>only once the join above is on and a
+    /// batch has actually failed</b> — <see cref="TranslationPolicy.PerLineCap"/> (E3.S8, ruling
+    /// E3-e). The cap does NOT bound today's primary per-line path: OQ-A accepted its volume, and
+    /// capping it would refuse the very behaviour the owner approved.</para>
+    ///
+    /// <para><b>The loop itself lives in <see cref="PerLineFallback"/></b> since E3.S8. It was
+    /// byte-identical here and in <see cref="GoogleGtxTranslator"/>, this file said so in a
+    /// paragraph naming E3.S8 as the extraction story, and E3.S8's rule was the third copy.</para>
     /// </summary>
     public async Task<List<string>> TranslateLinesAsync(IReadOnlyList<string> lines,
         string source, string target, CancellationToken ct = default)
     {
         if (lines.Count == 0) return new List<string>();
         if (lines.Count == 1)
-            return new List<string> { await SafeOne(lines[0]).ConfigureAwait(false) };
+            return new List<string>
+            {
+                await PerLineFallback.SafeOneAsync(lines[0], One, ct).ConfigureAwait(false),
+            };
+
+        // Armed only by a batch that was tried and failed (E3-e). It is false on every path today,
+        // because there is no batch today — which is the point: the cap arrives ready for U1 and
+        // changes nothing until the join flips on.
+        bool batchFailed = false;
 
         if (TranslationPolicy.GoogleDictBatchJoinEnabled)
         {
@@ -170,6 +183,7 @@ public class GoogleDictTranslator : ITranslator
                     // once bypassed a fallback and poisoned the cache.
                     if (parts.Length == lines.Count)
                         return parts.Select(p => p.Trim()).ToList();
+                    batchFailed = true;
                 }
                 catch (TranslationException) { throw; }  // rate-limit etc. — let the caller show it
                 // A genuine Stop must not be spent on a per-line retry of a batch the user
@@ -177,50 +191,16 @@ public class GoogleDictTranslator : ITranslator
                 // them to say so — the filter is what keeps an HttpClient timeout (an OCE whose
                 // token is NOT cancelled) from masquerading as a cancel.
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-                catch { /* fall through to per-line */ }
+                catch { batchFailed = true; /* fall through to per-line */ }
             }
         }
 
-        // Per line. Translate as many as possible and KEEP the successes even if a later line is
-        // refused — otherwise translating line 30 of 40 and hitting a 429 would throw away the 29
-        // good translations we already had.
-        var result = new List<string>(lines.Count);
-        bool rateLimited = false;
-        foreach (var l in lines)
-        {
-            if (rateLimited) { result.Add("(skipped — rate-limited, try again shortly)"); continue; }
-            try { result.Add(await TranslateAsync(l, source, target, ct).ConfigureAwait(false)); }
-            // A real cancel must propagate — and ONLY a real one (I3). Unfiltered, this catch
-            // rethrows an HttpClient timeout as if the user had pressed Stop and throws away every
-            // line already translated above it. Timeouts never arrive here as an OCE anyway: the
-            // core hands them over as a Timeout-kind TranslationException.
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            // I16, with E3.S6's narrowing: ONLY a refusal latches. Asking a provider that just said
-            // "stop" for thirteen more lines is how a soft block becomes a hard one — a reason that
-            // holds for RateLimited and Blocked and for nothing else. A BadResponse or a Timeout on
-            // line 3 of 14 fails its own line and no other.
-            catch (TranslationException tex) when (tex.Kind is TranslationErrorKind.RateLimited
-                                                            or TranslationErrorKind.Blocked)
-            { rateLimited = true; result.Add("(rate-limited — try again shortly)"); }
-            // Every other typed failure is this line's problem and no other line's. Written out
-            // rather than left to the generic catch — which renders it identically today — so the
-            // intent survives an edit to that catch: this arm exists to NOT latch, and the string it
-            // borrows is E7.S1's to reword (ruling E2-d).
-            catch (TranslationException tex) { result.Add($"(translation failed: {tex.Message})"); }
-            catch (Exception ex) { result.Add($"(translation failed: {ex.Message})"); }
-        }
-        return result;
+        return await PerLineFallback
+            .RunAsync(lines, One, ProviderId, batchFailed, ct).ConfigureAwait(false);
 
-        async Task<string> SafeOne(string line)
-        {
-            try { return await TranslateAsync(line, source, target, ct).ConfigureAwait(false); }
-            catch (TranslationException) { throw; }
-            // The one-line path is a third OCE catch and I3 asks every one of them to say so: the
-            // generic catch below is where a genuine Stop would land, and it would turn the cancel
-            // into a translation-failed line instead of propagating.
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception ex) { return $"(translation failed: {ex.Message})"; }
-        }
+        // The provider's own one-line call, with the source and target closed over.
+        Task<string> One(string line, CancellationToken token)
+            => TranslateAsync(line, source, target, token);
     }
 
     /// <summary>One logical call: this method owns the URL, and hands everything else to
