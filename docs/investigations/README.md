@@ -295,7 +295,12 @@ Continuous execution, story by story: Amelia **DS** (test-first, one commit) the
 | E7.S7 About block + Clear cache | `393940e` | approve-with-fixes · `17b34e7` (layout test at default/min size caught 3 clippings; two `Clear()` races) | → 1213 | About restructured (engines in use · keys · offline slot without a button until E8 · saved translations + atomic `Clear cache`); status line = the chain's own predicate; transient feedback on its own line. |
 | E7.S8 README / About copy + flaky tests | `e9dd797` | — (docs + tests; no separate review) | 1213, 3 green runs | README "How translation works", MSI-first, first-launch expectation, keys, cache privacy; **flake root cause**: `DisableParallelization` on the `Gates` collection does not stop other collections running beside it — the nine STA classes touched the registry undeclared → all in `Gates`; membership scan widened to the gate-state file and `StaTestHost`. |
 
-**Release B = E6 + E7 complete (2026-09-08): 12 stories, 897 → 1213 tests. PR #58 marked ready for review (merge order #54 → #55 → #56 → #57 → #58).** Next: release C = E8 Bergamot on `feature/p2-c-offline`, stacked on B — S1 spike first (go per E8-d), any missed threshold closes the branch.
+**Release B = E6 + E7 complete (2026-09-08): 12 stories, 897 → 1213 tests. PR #58 marked ready for review (merge order #54 → #55 → #56 → #57 → #58).**
+
+### Release C — epic E8 Bergamot offline (branch `feature/p2-c-offline`, stacked on B)
+| Story | Commit | Tests | Notes |
+|---|---|---|---|
+| E8.S1 spike U6/U7 | (running on the dev box) | — | Five thresholds (init ≤ 500 ms · ≤ 15 ms/line · RAM ≤ 150 MiB active, ≈ 0 at rest · exe +0 MB with download-on-demand · U7); any miss closes the branch. Downloads authorised by E8-d (temp dir, deleted after). |
 | E6.S1 / E6.S6 spikes | — | — | — | **Owner-blocked** (U4 real Azure F0 account; U5 an already-issued DeepL `:fx` key). Copy only; code not gated. |
 
 _Process note (2026-09-07): an agent reverted this README's working-copy edits during A.2 (rulings E4-a…E5-g and both tables were lost and re-entered here). Orchestrator edits are now committed immediately after each ruling._
