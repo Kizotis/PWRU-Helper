@@ -861,16 +861,40 @@
                                    Margin="22,4,0,0" Foreground="{StaticResource TextMutedBrush}"/>
 
                         <!-- ==== Offline engine (optional) ==================================== -->
-                        <!-- §4.2's third block, as a PLACEHOLDER: the line ships, the
-                             [ Download the offline engine ] button does NOT. E8.S3 owns the
-                             behaviour and the consent dialog (§3.6), E8 is gated on U6/U7 and on
-                             R-12, and a visible Download button that does nothing is worse than an
-                             absent one. Ruling R-4 governs the setting when it arrives:
-                             OfflineFallbackEnabled is written by Download and Remove — no checkbox. -->
+                        <!-- §4.2's third block, FILLED IN by E8.S3 — E7.S7 left the heading and the
+                             row here and this story adds the two controls to the same region rather
+                             than a second one. Ruling R-4: OfflineFallbackEnabled is written by
+                             Download and Remove and by nothing else, so there is deliberately NO
+                             check box; §4.3 says why it is a Button whose content flips — "the two
+                             actions have very different weight", one costing 50 MB of somebody's
+                             connection and the other deleting it from their disk.
+
+                             The consent dialog (§3.6) is raised from OfflineEngine_Click and from
+                             nowhere else (AC 2 / NFR12): no background, LIVE or OCR path may open a
+                             modal, and a source scan pins it.
+
+                             WrapPanel and not a horizontal StackPanel, for E6.S5's reason: this tab
+                             scrolls VERTICALLY only, so a row wider than the viewport is clipped and
+                             unreachable at any window size (TP-RENDER-09 measures it at both shipped
+                             sizes). TextWrapping on the row for the same reason — AC 3's failure
+                             sentence is the longest string on this tab and the actionable half of it
+                             is at the end. Every label comes from UserMessages (GAP-4 / UX-DR19):
+                             the Download/Remove content CHANGES, so a XAML Content attribute would
+                             be a second spelling of it. No new brush, font or colour (UX-DR18). -->
                         <TextBlock Text="Offline engine (optional)" FontSize="15" FontWeight="Bold"
                                    Foreground="{StaticResource GoldBrush}" Margin="0,18,0,6"/>
                         <TextBlock x:Name="OfflineEngineText" TextWrapping="Wrap"
                                    Foreground="{StaticResource TextMutedBrush}"/>
+                        <WrapPanel Margin="0,6,0,0">
+                            <Button x:Name="OfflineEngineButton" Style="{StaticResource GhostButton}"
+                                    Padding="12,4" Margin="0,0,0,4" Click="OfflineEngine_Click"/>
+                            <!-- Visible only while a transfer is running (AC 3). Collapsed and not
+                                 disabled: a permanently greyed Cancel is a control that says the app
+                                 might be busy when it is not. -->
+                            <Button x:Name="OfflineCancelButton" Style="{StaticResource GhostButton}"
+                                    Padding="12,4" Margin="8,0,0,4" Visibility="Collapsed"
+                                    Click="OfflineCancelDownload_Click"/>
+                        </WrapPanel>
 
                         <!-- ==== Saved translations (amendment A10, ruling E4-c) ============== -->
                         <!-- The cache holds other players' chat and nothing ever told the user the

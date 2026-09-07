@@ -416,7 +416,23 @@ public class UserMessagesTests : GatesTestBase
             UserMessages.DeepLUsage(500_000, 1_000_000), UserMessages.DeepLUsage(500_000, null),
             UserMessages.TestKeyLabel(), UserMessages.TestKeyLabelCosts(),
             UserMessages.TestKeyCostsTooltip(), UserMessages.TestingLabel(),
+            // E8.S3's offline block. The two DIALOG BODIES are deliberately absent: they are
+            // multi-line blocks with labelled columns and blank lines, not status lines, so the
+            // "no double space, one line" rules below are the wrong ruler for them — their own
+            // assertions live in OfflineModelStoreTests (the four facts AC 1 requires, and the
+            // directory ruling E8-b settled).
+            UserMessages.OfflineConsentTitle(), UserMessages.OfflineRemoveTitle(),
+            UserMessages.OfflineDownloading(0), UserMessages.OfflineDownloading(42),
+            UserMessages.OfflineDownloading(100), UserMessages.OfflineDownloading(null),
+            UserMessages.OfflineEngineReady(), UserMessages.AboutOfflineNotInstalled(),
+            UserMessages.OfflineDownloadLabel(), UserMessages.OfflineRemoveLabel(),
+            UserMessages.OfflineCancelLabel(), UserMessages.OfflineRemovedStatus(0),
+            UserMessages.OfflineRemovedStatus(52_428_800),
+            UserMessages.AllPausedOfflineNudge(),
         };
+
+        foreach (var why in Enum.GetValues<OfflineInstallFailure>())
+            rendered.Add(UserMessages.OfflineDownloadFailed(why));
 
         foreach (var kind in Enum.GetValues<TranslationErrorKind>())
             foreach (var p in new string?[] { null, ProviderIds.DeepL, ProviderIds.Bergamot })
@@ -1204,6 +1220,20 @@ public class UserMessagesTests : GatesTestBase
             "can take up to about 10 ", "seconds, with nothing on screen.",
             "Not installed — about 50 MB to download",
             "they hold chat text, they never leave your PC",
+            // E8.S3's offline block (§3.6, §4.2, §4.3). The consent body is scanned by the line
+            // that matters most — the one naming the directory the user's 50 MB went to, which
+            // ruling E8-b moved to %LocalAppData% and which the STORE builds from
+            // SpecialFolder.LocalApplicationData: a second spelling of that path anywhere is the
+            // support ticket the ruling exists to prevent.
+            "Add the offline engine?", "The offline engine translates on your PC",
+            @"Stored in — %LocalAppData%\PWRUHelper\models",
+            "Downloading the offline engine… ", "\"Downloading…\"",
+            "● Offline engine ready — used only when everything else is unavailable.",
+            "Download failed — ", ". Nothing was installed.",
+            "Download the offline engine", "Remove the offline engine?",
+            "This deletes the offline engine's files from your PC",
+            "Offline engine removed — ", " MB freed from your disk.",
+            "All engines are paused — you can add an offline engine in About.",
             "Clear cache", "Cache cleared — ", " saved translation(s) removed.",
             // §4.2's reason column. Only the clause is scanned: the row is composed from a provider
             // NAME plus this, so the rendered sentence is not a contiguous literal anywhere — which

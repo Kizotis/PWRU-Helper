@@ -446,6 +446,15 @@ can add an offline engine in About.`
 
 `MessageBox.Show(this, …)` with an owner, per `project-context.md`. Title: `Add the offline engine?`
 
+> **`%LocalAppData%`, not `%AppData%` — ruling E8-b (Winston, 2026-09-07), landed with E8.S3's code in one
+> commit.** The line below said `%AppData%\PWRUHelper\models` when this deck was written, by analogy with
+> `settings.json`, `provider-state.json`, `translation-cache.json` and the log — all four of which are kilobytes.
+> This directory is 22 MB of native library plus 22–37 MB per model, and a roaming or OneDrive-synced profile
+> copies its contents **at logon**: the exact class of machine-dependent startup cost P1 spent a phase hunting.
+> Machine-local, re-downloadable binary data belongs in Local, and the consent dialog's whole job is to say where
+> the 50 MB went — so the copy moved with the code rather than after it. The **cache** sentence in §4.2 still says
+> `%AppData%\PWRUHelper\` and is still right: that file is kilobytes of the user's own data and roams correctly.
+
 ```
 The offline engine translates on your PC, with no internet at all.
 It is a bit rougher than Google, and it is used only when every online
@@ -453,7 +462,7 @@ engine is unavailable.
 
 Download          about 22 MB for the engine + about 30 MB per language pair
 While translating it uses 130-310 MB of memory, freed when it goes idle
-Stored in         %AppData%\PWRUHelper\models
+Stored in         %LocalAppData%\PWRUHelper\models
 To remove it      About tab → Offline engine → Remove (deletes the files)
 
                              [ Download (about 50 MB) ]   [ Not now ]

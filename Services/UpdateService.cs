@@ -94,7 +94,14 @@ public class UpdateService
         return (msi, exe);
     }
 
-    private static bool IsTrustedDownload(string? url) =>
+    /// <summary>The app's one download allow-list — <c>github.com</c> and
+    /// <c>*.githubusercontent.com</c>, over https, and nothing else
+    /// (<c>project-context.md</c>'s "Critical Don't-Miss Rules"). <b>Internal rather than private
+    /// since E8.S3</b>, which reads it for the offline engine's files: ruling E8-f puts those bytes
+    /// on a GitHub release of the owner's precisely so this list does not have to be widened, and a
+    /// second copy of the predicate would be the widening, one file away. The list itself is
+    /// unchanged.</summary>
+    internal static bool IsTrustedDownload(string? url) =>
         Uri.TryCreate(url, UriKind.Absolute, out var u)
         && u.Scheme == Uri.UriSchemeHttps
         && (u.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase)

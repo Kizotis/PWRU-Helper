@@ -512,8 +512,12 @@ public class PausedStateTests
         Assert.Contains("if (notice is not null && !string.Equals(notice, _lastStateNotice, StringComparison.Ordinal))",
                         body, StringComparison.Ordinal);
         Assert.Contains("_lastStateNotice = notice;", body, StringComparison.Ordinal);
-        Assert.Contains("var notice = StateNotice(status, chip, _chipWasDegraded);", body,
-                        StringComparison.Ordinal);
+        // E8.S3 added AC 2's nudge as a fourth argument, and it rides this same comparison — which
+        // is the whole reason the nudge is safe: it is a sentence a pure function chooses, so it can
+        // never become a dialog or a per-row annotation, and "once, when the state is entered" is
+        // the memory below rather than a new mechanism.
+        Assert.Contains("var notice = StateNotice(status, chip, _chipWasDegraded, _offlineInstalled);",
+                        body, StringComparison.Ordinal);
     }
 
     /// <summary>

@@ -288,6 +288,30 @@ public partial class MainWindow : Window
         // appears in front of our always-on-top window instead of behind it.
         await CheckForUpdatesAsync();
 
+        // ---- AC 7 / I10: the model store, asked AFTER first paint, on a pool thread ------------
+        //
+        // The same shape and the same reason as the gate warm-up below (ruling E6-a). Nothing about
+        // the model store may touch the disk before the window is visible — not a Directory.Exists,
+        // not a file enumeration, not a size sum — so ApplySettings painted the row from the setting
+        // and this is where the disk gets the last word. It matters when the two disagree: a user
+        // who deleted the directory by hand, or a manifest whose files this build cannot verify.
+        //
+        // Guarded and type-name-only in the log (I11): a status warm-up may not fail a launch, and
+        // an exception's Message can carry the path this file is not allowed to write down.
+        try
+        {
+            var installed = await Task.Run(() => _offlineStore.IsInstalled);
+            if (installed != _offlineInstalled)
+            {
+                _offlineInstalled = installed;
+                UpdateOfflineEngineUi();
+            }
+        }
+        catch (Exception ex)
+        {
+            Logging.Warn("the offline engine check did not finish: " + ex.GetType().Name);
+        }
+
         // ---- Ruling E6-a: the gate state, read AFTER first paint, on a pool thread -------------
         //
         // TP-START-04 wants the chip to show a saved pause "at first paint"; I10 forbids reading
@@ -377,6 +401,20 @@ public partial class MainWindow : Window
             // The change handler is suppressed above, so apply the mode-dependent UI side-effects
             // (colour-options panel visibility + tolerance label) it would otherwise have produced.
             UpdateOcrFilterUi(s.OcrFilterMode ?? "off");
+
+            // E8.S3 / AC 9, and it is the same rule one line up applied to a control that has no
+            // change handler at all: the offline Download/Remove button is not persisted state, so
+            // nothing here could clobber a saved value — but its label, its row text and the Cancel
+            // button's visibility are still side effects nobody else applies, and I12 says a restore
+            // applies them EXPLICITLY rather than by borrowing _restoringSettings (E6.S3's review
+            // found a real bug doing exactly that).
+            //
+            // The row is painted from the SETTING and never from the disk (AC 7 / I10): nothing
+            // about the model store may be asked before the window is visible, and ruling R-4 makes
+            // OfflineFallbackEnabled a faithful proxy — these two buttons are its only writers. The
+            // disk gets the last word from OnWindowLoaded, on a pool thread, after first paint.
+            _offlineInstalled = s.OfflineFallbackEnabled;
+            UpdateOfflineEngineUi();
 
             ScreenCapture.SetMode(s.CaptureBackend);
             SetCaptureBackendCombo(s.CaptureBackend ?? "gdi");
@@ -1002,7 +1040,11 @@ public partial class MainWindow : Window
         // once the whole attempt has already failed. Its evidence is LastOutcome.Skipped being
         // non-empty behind a tier that ANSWERED (EngineStatus.FellBack, ruling E3-b), so the app
         // reports a fallback rather than promising one.
-        var notice = StateNotice(status, chip, _chipWasDegraded);
+        // E8.S3 / AC 2 rides the SAME "once per switch" machinery, which is the whole reason the
+        // nudge is safe: it is a status-line sentence chosen by a pure function, so it can never
+        // become a dialog, a toast or a per-row annotation. _offlineInstalled is the last known
+        // answer (post-paint, never read here — I10).
+        var notice = StateNotice(status, chip, _chipWasDegraded, _offlineInstalled);
 
         // "Once per switch" as a comparison and not a flag: the same sentence is not re-announced
         // while the state it describes lasts (principle 1 — a state is announced once and left
@@ -1028,10 +1070,30 @@ public partial class MainWindow : Window
     /// down it is <see cref="FallbackNotice"/>'s evidence-backed line, and a healthy chip with
     /// nothing behind it says nothing at all — which is also what clears the caller's memory so the
     /// NEXT switch speaks.</para></summary>
-    internal static string? StateNotice(EngineStatus status, EngineChip chip, bool wasDegraded)
-        => chip.IsHealthy
-            ? wasDegraded ? UserMessages.BackOn(status.LastAnswered) : null
-            : FallbackNotice(status);
+    /// <param name="offlineInstalled"><b>E8.S3 / AC 2.</b> The all-paused state is the one place a
+    /// background failure may say anything at all, and what it may say is a <b>nudge</b> — never a
+    /// dialog, because a <c>MessageBox</c> over a fullscreen game opened by a LIVE loop the player
+    /// forgot was running is the single worst thing this app could do (principle 3, NFR12). It rides
+    /// this method's existing "once per switch" comparison, so the sentence appears when the state
+    /// is ENTERED and not once per row or per message ("a toast for something that happens 40 times
+    /// an evening is a punishment", §2.2). It is suppressed once the engine is installed: pointing
+    /// at About to add something that is already there is worse than saying nothing.
+    ///
+    /// <para>It sits behind <see cref="FallbackNotice"/> rather than in front of it, and the order
+    /// is the meaning: a state where a lower tier really answered has something to explain, and the
+    /// nudge is what the app says when there is nothing left to explain — everything is paused, and
+    /// the only thing the player can do about it is on the About tab.</para></param>
+    internal static string? StateNotice(EngineStatus status, EngineChip chip, bool wasDegraded,
+                                        bool offlineInstalled = false)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+        if (chip.IsHealthy) return wasDegraded ? UserMessages.BackOn(status.LastAnswered) : null;
+
+        return FallbackNotice(status)
+            ?? (status.AllReadTiersPaused && !offlineInstalled
+                    ? UserMessages.AllPausedOfflineNudge()
+                    : null);
+    }
 
     /// <summary>
     /// <b>§3.5's "fallback active" line, and deviation D2's evidence</b> (amendment A4, E7.S4). It

@@ -145,14 +145,18 @@ internal sealed class BergamotEngine : IBergamotEngine
     /// would be misclassified on the way out, because a store failing to answer where its files are
     /// is not the engine misbehaving.
     ///
-    /// <para><b>Obligation for E8.S3, written here so a dropped story cannot ship it silently
-    /// (the same reason the MPL notice is stated twice).</b> This loads a 21.4 MB native library by
-    /// absolute path out of a USER-WRITABLE directory, and <c>NativeLibrary.Load</c> on an absolute
-    /// path also resolves that library's own dependencies from beside it. Anything that can write
-    /// there gets code execution inside the app. The store that downloads <c>bergamot.dll</c> owes
-    /// it the treatment <c>UpdateService</c> already gives an installer — a trusted origin and a
-    /// verified hash before the first load — and this method is where that verification's result
-    /// has to be believed.</para>
+    /// <para><b>The obligation E8.S2 wrote here for E8.S3, now discharged (ruling E8-f).</b> This
+    /// loads a 21.4 MB native library by absolute path out of a USER-WRITABLE directory, and
+    /// <c>NativeLibrary.Load</c> on an absolute path also resolves that library's own dependencies
+    /// from beside it — so anything that can write there would get code execution inside the app.
+    /// The bytes therefore come from one place (a GitHub release of the owner's, through
+    /// <c>UpdateService.IsTrustedDownload</c>, allow-list not widened) and are checked against a
+    /// manifest that ships INSIDE the exe, twice: once by <c>OfflineModelStore</c> before the file
+    /// is renamed into place, and once <b>here</b>, on the bytes about to be loaded. The second
+    /// check is the one that matters — the first proves what was downloaded, this proves what is
+    /// being executed — and it is a hash rather than a "verified" marker file precisely because a
+    /// marker is forgeable by copying two files into the directory. It costs ~20 ms for 22 MB and
+    /// runs once per process: the runtime caches a successful resolve and never asks again.</para>
     /// </summary>
     private static IntPtr Resolve(string name, System.Reflection.Assembly _, DllImportSearchPath? __)
     {
@@ -163,9 +167,15 @@ internal sealed class BergamotEngine : IBergamotEngine
             var dir = Volatile.Read(ref _nativeDirectory)?.Invoke();
             if (string.IsNullOrEmpty(dir)) return IntPtr.Zero;
 
-            return NativeLibrary.TryLoad(Path.Combine(dir, NativeFileName), out var handle)
-                ? handle
-                : IntPtr.Zero;
+            var path = Path.Combine(dir, NativeFileName);
+
+            // Ruling E8-f. IntPtr.Zero and not a throw, like every other refusal in this method:
+            // the runtime falls through to its own probing, fails to find `bergamot`, and raises the
+            // DllNotFoundException BergamotTranslator already maps to Unavailable — which is the
+            // honest answer for an engine whose files are not the ones this build knows about.
+            if (!OfflineModelStore.IsVerifiedNative(path)) return IntPtr.Zero;
+
+            return NativeLibrary.TryLoad(path, out var handle) ? handle : IntPtr.Zero;
         }
         catch (Exception)
         {

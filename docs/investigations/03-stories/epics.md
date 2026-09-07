@@ -2393,8 +2393,10 @@ So that a 50 MB download is a decision I make, not something an error message do
 **When** the user clicks **Download the offline engine** in About
 **Then** and **only then** a consent dialog appears — `MessageBox.Show(this, …)` with an owner, title
 `Add the offline engine?` — stating the download size (~22 MB engine + ~30 MB per language pair), the memory cost
-(130–310 MB while translating, freed when idle), the storage location (`%AppData%\PWRUHelper\models`) and how to
-remove it. `Not now` is the safe default and closes with no trace.
+(130–310 MB while translating, freed when idle), the storage location (`%LocalAppData%\PWRUHelper\models` —
+**ruling E8-b**: a roaming profile must not sync 50 MB at logon; changed here with E8.S3's code and
+`ux-mode-degrade.md` §3.6 in one commit) and how to remove it. `Not now` is the safe default and closes with no
+trace.
 
 **Given** principle 3 and NFR12
 **When** any background failure occurs

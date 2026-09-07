@@ -727,9 +727,16 @@ public partial class MainWindow
         EnginesPausesText.Text = UserMessages.AboutEnginesPauses();
         FirstLaunchExpectationText.Text = UserMessages.FirstLaunchExpectation();
         KeysIntroText.Text = UserMessages.AboutKeysIntro();
-        OfflineEngineText.Text = UserMessages.AboutOfflineNotInstalled();
+        // The offline block's row and button are NOT set here any more (E8.S3): they have two states
+        // and a transient third, so they belong to UpdateOfflineEngineUi, which ApplySettings calls
+        // explicitly a few lines later (I12). A Content attribute or a one-shot assignment here
+        // would be a second spelling of a label that changes.
         CachePrivacyText.Text = UserMessages.CachePrivacyLine();
         ClearCacheButton.Content = UserMessages.ClearCacheLabel();
+        // …and the offline block's ONE label that does not change: Cancel is Cancel whether it is
+        // visible or not, so it belongs with the static copy rather than in UpdateOfflineEngineUi,
+        // which would rewrite it on every restore for no reason.
+        OfflineCancelButton.Content = UserMessages.OfflineCancelLabel();
     }
 
     /// <summary>

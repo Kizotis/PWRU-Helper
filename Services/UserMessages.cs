@@ -725,6 +725,123 @@ internal static class UserMessages
         => "○ Not installed — about 50 MB to download, works with no internet at all. Used only "
          + "when every online engine is unavailable.";
 
+    // ---- the offline engine's own copy (ux §3.6, §4.2, §4.3 · E8.S3) ---------------------------
+    //
+    // Ruling GAP-4 / UX-DR19 again, and here it has teeth: the consent dialog's whole job is to
+    // tell the user where their 50 MB went, so the sentence naming the directory and the code that
+    // creates it may never be two independent spellings. `OfflineModelStore` builds the path from
+    // Environment.SpecialFolder.LocalApplicationData; this block writes it out for a human; the
+    // suite asserts the two agree. Ruling E8-b is what settled WHICH directory — Local, not
+    // Roaming, because a roaming profile must not sync 50 MB at logon — and ux-mode-degrade.md
+    // §3.6/§4.2 moved to Local in the same commit as this code.
+
+    /// <summary>§3.6's dialog title. Its own string because a MessageBox takes title and body
+    /// separately, and because "Add the offline engine?" is the question the whole flow is.</summary>
+    public static string OfflineConsentTitle() => "Add the offline engine?";
+
+    /// <summary>
+    /// <b>§3.6's consent block, verbatim, with ruling E8-b's directory.</b> The four labelled lines
+    /// are AC 1's four required facts — size, memory, where it goes, how to remove it — and they are
+    /// labelled rather than run into a paragraph because a person about to spend 50 MB of their
+    /// connection reads a table and skims prose.
+    ///
+    /// <para>Raised from <b>one</b> Click handler and from nowhere else (AC 2, NFR12): a
+    /// <c>MessageBox</c> over a fullscreen game, opened by a LIVE loop the player forgot was
+    /// running, is the single worst thing this app could do. The background path may only nudge —
+    /// see <see cref="AllPausedOfflineNudge"/>.</para>
+    /// </summary>
+    public static string OfflineConsentBody()
+        => "The offline engine translates on your PC, with no internet at all. "
+         + "It is a bit rougher than Google, and it is used only when every online engine is "
+         + "unavailable.\n\n"
+         + "Download — about 22 MB for the engine, plus about 30 MB per language pair.\n"
+         + "While translating — it uses 130-310 MB of memory, freed when it goes idle.\n"
+         + @"Stored in — %LocalAppData%\PWRUHelper\models" + "\n"
+         + "To remove it — About tab → Offline engine → Remove (deletes the files).\n\n"
+         + "Download about 50 MB now?";
+
+    /// <summary>AC 3's progress row. <paramref name="percent"/> is <c>null</c> when the mirror does
+    /// not report a total size, and then the copy degrades to the plain form rather than inventing
+    /// a number (AC 4) — a percentage the app made up is worse than no percentage, because the
+    /// player uses it to decide whether to wait.</summary>
+    public static string OfflineDownloading(int? percent)
+        => percent is null
+            ? "Downloading…"
+            : "Downloading the offline engine… "
+              + Math.Clamp(percent.Value, 0, 100).ToString(CultureInfo.InvariantCulture) + "%";
+
+    /// <summary>AC 3's completion row, and §4.2's installed state. It says what the engine is FOR in
+    /// the same breath as saying it is there: an offline engine that answered a line the player
+    /// expected Google to answer would otherwise look like a downgrade nobody explained.</summary>
+    public static string OfflineEngineReady()
+        => "● Offline engine ready — used only when everything else is unavailable.";
+
+    /// <summary>
+    /// AC 3's failure row. The reason is a <b>kind</b> and not a message: the store is UI-free (I2)
+    /// and I11 keeps a URL, a path and a file name out of everything a user or a log can read, so
+    /// what crosses the boundary is one of five words and the sentence is composed here.
+    ///
+    /// <para>"Nothing was installed." is not reassurance, it is a promise the store keeps: any
+    /// failure deletes the whole directory, including a partially written 22 MB DLL — which AC 8
+    /// calls the one failure mode worse than not having the feature.</para>
+    /// </summary>
+    public static string OfflineDownloadFailed(OfflineInstallFailure why)
+        => "Download failed — " + why switch
+        {
+            OfflineInstallFailure.Verification => "the engine's files could not be verified",
+            OfflineInstallFailure.Disk => "the files could not be saved to your disk",
+            OfflineInstallFailure.Untrusted => "the download location was not recognised",
+            _ => "the download did not finish",
+        } + ". Nothing was installed.";
+
+    /// <summary>§4.3's button, whose content flips between the two actions — <b>not a check box:
+    /// the two actions have very different weight</b>, one costing 50 MB of somebody's connection
+    /// and the other deleting it from their disk. Ruling R-4 makes these two clicks the only
+    /// writers of <c>OfflineFallbackEnabled</c>, which is why there is no second control.</summary>
+    public static string OfflineDownloadLabel() => "Download the offline engine";
+
+    /// <summary>The same button, once there is something to remove.</summary>
+    public static string OfflineRemoveLabel() => "Remove";
+
+    /// <summary>…and the one that appears only while a download is running (AC 3).</summary>
+    public static string OfflineCancelLabel() => "Cancel";
+
+    /// <summary>AC 5's confirmation title. <c>Remove</c> asks, unlike <c>Clear cache</c>, which does
+    /// not: clearing the cache destroys nothing the app cannot rebuild, and this destroys 50 MB the
+    /// user waited for.</summary>
+    public static string OfflineRemoveTitle() => "Remove the offline engine?";
+
+    /// <summary>…and its body, which <b>states that it deletes the files</b> (AC 5) rather than
+    /// saying "are you sure": a confirmation that does not say what it will do is a click-through.</summary>
+    public static string OfflineRemoveBody()
+        => "This deletes the offline engine's files from your PC. You can download them again later "
+         + "from this tab.\n\nRemove them now?";
+
+    /// <summary>What the row says once they are gone. The megabytes come from the store's own count
+    /// of what it deleted, so the number is what really came back rather than what the manifest
+    /// hoped for.</summary>
+    public static string OfflineRemovedStatus(long bytes)
+        => "Offline engine removed — "
+         + Math.Max(0, bytes / 1024 / 1024).ToString(CultureInfo.InvariantCulture)
+         + " MB freed from your disk.";
+
+    /// <summary>
+    /// <b>AC 2 — the only thing a background failure may do.</b> §3.6 is a deliberate divergence
+    /// from the brief's own flow (d): the consent dialog is never raised by a failure, because a
+    /// modal over a fullscreen game opened by a loop the player forgot was running is the single
+    /// worst thing this app could do (principle 3, NFR12). So the all-paused state nudges, in the
+    /// status line, <b>once</b>, when the state is entered and the engine is not installed — not per
+    /// row, not per message, and never a toast: "a toast for something that happens 40 times an
+    /// evening is a punishment" (§2.2).
+    ///
+    /// <para><b>§4.2's flow-(b) variant — "You can add an offline engine in About — it works with no
+    /// internet." — is deliberately NOT a second string.</b> It is the same fact, on the same
+    /// surface, at the same moment; two spellings of one nudge is exactly what UX-DR19 forbids, and
+    /// this is the one the acceptance criterion writes.</para>
+    /// </summary>
+    public static string AllPausedOfflineNudge()
+        => "All engines are paused — you can add an offline engine in About.";
+
     /// <summary>
     /// <b>Amendment A10 — the cache privacy sentence</b> (ruling E4-c). The technical half was
     /// already true: <c>translation-cache.json</c> is never logged and never reaches
