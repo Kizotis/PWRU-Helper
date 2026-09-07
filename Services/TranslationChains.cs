@@ -135,6 +135,27 @@ internal static class TranslationChains
     /// </summary>
     internal static ITranslator BuildRead(AppSettings settings,
         RequestPriority priority = RequestPriority.Background)
+        => BuildRead(settings, priority, out _);
+
+    /// <summary>
+    /// The same chain, with the <see cref="ChainTranslator"/> itself handed back — what E5.S1's LIVE
+    /// loop keeps so it can ask <see cref="ChainTranslator.PauseNow"/> before it captures anything,
+    /// and what E7.S3 will read <see cref="ChainTranslator.LastOutcome"/> from.
+    ///
+    /// <para><b>An <c>out</c> and not a changed return type</b>, which the story sketched before
+    /// E4.S4 landed: the decorator is what the caller must translate through (§8.2's shared cache),
+    /// and it is built HERE precisely so the code-behind never names one
+    /// (<c>ChainCompositionTests</c> scans every file outside <c>Services/</c> for
+    /// <c>new CachingTranslator</c>). One call site therefore gets both halves of one object graph,
+    /// rather than two calls building two chains over the same gates.</para>
+    ///
+    /// <para>Which instance answers <c>PauseNow()</c> does not actually matter — every read chain
+    /// resolves the SAME process-global gates (I9), so the Background instance's answer is also the
+    /// Interactive one's. It matters that there is exactly one field for it, which is why the
+    /// read-once path deliberately does not get a second (E5.S4 reuses this one).</para>
+    /// </summary>
+    internal static ITranslator BuildRead(AppSettings settings, RequestPriority priority,
+        out ChainTranslator chain)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
@@ -164,7 +185,8 @@ internal static class TranslationChains
         // costs no quota, and this method still cannot construct a DeepLTranslator. The producing
         // tier is recorded in the entry's "p" for the log and the Bergamot drop rule, and it is
         // deliberately not part of the key.
-        return new CachingTranslator(ChainTranslator.Of(tiers.ToArray()), Cache);
+        chain = ChainTranslator.Of(tiers.ToArray());
+        return new CachingTranslator(chain, Cache);
     }
 
     /// <summary>

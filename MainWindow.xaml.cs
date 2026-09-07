@@ -60,6 +60,19 @@ public partial class MainWindow : Window
     private readonly ITranslator _readTranslator;
     private readonly ITranslator _readOnceTranslator;
 
+    // The CHAIN inside _readTranslator — the same object, one decorator down. It is a field because
+    // the LIVE loop has to ask a question a translator cannot answer: "is every rung of you inside a
+    // block window right now?" (ChainTranslator.PauseNow, E5.S1). On a yes the loop skips the whole
+    // tick — no capture, no OCR, no request — and a translation outage costs the game nothing.
+    //
+    // ONE field for both read paths on purpose: read-once's chain is a second instance over the SAME
+    // process-global gates (I9), so this one's answer is also its own. Asking the registry directly
+    // would be the obvious alternative and is exactly what TP-START-02 forbids outside Services/ —
+    // the code-behind names a chain, never ProviderGates.
+    //
+    // E7.S3 reads ChainTranslator.LastOutcome from this same field.
+    private readonly ChainTranslator _readChain;
+
     // What the Translator tab is currently showing. Its output is a RichTextBox (so the 78-character
     // chat blocks can be tinted), and a FlowDocument's text can't be read back cleanly — so the
     // plain string lives here, and that is what Copy / Swap use.
@@ -114,7 +127,7 @@ public partial class MainWindow : Window
         // wrapping is the builder's, not this file's: the code-behind names a chain and never a
         // decorator or a store, for the same reason it never names ProviderGates (ruling E3-c).
         _writeTranslator = BuildWriteChain();
-        _readTranslator = TranslationChains.BuildRead(_settings);
+        _readTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Background, out _readChain);
         _readOnceTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Interactive);
         InitializeComponent();                  // fires change handlers — _restoringSettings guards them
         _toastTimer.Tick += (_, _) => { Toast.Visibility = Visibility.Collapsed; _toastTimer.Stop(); };

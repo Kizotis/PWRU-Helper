@@ -443,10 +443,19 @@ public class ChainCompositionTests : GatesTestBase
         // and nothing else. The exact-line assert is kept rather than loosened to a substring match
         // on BuildRead(_settings) — the ordering assert below already does the loose half, and it is
         // this one that stops the assignment creeping back into a field initializer.
+        //
+        // E5.S1 gained the `out _readChain`: the LIVE loop has to ask the CHAIN whether every rung
+        // is paused (ChainTranslator.PauseNow) before it captures anything, and it may not ask the
+        // registry (TP-START-02). It is an `out` rather than a changed return type — which is what
+        // the story sketched, before E4.S4 landed first — precisely so the decorator keeps being
+        // built inside Services/ and the scan at the bottom of this case stays green. One call, one
+        // object graph: a second BuildRead would build a second chain over the same gates.
         Assert.Contains("private readonly ITranslator _readTranslator;", main, StringComparison.Ordinal);
-        Assert.Contains("_readTranslator = TranslationChains.BuildRead(_settings);",
+        Assert.Contains("private readonly ChainTranslator _readChain;", main, StringComparison.Ordinal);
+        Assert.Contains(
+            "_readTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Background, out _readChain);",
             main, StringComparison.Ordinal);
-        Assert.True(main.IndexOf("TranslationChains.BuildRead(_settings)", StringComparison.Ordinal)
+        Assert.True(main.IndexOf("TranslationChains.BuildRead(_settings", StringComparison.Ordinal)
                     < main.IndexOf("InitializeComponent()", StringComparison.Ordinal),
             "the chains must be built before InitializeComponent() fires the change handlers");
 

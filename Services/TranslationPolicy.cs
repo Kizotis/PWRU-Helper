@@ -208,6 +208,24 @@ internal static class TranslationPolicy
     /// enough that a paused provider is re-tried promptly when nobody is typing.</summary>
     public const int ProbeDeferMs = 1000;       // [ASSUMED] architecture-cible.md §5.4
 
+    // ---- the paused LIVE loop (§9.1) ---------------------------------------------------------
+    // Read by Services/LiveTickPolicy.cs (E5.S1), which is where the arithmetic lives.
+
+    /// <summary>Longest wait between two <b>skipped</b> LIVE ticks. While every read tier is inside
+    /// a block window the loop does nothing at all — no capture, no OCR, no request (OQ-B) — and the
+    /// wait doubles per skipped tick until it reaches this ceiling: 0.7 s → 1.4 → 2.8 → 5 → 5…
+    ///
+    /// <para>Five seconds is the compromise the two halves of the requirement meet at. Longer and a
+    /// gate that reopens (a 5 s <see cref="SoftCooldownSecs"/> window, the common case for a dropped
+    /// connection) would leave the feed frozen for a visible extra beat after the network is back;
+    /// shorter and a long block — a 30-minute <see cref="OpenCapMinutes"/> window — would cost
+    /// hundreds of pointless wake-ups a minute in a loop whose entire purpose is to be free while
+    /// paused. A skipped tick costs a <c>Snapshot()</c> and a string, so the ceiling is about the
+    /// wake-up and not about the work.</para></summary>
+    // [ASSUMED] architecture-cible.md §9.1 (the back-off sketch); the ceiling is calibrated to
+    // SoftCooldownSecs = 5 and has never been measured. Field logs settle it (U9 / E2.S7).
+    public const int LiveBackoffCapMs = 5000;
+
     // ---- HTML abuse-page markers (§4.3) ------------------------------------------------------
     // Matched lower-cased against DE-TAGGED text — E1.S4 does the de-tagging and lower-casing, so
     // the literals are kept lower-case here and no call site has to remember. Order matters at the

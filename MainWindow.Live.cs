@@ -175,48 +175,105 @@ public partial class MainWindow
     private async Task LiveLoop(System.Drawing.Rectangle rect, CancellationToken ct)
     {
         int consecutiveErrors = 0;
+        int backoffSteps = 0;                  // how many ticks in a row have been SKIPPED (E5.S1)
         var sw = new System.Diagnostics.Stopwatch();
         while (!ct.IsCancellationRequested)
         {
             sw.Restart();
+            // Set by a skipped tick, and the difference matters: a tick that did nothing has no
+            // elapsed time to subtract from the cadence — it waits the whole back-off.
+            int? pausedWait = null;
             try
             {
-                _liveTicks++;
-                LiveIndicator.Text = (_liveTicks % 2 == 0) ? "●  LIVE" : "○  LIVE";  // heartbeat
-
-                using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
-                using var forOcr = ApplyOcrFilter(bmp);   // null when the filter is off
-                int minLetters = MinFragmentLetters();
-                // Split into whole chat messages by their "[Channel] Nick:" structure rather than
-                // by punctuation (players rarely type any) — see TextMatching.SplitChatMessages.
-                var lines = TextMatching.SplitChatMessages(await _ocr.ReadLinesAsync(forOcr ?? bmp))
-                    .Select(TextMatching.StripNoise)                    // drop animated-emoji artifacts
-                    .Where(l => TextMatching.LooksLikeText(l, minLetters)).ToList();
-                if (ct.IsCancellationRequested) break;
-
-                // Ask the de-dup filter which of these lines are genuinely new. It ignores
-                // emoji/colour flicker (compares on a letter-only signature) and only re-emits
-                // a message after it has really scrolled off screen for a while. The Sensitivity
-                // slider tunes "same message" strictness; Stability tunes the confirmation frame.
-                var confirmed = _dedup.Next(lines, SensitivityThreshold(), StabilityThreshold());
-
-                if (confirmed.Count > 0)
+                // ---- E5.S1 / owner's answer to OQ-B: the FULL pause -----------------------------
+                // Every rung of the read chain is inside a block window, so this tick asks the chain
+                // and then does NOTHING: no capture, no OCR filter, no _dedup.Next, no translation,
+                // no request. That is the product's first requirement (nothing may lag the game)
+                // applied to an outage, and it is what makes the burned-row class go away: the dedup
+                // clock only advances inside Next, so a message that was on screen throughout the
+                // pause is still genuinely new when the gate closes (AC 3).
+                //
+                // It asks the CHAIN, never ProviderGates — the registry is named exactly once
+                // outside Services/ (TP-START-02) and that once is OnClosing's Flush.
+                //
+                // A rate-ceiling wait is deliberately NOT a pause (ruling E5-a): it sets no
+                // BlockedUntil, so PauseNow() cannot see it, the tick runs, and HttpProviderCore
+                // does the ≤ 2 bounded waits inside it. Pausing LIVE for a condition that clears in
+                // 500 ms is the wrong fix this comment exists to stop.
+                var pause = _readChain.PauseNow();
+                if (pause.AllPaused)
                 {
-                    var target = SelectedTag(OcrTargetCombo) ?? "en";
-                    SetScreenStatus($"🔴 Live — {confirmed.Count} new line(s), translating…");
-                    await AppendLinesToHistory(confirmed, target, ct);
-                    if (ct.IsCancellationRequested) break;
-                    SetScreenStatus($"🔴 Live — {_ocrItems.Count} message(s) so far (check #{_liveTicks}).");
+                    // The wait uses the CURRENT step count and the counter advances after it, so the
+                    // first skipped tick waits the plain interval: 0.7 s → 1.4 → 2.8 → 5 → 5…
+                    pausedWait = LiveTickPolicy.BackoffWaitMs(CurrentLiveIntervalMs(), backoffSteps);
+                    backoffSteps = LiveTickPolicy.NextBackoffSteps(backoffSteps, LiveTickOutcome.Paused);
+
+                    // _liveTicks is NOT advanced, and that one decision covers both things it drives:
+                    // the ● / ○ heartbeat freezes (a blinking indicator over a stopped loop is the
+                    // R-02 zombie, at exactly the moment it would matter most), and the "check #n"
+                    // the player reads as progress does not count a check that never happened.
+                    // The fuller "○  LIVE (paused)" form and the overlay's own 600 ms blink timer
+                    // are E7.S4's — this loop does not reach into CompactOverlay.
+                    //
+                    // SetScreenStatus writes the main window AND the overlay (:157-161), which is
+                    // all of AC 1's "both surfaces". The countdown is COARSE by design in A.2: it is
+                    // recomputed by the skipped tick itself, so it steps at most every 5 s and there
+                    // is no new timer anywhere. E7.S2 replaces exactly this line with the 1 Hz poll,
+                    // §2.4's granularity bands and the repaint guard.
+                    SetScreenStatus(LivePausedStatus(
+                        LiveTickPolicy.CountdownSeconds(pause.RetryAt, DateTimeOffset.UtcNow)));
+
+                    // consecutiveErrors is untouched: pausing is not an error and may never feed the
+                    // auto-stop. This is what retires E2.S5's accepted escalation — a dead network
+                    // opens a 5 s soft window on every read tier, which used to be five "errors" in
+                    // ~3 s and a LIVE loop that stopped itself.
                 }
                 else
                 {
-                    // Reassure the user it's really working even before the first message
-                    // (a calm chat can be silent for minutes) — and show it's reading text.
-                    SetScreenStatus(_ocrItems.Count == 0
-                        ? $"🔴 Live — watching (check #{_liveTicks}, sees {lines.Count} line(s), waiting for new text)…"
-                        : $"🔴 Live — {_ocrItems.Count} message(s) so far (check #{_liveTicks}).");
+                    _liveTicks++;
+                    LiveIndicator.Text = (_liveTicks % 2 == 0) ? "●  LIVE" : "○  LIVE";  // heartbeat
+
+                    using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
+                    using var forOcr = ApplyOcrFilter(bmp);   // null when the filter is off
+                    int minLetters = MinFragmentLetters();
+                    // Split into whole chat messages by their "[Channel] Nick:" structure rather than
+                    // by punctuation (players rarely type any) — see TextMatching.SplitChatMessages.
+                    var lines = TextMatching.SplitChatMessages(await _ocr.ReadLinesAsync(forOcr ?? bmp))
+                        .Select(TextMatching.StripNoise)                    // drop animated-emoji artifacts
+                        .Where(l => TextMatching.LooksLikeText(l, minLetters)).ToList();
+                    if (ct.IsCancellationRequested) break;
+
+                    // Ask the de-dup filter which of these lines are genuinely new. It ignores
+                    // emoji/colour flicker (compares on a letter-only signature) and only re-emits
+                    // a message after it has really scrolled off screen for a while. The Sensitivity
+                    // slider tunes "same message" strictness; Stability tunes the confirmation frame.
+                    var confirmed = _dedup.Next(lines, SensitivityThreshold(), StabilityThreshold());
+
+                    // AC 4: only a tick that actually TRANSLATED clears the back-off. An empty tick
+                    // asked the providers nothing, so it is no evidence that they are back — the same
+                    // distinction E5.S2 owes consecutiveErrors, expressed once in LiveTickOutcome.
+                    var outcome = LiveTickOutcome.Empty;
+
+                    if (confirmed.Count > 0)
+                    {
+                        var target = SelectedTag(OcrTargetCombo) ?? "en";
+                        SetScreenStatus($"🔴 Live — {confirmed.Count} new line(s), translating…");
+                        await AppendLinesToHistory(confirmed, target, ct);
+                        if (ct.IsCancellationRequested) break;
+                        outcome = LiveTickOutcome.Translated;   // AppendLinesToHistory throws on failure
+                        SetScreenStatus($"🔴 Live — {_ocrItems.Count} message(s) so far (check #{_liveTicks}).");
+                    }
+                    else
+                    {
+                        // Reassure the user it's really working even before the first message
+                        // (a calm chat can be silent for minutes) — and show it's reading text.
+                        SetScreenStatus(_ocrItems.Count == 0
+                            ? $"🔴 Live — watching (check #{_liveTicks}, sees {lines.Count} line(s), waiting for new text)…"
+                            : $"🔴 Live — {_ocrItems.Count} message(s) so far (check #{_liveTicks}).");
+                    }
+                    consecutiveErrors = 0;
+                    backoffSteps = LiveTickPolicy.NextBackoffSteps(backoffSteps, outcome);
                 }
-                consecutiveErrors = 0;
             }
             // Only a genuine Stop (ct cancelled) breaks out cleanly. A translator TIMEOUT also
             // arrives as an OperationCanceledException (TaskCanceledException) but with ct NOT
@@ -238,11 +295,35 @@ public partial class MainWindow
                 SetScreenStatus($"Live hiccup ({Friendly(ex)}) — retrying…");
             }
 
-            // Keep a roughly steady cadence: subtract the time the read+translate just took.
-            int wait = Math.Max(150, CurrentLiveIntervalMs() - (int)sw.ElapsedMilliseconds);
+            // A SKIPPED tick waits the whole back-off (§9.1): there is no read+translate time to
+            // subtract, and the point of the doubling is that a long outage costs a wake-up every
+            // 5 s instead of one every 700 ms. A tick that DID work keeps the old steady cadence.
+            int wait = pausedWait
+                ?? Math.Max(150, CurrentLiveIntervalMs() - (int)sw.ElapsedMilliseconds);
             try { await Task.Delay(wait, ct); }
             catch (TaskCanceledException) { break; }
         }
+    }
+
+    /// <summary>The status a SKIPPED tick shows on both surfaces, with A.2's coarse countdown —
+    /// <paramref name="secondsLeft"/> is null when there is nothing honest to count down to
+    /// (see <see cref="LiveTickPolicy.CountdownSeconds"/>), and the sentence then simply drops the
+    /// number rather than inventing one.
+    ///
+    /// <para>Static and pure so the copy can be asserted headlessly, exactly like
+    /// <see cref="LiveIntervalMs"/>. The wording is provisional in Sally's §3.2 shape; <b>E7.S2</b>
+    /// owns the final form together with the 1 Hz timer and §2.4's granularity bands. It is written
+    /// here rather than in <c>UserMessages</c> because that table is keyed by
+    /// <c>TranslationErrorKind</c> and this is a LIVE <i>status</i>, not a failure — and because a
+    /// countdown is formatting, which stays out of <c>Services/</c>.</para></summary>
+    internal static string LivePausedStatus(int? secondsLeft)
+    {
+        if (secondsLeft is not { } s)
+            return "○ Live — paused. It resumes on its own; nothing is lost.";
+        // Seconds up to a minute, then whole minutes rounded up: "in 90 s" reads as a stopwatch,
+        // and a player who is waiting for a 30-minute window wants the shape, not the precision.
+        var t = s < 60 ? $"{s} s" : $"{(s + 59) / 60} min";
+        return $"○ Live — paused, next try in {t}. It resumes on its own; nothing is lost.";
     }
 
     /// <summary>Add placeholder items, translate the batch (one request when possible),
