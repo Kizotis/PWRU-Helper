@@ -127,7 +127,7 @@ development_status:
   # (ChainTranslator.PauseNow + _readChain) that s2, s3 and s4 all read; s3 is LAST because it is the
   # riskiest story of the release (a duplicated feed row is worse than the failure it replaces).
   e5-s1-skip-tick-and-back-off-while-paused: done             # order 1 — retires E2.S5's no-network REFUSED-tick auto-stop; E5.S2 owns the rest
-  e5-s2-honest-auto-stop: review                             # order 2 — Live.cs:219 deleted; 5 SENT failures in 2 min (E5-c)
+  e5-s2-honest-auto-stop: done                               # order 2 — Live.cs:219 deleted; 5 consecutive SENT failures, no window (E5-c, E5-d)
   e5-s3-retry-failed-rows-after-recovery: ready-for-dev      # order 4 — RISKIEST; LiveDedup must stay byte-identical
   e5-s4-honest-cancellable-read-once: ready-for-dev          # order 3 — also depends on e5-s1 (PauseNow for AC 3)
   epic-5-retrospective: optional

@@ -177,7 +177,7 @@ public partial class MainWindow
         // Both counters are LOCALS, so a session that ended — auto-stopped or stopped by the player
         // — leaves nothing behind for the next one: pressing ▶ after an auto-stop gets a clean five
         // and not one. StartLive builds a new loop, and a new loop builds these two.
-        var errors = new LiveErrorTracker();   // §9.2's auto-stop, over its own 2-minute window (E5.S2)
+        var errors = new LiveErrorTracker();   // §9.2's auto-stop: 5 sent failures in a row (E5.S2)
         int backoffSteps = 0;                  // how many ticks in a row have been SKIPPED (E5.S1)
         var sw = new System.Diagnostics.Stopwatch();
         while (!ct.IsCancellationRequested)
@@ -242,7 +242,8 @@ public partial class MainWindow
                     // INSIDE itself for a reason that sets no BlockedUntil (the 1 s Background probe
                     // deferral, a rate-ceiling refusal), which reaches the catch as an
                     // AllProvidersPaused — now classify as Refused and reach no counter either. What
-                    // counts is a request that was sent and failed, five of them inside two minutes.
+                    // counts is a request that was sent and failed: five of those in a row, with no
+                    // translated line between them, and no clock anywhere in the rule.
                 }
                 else
                 {
@@ -266,7 +267,7 @@ public partial class MainWindow
                     var confirmed = _dedup.Next(lines, SensitivityThreshold(), StabilityThreshold());
 
                     // Only a tick that actually TRANSLATED clears the back-off (E5.S1 AC 4) or the
-                    // error window (E5.S2 / §9.2). An empty tick asked the providers nothing, so it
+                    // failure streak (E5.S2 / §9.2). An empty tick asked the providers nothing, so it
                     // is no evidence that they are back — one distinction, named once here and read
                     // by both counters below, because two notions of "a good tick" is how the line
                     // this story deleted became a bug in the first place.
@@ -296,7 +297,14 @@ public partial class MainWindow
                     // requests all evening (analyse… A2, S4c). It is deleted, not moved: the tracker
                     // resets on Translated and leaves an Empty tick exactly where it was, which is
                     // §9.2's table and the same distinction backoffSteps already made.
-                    errors.Record(outcome, DateTimeOffset.UtcNow);
+                    //
+                    // The verdict is discarded HERE on purpose: neither arm this line can reach can
+                    // ask for a stop (Translated clears the streak, Empty leaves it, and the catch
+                    // below breaks the loop the moment it reaches five). The auto-stop is a decision
+                    // about failures, and this branch had none. Discarded EXPLICITLY, so that a
+                    // later edit which lets a non-throwing tick count as one has to look at this
+                    // line: the invariant is held by two distant pieces of code, not by the type.
+                    _ = errors.Record(outcome);
                     backoffSteps = LiveTickPolicy.NextBackoffSteps(backoffSteps, outcome);
                 }
             }
@@ -318,11 +326,11 @@ public partial class MainWindow
                 // Everything else was a request that left the machine and failed, a timeout very
                 // much included: it is counted here, and the filtered catch above is what keeps a
                 // genuine Stop out of this handler (I3).
-                if (errors.Record(LiveTickPolicy.Classify(ex), DateTimeOffset.UtcNow))
+                if (errors.Record(LiveTickPolicy.Classify(ex)))
                 {
                     Services.Logging.Error(
-                        $"Live translation auto-stopped — {errors.RecentFailures} failed reads inside " +
-                        $"{TranslationPolicy.LiveAutoStopWindowSeconds}s (refusals and pauses do not count)", ex);
+                        $"Live translation auto-stopped — {errors.ConsecutiveFailures} failed reads in a row " +
+                        "since the last translated line (refusals and pauses do not count)", ex);
                     StopLive();   // this sets "Live stopped." first…
                     SetScreenStatus($"Live stopped after repeated errors ({Friendly(ex)}).");   // …then the real reason
                     break;

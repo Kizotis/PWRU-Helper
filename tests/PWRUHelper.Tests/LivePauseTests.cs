@@ -532,7 +532,7 @@ public class LivePauseTests
         Assert.DoesNotContain("consecutiveErrors", live);
         Assert.Contains("var errors = new LiveErrorTracker();", live, StringComparison.Ordinal);
         // ONE outcome, read by both counters, on adjacent lines.
-        Assert.Contains("errors.Record(outcome, DateTimeOffset.UtcNow);", live, StringComparison.Ordinal);
+        Assert.Contains("errors.Record(outcome);", live, StringComparison.Ordinal);
         Assert.Contains("backoffSteps = LiveTickPolicy.NextBackoffSteps(backoffSteps, outcome);",
                         live, StringComparison.Ordinal);
     }
@@ -549,8 +549,7 @@ public class LivePauseTests
     {
         var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
 
-        Assert.Contains("if (errors.Record(LiveTickPolicy.Classify(ex), DateTimeOffset.UtcNow))",
-                        live, StringComparison.Ordinal);
+        Assert.Contains("if (errors.Record(LiveTickPolicy.Classify(ex)))", live, StringComparison.Ordinal);
         // The old hard-coded trigger is gone with it: five is a graded constant now, read inside
         // LiveErrorTracker and nowhere else.
         Assert.DoesNotContain(">= 5", live);
@@ -578,7 +577,13 @@ public class LivePauseTests
         int stop = live.LastIndexOf("StopLive();", reason, StringComparison.Ordinal);
         Assert.True(stop > 0 && reason - stop < 200,
                     "StopLive() must run immediately before the reason is written over its \"Live stopped.\"");
-        Assert.Contains("Services.Logging.Error(", live, StringComparison.Ordinal);
+
+        // …and the bug report is written BEFORE the UI is cleaned up, with the exception in hand.
+        // Scoped to the stop block: an unscoped Contains would be satisfied by any other log call
+        // in the file and would say nothing about the path this test is named for.
+        int log = live.LastIndexOf("Services.Logging.Error(", stop, StringComparison.Ordinal);
+        Assert.True(log > 0 && stop - log < 400,
+                    "the auto-stop must log the failure it stopped for, next to the StopLive() call");
     }
 
     // ---- helpers --------------------------------------------------------------------------------

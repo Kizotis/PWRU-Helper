@@ -195,37 +195,39 @@ public class LiveTickPolicyTests
         }
     }
 
-    // ---- E5.S2: the auto-stop, as a pure decision over an injected clock -----------------------
-    // TP-LIVE-04..09. Everything below drives LiveErrorTracker directly with a clock this file
-    // moves by hand: no Task.Delay, no wall clock, no window (IS-6 / CI-3). The tracker is an
-    // INSTANCE, so two cases in one run cannot share a counter.
+
+    // ---- E5.S2: the auto-stop, as a pure decision with no clock in it --------------------------
+    // TP-LIVE-04..09. Everything below drives LiveErrorTracker directly, and there is nothing to
+    // drive it WITH but tick outcomes: the rule counts consecutive sent failures since the last
+    // translated tick, and elapsed time is not part of it (architect's ruling, E5.S2 review). No
+    // Task.Delay, no wall clock, no window (IS-6 / CI-3). The tracker is an INSTANCE, so two cases
+    // in one run cannot share a counter.
 
     private static LiveErrorTracker Tracker() => new();
 
     /// <summary>The tick shapes as the loop produces them, so a case reads like the session it
     /// describes. <c>Fail</c> is a SENT request that failed — the only outcome that counts
     /// (ruling E5-c).</summary>
-    private static bool Fail(LiveErrorTracker t, DateTimeOffset now)
-        => t.Record(LiveTickOutcome.SentFailure, now);
+    private static bool Fail(LiveErrorTracker t) => t.Record(LiveTickOutcome.SentFailure);
 
     /// <summary>
     /// <b>TP-LIVE-04.</b> A tick that translated is the only evidence the providers are actually
-    /// working, and it is total: the streak goes and so does every stamp behind it.
+    /// working, and it is total: the streak goes, and the five that follow start from zero. Four
+    /// failures, one translated line, four more failures is <b>not</b> a stop — a player who saw a
+    /// line come through gets a clean five and not one.
     /// </summary>
     [Fact]
-    public void TP_LIVE_04_a_tick_that_translated_clears_the_window()
+    public void TP_LIVE_04_a_tick_that_translated_clears_the_streak()
     {
         var t = Tracker();
-        for (int i = 0; i < 4; i++) Assert.False(Fail(t, Now + TimeSpan.FromSeconds(i)));
-        Assert.Equal(4, t.RecentFailures);
+        for (int i = 0; i < 4; i++) Assert.False(Fail(t));
+        Assert.Equal(4, t.ConsecutiveFailures);
 
-        Assert.False(t.Record(LiveTickOutcome.Translated, Now + TimeSpan.FromSeconds(5)));
-        Assert.Equal(0, t.RecentFailures);
+        Assert.False(t.Record(LiveTickOutcome.Translated));
+        Assert.Equal(0, t.ConsecutiveFailures);
 
-        // …and the five that follow start from zero: a player who saw one good tick gets a clean
-        // five, not one.
-        for (int i = 6; i < 10; i++) Assert.False(Fail(t, Now + TimeSpan.FromSeconds(i)));
-        Assert.True(Fail(t, Now + TimeSpan.FromSeconds(10)));
+        for (int i = 0; i < 4; i++) Assert.False(Fail(t));   // 4 + Translated + 4 ⇒ still running
+        Assert.True(Fail(t));                                // …and the fifth of the NEW streak stops it
     }
 
     /// <summary>
@@ -242,30 +244,30 @@ public class LiveTickPolicyTests
         bool stopped = false;
         for (int i = 0; i < 5 && !stopped; i++)
         {
-            stopped = Fail(t, Now + TimeSpan.FromSeconds(i * 2));
-            if (!stopped) Assert.False(t.Record(LiveTickOutcome.Empty, Now + TimeSpan.FromSeconds(i * 2 + 1)));
+            stopped = Fail(t);
+            if (!stopped) Assert.False(t.Record(LiveTickOutcome.Empty));
         }
         Assert.True(stopped);          // before E5.S2 this loop ran for ever
-        Assert.Equal(5, t.RecentFailures);
+        Assert.Equal(5, t.ConsecutiveFailures);
     }
 
     /// <summary>
     /// <b>TP-LIVE-06 / AC 3.</b> A gate-open tick and a refusal inside a tick are the system working
     /// correctly — neither a success nor a failure (§9.2's closing rule, ruling E5-c). They leave
-    /// the queue exactly where it was: they do not clear a real streak, and they do not feed it.
+    /// the count exactly where it was: they do not clear a real streak, and they do not feed it.
     /// </summary>
     [Fact]
     public void TP_LIVE_06_a_pause_or_a_refusal_is_neither_a_success_nor_a_failure()
     {
         var t = Tracker();
-        for (int i = 0; i < 3; i++) Assert.False(Fail(t, Now + TimeSpan.FromSeconds(i)));
+        for (int i = 0; i < 3; i++) Assert.False(Fail(t));
 
-        Assert.False(t.Record(LiveTickOutcome.Paused, Now + TimeSpan.FromSeconds(4)));
-        Assert.False(t.Record(LiveTickOutcome.Refused, Now + TimeSpan.FromSeconds(5)));
-        Assert.Equal(3, t.RecentFailures);   // not cleared…
+        Assert.False(t.Record(LiveTickOutcome.Paused));
+        Assert.False(t.Record(LiveTickOutcome.Refused));
+        Assert.Equal(3, t.ConsecutiveFailures);   // not cleared…
 
-        Assert.False(t.Record(LiveTickOutcome.Paused, Now + TimeSpan.FromSeconds(6)));
-        Assert.Equal(3, t.RecentFailures);   // …and not counted
+        Assert.False(t.Record(LiveTickOutcome.Paused));
+        Assert.Equal(3, t.ConsecutiveFailures);   // …and not counted
     }
 
     /// <summary>
@@ -279,86 +281,64 @@ public class LiveTickPolicyTests
         var t = Tracker();
         for (int i = 0; i < 100; i++)
         {
-            Assert.False(t.Record(LiveTickOutcome.Paused, Now + TimeSpan.FromSeconds(i)));
-            Assert.False(t.Record(LiveTickOutcome.Refused, Now + TimeSpan.FromSeconds(i)));
+            Assert.False(t.Record(LiveTickOutcome.Paused));
+            Assert.False(t.Record(LiveTickOutcome.Refused));
         }
-        Assert.Equal(0, t.RecentFailures);
+        Assert.Equal(0, t.ConsecutiveFailures);
     }
 
     /// <summary>
-    /// <b>TP-LIVE-07.</b> A failing tick stamps the clock it was handed, and stamps older than the
-    /// window age out on the NEXT record whatever that record is — a session that fails four times,
-    /// runs clean for an hour and fails once more must not stop.
+    /// <b>TP-LIVE-09's other half — the dead-cable evening.</b> A hundred pauses and refusals
+    /// interleaved with four real failures still leave LIVE running: the pauses cannot push the
+    /// streak over the line, and they cannot forgive it either. Then the fifth sent failure — after
+    /// however many pauses, and however much later — stops it, because five sent failures with no
+    /// translated line between them is exactly what the rule counts.
     /// </summary>
     [Fact]
-    public void TP_LIVE_07_stamps_older_than_the_window_are_trimmed()
+    public void TP_LIVE_09_pauses_neither_trip_the_stop_nor_forgive_the_streak()
     {
         var t = Tracker();
-        for (int i = 0; i < 4; i++) Assert.False(Fail(t, Now + TimeSpan.FromSeconds(i)));
-        Assert.Equal(4, t.RecentFailures);
+        for (int i = 0; i < 100; i++)
+        {
+            Assert.False(t.Record(i % 2 == 0 ? LiveTickOutcome.Paused : LiveTickOutcome.Refused));
+            if (i % 25 == 0) Assert.False(Fail(t));            // four failures, spread through
+        }
+        Assert.Equal(4, t.ConsecutiveFailures);
 
-        // An hour later, one ordinary hiccup. The four are long gone, so this is failure #1 and not
-        // failure #5 — the "a stale error streak survives an arbitrarily long pause" finding
-        // E5.S1's review recorded for this story.
-        Assert.False(Fail(t, Now + TimeSpan.FromHours(1)));
-        Assert.Equal(1, t.RecentFailures);
+        for (int i = 0; i < 50; i++) Assert.False(t.Record(LiveTickOutcome.Paused));
+        Assert.True(Fail(t));                                   // the fifth, whenever it arrives
     }
 
     /// <summary>
-    /// The window's edge, asserted from both sides so the comparison cannot silently become the
-    /// other one. A stamp exactly <see cref="TranslationPolicy.LiveAutoStopWindowSeconds"/> old is
-    /// still inside the window; a millisecond past it is not.
+    /// <b>TP-LIVE-07 / TP-LIVE-08 — the pin that decides whether this story shipped anything.</b>
+    /// Five ticks whose every request timed out stop LIVE, <b>however long they took</b>. That is
+    /// not a detail: a tick whose requests all time out costs up to ~48 s (two tiers ×
+    /// <c>MaxAttempts</c> × the 12 s timeout), so five of them span some four minutes. Under §9.2's
+    /// sketched two-minute window this session — the single most common real outage there is —
+    /// would have trickled on all evening without ever stopping. The rule counts failures, not
+    /// seconds, which is why nothing in this file needs a clock.
     /// </summary>
     [Fact]
-    public void The_window_edge_is_inclusive_and_one_millisecond_past_it_is_not()
-    {
-        var window = TimeSpan.FromSeconds(TranslationPolicy.LiveAutoStopWindowSeconds);
-
-        var onTime = Tracker();
-        for (int i = 0; i < 4; i++) Assert.False(Fail(onTime, Now));
-        Assert.True(Fail(onTime, Now + window));
-
-        var justLate = Tracker();
-        for (int i = 0; i < 4; i++) Assert.False(Fail(justLate, Now));
-        Assert.False(Fail(justLate, Now + window + TimeSpan.FromMilliseconds(1)));
-        Assert.Equal(1, justLate.RecentFailures);
-    }
-
-    /// <summary>
-    /// <b>TP-LIVE-08 — the two shapes that decide whether this story shipped anything.</b> Five sent
-    /// failures inside ten seconds is the streak users already know, and it still stops LIVE. Five
-    /// spread over three minutes is a flaky evening rather than a broken app, and it does not: the
-    /// window is what tells them apart, and without it the first shape is the only one the counter
-    /// could ever describe.
-    /// </summary>
-    [Fact]
-    public void TP_LIVE_08_five_failures_in_ten_seconds_stop_live_and_five_over_three_minutes_do_not()
-    {
-        var burst = Tracker();
-        for (int i = 0; i < 4; i++) Assert.False(Fail(burst, Now + TimeSpan.FromSeconds(i * 2)));
-        Assert.True(Fail(burst, Now + TimeSpan.FromSeconds(8)));
-
-        var trickle = Tracker();
-        for (int i = 0; i < 5; i++)
-            Assert.False(Fail(trickle, Now + TimeSpan.FromSeconds(i * 45)));   // 0, 45, 90, 135, 180
-        // Only the last three are inside the two minutes that end at 180 s.
-        Assert.Equal(3, trickle.RecentFailures);
-    }
-
-    /// <summary>
-    /// The queue is bounded as well as trimmed: a pathological burst inside one window cannot grow
-    /// it. Five stamps are enough to decide, and the bound is a little above that so the decision
-    /// never depends on the bound.
-    /// </summary>
-    [Fact]
-    public void The_stamp_queue_is_bounded()
+    public void TP_LIVE_08_five_slow_timeouts_stop_live_however_long_they_took()
     {
         var t = Tracker();
-        for (int i = 0; i < 500; i++) Fail(t, Now + TimeSpan.FromMilliseconds(i));
-        Assert.True(t.RecentFailures <= LiveTickPolicy.MaxErrorStamps,
-                    $"the queue grew to {t.RecentFailures} stamps");
-        Assert.True(LiveTickPolicy.MaxErrorStamps >= TranslationPolicy.LiveAutoStopThreshold,
-                    "the bound must never be able to hide the fifth failure");
+        var timeout = new TaskCanceledException();   // what a 12 s HttpClient timeout really is (I3)
+
+        for (int i = 0; i < 4; i++)
+            Assert.False(t.Record(LiveTickPolicy.Classify(timeout)));
+        Assert.True(t.Record(LiveTickPolicy.Classify(timeout)));
+    }
+
+    /// <summary>The count is clamped and cannot run away: a session that somehow kept failing past
+    /// the threshold must not wrap an int negative and silently disable the stop. Five is enough to
+    /// decide, and the verdict stays true from there on.</summary>
+    [Fact]
+    public void The_count_is_clamped_at_the_threshold_and_stays_stopped()
+    {
+        var t = Tracker();
+        for (int i = 0; i < 500; i++) Fail(t);
+        Assert.Equal(TranslationPolicy.LiveAutoStopThreshold, t.ConsecutiveFailures);
+        Assert.True(Fail(t));
     }
 
     /// <summary>Two LIVE sessions in one run must not share a counter — the reason the tracker is an
@@ -368,16 +348,16 @@ public class LiveTickPolicyTests
     public void Reset_gives_the_next_session_a_clean_five()
     {
         var t = Tracker();
-        for (int i = 0; i < 4; i++) Fail(t, Now + TimeSpan.FromSeconds(i));
+        for (int i = 0; i < 4; i++) Fail(t);
         t.Reset();
-        Assert.Equal(0, t.RecentFailures);
+        Assert.Equal(0, t.ConsecutiveFailures);
 
-        for (int i = 0; i < 4; i++) Assert.False(Fail(t, Now + TimeSpan.FromSeconds(10 + i)));
-        Assert.True(Fail(t, Now + TimeSpan.FromSeconds(14)));
+        for (int i = 0; i < 4; i++) Assert.False(Fail(t));
+        Assert.True(Fail(t));
 
         // A second session, built the way StartLive builds one, starts at zero and knows nothing
         // about the streak that stopped the first.
-        Assert.Equal(0, Tracker().RecentFailures);
+        Assert.Equal(0, Tracker().ConsecutiveFailures);
     }
 
     // ---- ruling E5-c: what counts is a request that was actually SENT ---------------------------
@@ -432,8 +412,8 @@ public class LiveTickPolicyTests
         var t = Tracker();
         var refused = new TranslationException(TranslationErrorKind.AllProvidersPaused, "every tier is paused");
         for (int i = 0; i < 20; i++)
-            Assert.False(t.Record(LiveTickPolicy.Classify(refused), Now + TimeSpan.FromSeconds(i)));
-        Assert.Equal(0, t.RecentFailures);
+            Assert.False(t.Record(LiveTickPolicy.Classify(refused)));
+        Assert.Equal(0, t.ConsecutiveFailures);
     }
 
     /// <summary>The new outcomes leave E5.S1's back-off exactly where it was: only a skipped tick
@@ -446,12 +426,22 @@ public class LiveTickPolicyTests
         Assert.Equal(3, LiveTickPolicy.NextBackoffSteps(3, LiveTickOutcome.Refused));
     }
 
-    /// <summary>The two numbers behind the rule are the graded ones, read from the table this
-    /// project argues about numbers in — never a literal in the loop.</summary>
+    /// <summary>
+    /// The rule is ONE graded number and no clock — read from the table this project argues about
+    /// numbers in, never a literal in the loop. The second assertion is the architect's ruling made
+    /// structural: §9.2's two-minute window is gone because a translated tick already clears the
+    /// streak (which made the window's trigger a strict subset of this one) and because five slow
+    /// timeouts cannot fit inside it. Re-adding a window constant should have to be a deliberate act
+    /// with a red test in front of it, the same way E5.S1's skipped branch is kept clean by a scan.
+    /// </summary>
     [Fact]
-    public void The_rule_is_five_failures_inside_two_minutes()
+    public void The_rule_is_five_sent_failures_in_a_row_and_nothing_about_time()
     {
         Assert.Equal(5, TranslationPolicy.LiveAutoStopThreshold);
-        Assert.Equal(120, TranslationPolicy.LiveAutoStopWindowSeconds);
+
+        var policy = typeof(TranslationPolicy).GetFields(
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic |
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.DeclaredOnly);
+        Assert.DoesNotContain(policy, f => f.Name.Contains("AutoStopWindow", StringComparison.Ordinal));
     }
 }

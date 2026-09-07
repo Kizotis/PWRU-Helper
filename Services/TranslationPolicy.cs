@@ -227,30 +227,26 @@ internal static class TranslationPolicy
     public const int LiveBackoffCapMs = 5000;
 
     // ---- the honest auto-stop (§9.2) ----------------------------------------------------------
-    // Read by Services/LiveTickPolicy.cs's LiveErrorTracker (E5.S2). Two numbers and one rule:
-    // LIVE stops itself when LiveAutoStopThreshold failures that COST A REQUEST fall inside
-    // LiveAutoStopWindowSeconds. What does not count is as important as what does — a pause and a
-    // gate refusal are the system working correctly and never reach the counter (ruling E5-c).
+    // Read by Services/LiveTickPolicy.cs's LiveErrorTracker (E5.S2). ONE number and one rule: LIVE
+    // stops itself after LiveAutoStopThreshold consecutive failures that COST A REQUEST, counted
+    // since the last tick that translated — no time window, whatever the elapsed time (architect's
+    // ruling, E5.S2 review). What does not count is as important as what does: an EMPTY tick asked
+    // the providers nothing and forgives nothing (that was the bug), and a pause or a gate refusal
+    // is the system working correctly and never reaches the counter at all (ruling E5-c).
 
     /// <summary>Sent failures that stop LIVE. <b>Five is not a new number</b>: it is the literal
     /// that shipped inside the loop (<c>if (++consecutiveErrors >= 5)</c>), moved here so that the
-    /// rule around it could change without the number changing with it.
+    /// rule around it could change without the number changing with it — which is exactly what
+    /// happened: what the five now counts is five <i>sent</i> failures since the last translated
+    /// tick, where it used to count five non-empty ticks in a row.
     ///
     /// <para>It is pinned by <c>TranslationPolicyTests</c> — unlike the rate-ceiling four, which are
     /// deliberately unpinned — because it decides <b>when LIVE stops</b>, which is behaviour a
     /// player watches and already knows.</para></summary>
-    public const int LiveAutoStopThreshold = 5;     // [CONFIRMED] today's literal, MainWindow.Live.cs:301, moved
-
-    /// <summary>How far back the five are counted. Two minutes, and the window is what makes the
-    /// counter honest in both directions: a streak that stops mattering is forgotten (four failures,
-    /// a half-hour outage, then one ordinary hiccup is <b>one</b> failure and not five — the stale
-    /// streak E5.S1's review recorded), and a genuinely broken evening still trips the stop inside
-    /// two minutes instead of never (S4c).</summary>
-    // [ASSUMED] architecture-cible.md §9.2 ("trimmed to the last 2 minutes"); never measured. What
-    // would settle it is field reports of LIVE stopping too eagerly or not at all — the same
-    // U9/E2.S7 lane that tunes the gate windows. Expressed in SECONDS so the arithmetic that reads
-    // it needs no conversion, which is one fewer place to write 60.
-    public const int LiveAutoStopWindowSeconds = 120;
+    // [CONFIRMED] the literal this app shipped with: `if (++consecutiveErrors >= 5)` in
+    // MainWindow.Live.cs' generic catch, up to and including baseline 9c8e935. Cited by the
+    // expression and not by a line number, which the same commit moved.
+    public const int LiveAutoStopThreshold = 5;
 
     // ---- HTML abuse-page markers (§4.3) ------------------------------------------------------
     // Matched lower-cased against DE-TAGGED text — E1.S4 does the de-tagging and lower-casing, so
