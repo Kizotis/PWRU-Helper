@@ -204,15 +204,26 @@ public class DeepLTranslator : ITranslator
         {
             using var doc = JsonDocument.Parse(json);
             var used = doc.RootElement.GetProperty("character_count").GetInt64();
+            // A limit that is not POSITIVE is not a limit: unmetered plans answer 0, and a negative
+            // one is a body nobody should quote back. Both become "no limit reported", which the
+            // sentence below already words correctly — the review found the `cap > 0` guard on the
+            // DECISION arriving one line too late to keep "500,000 of 0 characters used." off the
+            // screen.
             long? limit = doc.RootElement.TryGetProperty("character_limit", out var el)
-                          && el.TryGetInt64(out var value) ? value : null;
+                          && el.TryGetInt64(out var value) && value > 0 ? value : null;
 
-            var usage = UserMessages.DeepLUsage(used, limit);
-            return limit is { } cap && cap > 0 && used >= cap
+            var usage = UserMessages.DeepLUsage(used < 0 ? 0 : used, limit);
+            return limit is { } cap && used >= cap
                 ? KeyTestResult.Failed(TranslationErrorKind.QuotaExhausted, usage)
                 : KeyTestResult.Works(usage);
         }
-        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
+        // FormatException is the one the review found missing, and ParseUsage is the first parser
+        // under this filter to read a NUMBER: JsonElement.GetInt64 raises it — not
+        // InvalidOperationException — for a number-shaped value it cannot represent (a decimal, or
+        // one past long.MaxValue). Escaping here cost twice: the gate heard `Unknown` for a body
+        // that is plainly a BadResponse, and the raw .NET message reached the status line.
+        catch (Exception ex) when (ex is JsonException or KeyNotFoundException
+                                      or InvalidOperationException or FormatException or OverflowException)
         {
             // Same rule as Parse above: a success whose body is not the provider's shape is a
             // BadResponse, stated here because this method has no response to hand the mapper.

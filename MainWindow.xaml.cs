@@ -342,6 +342,12 @@ public partial class MainWindow : Window
         // it — the surfaces are going away — which is exactly what a cancel is supposed to show.
         CancelReadOnce();
 
+        // …and a "Test key" in flight, for the same reason and by the same shape (E6.S5 T3, which
+        // asked for this and did not get it until the review). It also puts the cancel ABOVE
+        // ProviderGates.Flush() below, so nothing is still racing to report a gate outcome into a
+        // registry that has already been written to disk.
+        CancelKeyTests();
+
         // Write out any provider pause that is still inside its 1-second debounce, so a block the
         // user is waiting out survives the restart instead of being re-earned on the first request
         // (E2.S4, architecture §5.7). The ONE ProviderGates reference outside Services/ (ruling

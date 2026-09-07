@@ -617,18 +617,30 @@
                                     Text=" you can paste it here for higher-quality translations — the app falls back to Google if DeepL is unavailable. The key is stored only on your PC."/><LineBreak/><Run
                                     Text="DeepL is used only for what YOU write (the Translator tab and the compact overlay's quick reply). Reading the screen with OCR always uses the free Google engine, so a busy live feed can never burn through your DeepL quota."/>
                         </TextBlock>
-                        <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
-                            <PasswordBox x:Name="DeepLKeyBox" Width="300" VerticalContentAlignment="Center"/>
+                        <!-- WrapPanel and not a horizontal StackPanel (E6.S5 review). The window
+                             ships at Width=640 (MinWidth=460) and the About tab's ScrollViewer
+                             scrolls vertically only, so a row wider than the viewport is CLIPPED
+                             with no way to reach it. Azure's honest label is ~230 px of
+                             content-sized button; adding it to a fixed horizontal row put the
+                             Azure one past the right edge at the DEFAULT size and the DeepL one
+                             past it at MinWidth. A WrapPanel wraps instead of clipping, so the
+                             button exists at every width the window can be dragged to. -->
+                        <WrapPanel Margin="0,2,0,0">
+                            <PasswordBox x:Name="DeepLKeyBox" Width="300" VerticalContentAlignment="Center"
+                                         Margin="0,0,0,4"/>
                             <Button Content="Save" Style="{StaticResource GhostButton}" Padding="12,4"
-                                    Margin="8,0,0,0" Click="DeepLSaveKey_Click"/>
+                                    Margin="8,0,0,4" Click="DeepLSaveKey_Click"/>
                             <!-- E6.S5. Content is set in CODE (SetKeyTestLabels) and not here: the
                                  two labels differ on purpose — ruling E6-b makes DeepL's check free
                                  and Azure's cost a few characters — and AC 3's honesty rule needs
                                  exactly one home for that copy, which is UserMessages (GAP-4). -->
                             <Button x:Name="DeepLTestButton" Style="{StaticResource GhostButton}"
-                                    Padding="12,4" Margin="8,0,0,0" Click="DeepLTestKey_Click"/>
-                        </StackPanel>
-                        <TextBlock x:Name="DeepLStatus" Margin="0,6,0,0" FontSize="12"
+                                    Padding="12,4" Margin="8,0,0,4" Click="DeepLTestKey_Click"/>
+                        </WrapPanel>
+                        <!-- TextWrapping (E6.S5 review): the key-test sentences are 60-90 characters
+                             and the actionable half is the second one ("…and that the region matches
+                             your resource"), which an unwrapped line is exactly what clips. -->
+                        <TextBlock x:Name="DeepLStatus" Margin="0,6,0,0" FontSize="12" TextWrapping="Wrap"
                                    Foreground="{StaticResource TextMutedBrush}"/>
 
                         <!-- optional Azure Translator key (E6). Mirrors the DeepL row above it on
@@ -643,9 +655,13 @@
                                     Foreground="{StaticResource TealBrush}">Azure Translator key</Hyperlink><Run
                                     Text=" — Azure needs BOTH the key and the region your resource was created in (both are on its Keys and Endpoint page). A key without its region cannot work, so the app asks for the pair. Like the DeepL key, it is stored only on your PC and is used only for what YOU write."/>
                         </TextBlock>
-                        <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
-                            <PasswordBox x:Name="AzureKeyBox" Width="300" VerticalContentAlignment="Center"/>
-                            <ComboBox x:Name="AzureRegionCombo" IsEditable="True" Width="160" Margin="8,0,0,0"
+                        <!-- WrapPanel, for the reason spelled out over the DeepL row above. This is
+                             the row that actually overflowed: key box + region combo + Save + the
+                             Test button is ~770 px against a ~595 px viewport at Width=640. -->
+                        <WrapPanel Margin="0,2,0,0">
+                            <PasswordBox x:Name="AzureKeyBox" Width="300" VerticalContentAlignment="Center"
+                                         Margin="0,0,0,4"/>
+                            <ComboBox x:Name="AzureRegionCombo" IsEditable="True" Width="160" Margin="8,0,0,4"
                                       ToolTip="The region your Azure Translator resource is in — pick one or type it."
                                       SelectionChanged="AzureRegionCombo_Changed">
                                 <ComboBoxItem Content="global" Tag="global"/>
@@ -659,14 +675,14 @@
                                 <ComboBoxItem Content="swedencentral" Tag="swedencentral"/>
                             </ComboBox>
                             <Button Content="Save" Style="{StaticResource GhostButton}" Padding="12,4"
-                                    Margin="8,0,0,0" Click="AzureSaveKey_Click"/>
+                                    Margin="8,0,0,4" Click="AzureSaveKey_Click"/>
                             <!-- …and its asymmetric twin: Azure has no free way to check a key, so
                                  this one sends one tiny translation and its label says so (AC 3).
                                  Label and ToolTip both come from UserMessages, in code. -->
                             <Button x:Name="AzureTestButton" Style="{StaticResource GhostButton}"
-                                    Padding="12,4" Margin="8,0,0,0" Click="AzureTestKey_Click"/>
-                        </StackPanel>
-                        <TextBlock x:Name="AzureStatus" Margin="0,6,0,0" FontSize="12"
+                                    Padding="12,4" Margin="8,0,0,4" Click="AzureTestKey_Click"/>
+                        </WrapPanel>
+                        <TextBlock x:Name="AzureStatus" Margin="0,6,0,0" FontSize="12" TextWrapping="Wrap"
                                    Foreground="{StaticResource TextMutedBrush}"/>
 
                         <!-- E6.S4 — the opt-in that lets the SCREEN READER spend the Azure key.

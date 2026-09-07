@@ -237,6 +237,10 @@ public partial class MainWindow
 
     private void DeepLSaveKey_Click(object sender, RoutedEventArgs e)
     {
+        // A test in flight is about the key that WAS in the box; this one supersedes it (E6.S5
+        // review). Without the cancel the late result overwrites the line this handler is about to
+        // write, and describes a credential that is no longer in effect.
+        CancelKeyTests();
         _settings.DeepLApiKey = (DeepLKeyBox.Password ?? "").Trim();
         SettingsService.Save(_settings);
         // The same line the Azure save makes below, and DeepL needs it just as badly (E6.S3
@@ -294,6 +298,11 @@ public partial class MainWindow
         // (nothing may lag the game).
         var region = ReadAzureRegion();
         if (region == _settings.AzureRegion) return;
+
+        // The region really changed, so a test in flight is about the old one — and its sentence
+        // NAMES a region (E6.S5 review). Cancelled after the no-op guard above, never before it:
+        // an editable combo raises this handler for keystrokes that change nothing.
+        CancelKeyTests();
 
         _settings.AzureRegion = region;
         SettingsService.Save(_settings);
@@ -354,6 +363,10 @@ public partial class MainWindow
 
     private void AzureSaveKey_Click(object sender, RoutedEventArgs e)
     {
+        // Same reason as the DeepL save above: this gesture supersedes a test in flight, whose
+        // answer is about the pair that was in the boxes when it was pressed (E6.S5 review).
+        CancelKeyTests();
+
         var key = (AzureKeyBox.Password ?? "").Trim();
         var region = ReadAzureRegion();
 
@@ -443,6 +456,41 @@ public partial class MainWindow
     }
 
     /// <summary>
+    /// The window-lifetime half of a key test's bound (T3, review). Every in-flight test links its
+    /// own budget to this token, so one gesture ends them all; it is REPLACED rather than reused
+    /// after a cancel, because the next press must not find a token that is already spent.
+    /// </summary>
+    private CancellationTokenSource _keyTestsCts = new();
+
+    /// <summary>
+    /// End any key test still in flight, because something just made its answer wrong or unwanted.
+    /// The shape is <c>CancelReadOnce</c>'s (<c>MainWindow.Ocr.cs</c>) and so are the callers:
+    ///
+    /// <list type="bullet">
+    /// <item><b>Closing the window</b> — T3 asked for this and the review found it missing. The
+    ///       surfaces the result would land on are going away with the window, and a 12 s probe
+    ///       that outlives them has nothing to render into.</item>
+    /// <item><b>A key save or a region change</b> — the answer in flight is about credentials that
+    ///       are no longer the ones in effect. Without this the LATE test result overwrites the
+    ///       honest line the save just wrote, which is the ownership rule below read backwards: a
+    ///       cleared Azure key could be followed, seconds later, by "✓ Key works (westeurope)".</item>
+    /// </list>
+    ///
+    /// <para>Cancelling is enough on its own: <see cref="RunKeyTestAsync"/> tells its own budget
+    /// from this cancel and renders nothing when it is this one, so the line the save wrote
+    /// stands.</para>
+    /// </summary>
+    private void CancelKeyTests()
+    {
+        var live = _keyTestsCts;
+        _keyTestsCts = new CancellationTokenSource();   // replaced FIRST, so nothing re-entered cancels the new one
+        // Not disposed, for the reason CancelReadOnce does not dispose either: a source with no
+        // timer holds nothing, and a linked child built before the swap still has a registration
+        // on it — disposing underneath that child buys nothing and costs an edge case.
+        live.Cancel();
+    }
+
+    /// <summary>
     /// DeepL's check, which spends nothing (<c>GET /v2/usage</c>, ruling E6-b).
     ///
     /// <para>The key is read off the BOX and handed in as a parameter, so this path cannot write
@@ -477,7 +525,11 @@ public partial class MainWindow
 
         if (key.Length == 0)
         {
-            AzureStatus.Text = UserMessages.AzureNoKeyStatus();
+            // The CONFIGURED state, re-derived — not the "no key" literal (review). An emptied box
+            // over a key that is still saved is a real gesture (select-all, then paste), and the
+            // literal claimed Azure was gone while both chains were still spending it. This is the
+            // same answer the DeepL branch gives four lines up, from the same source of truth.
+            UpdateEngineStatusUi();
             return;
         }
 
@@ -506,13 +558,18 @@ public partial class MainWindow
     /// <para><b>Re-entrancy</b> is the button itself — a second press while one is in flight finds
     /// it disabled and returns. This is not the shared-OCR-engine case that needed a field.</para>
     ///
-    /// <para><b>Bounded</b>, because a test that hangs leaves the button dead: one
-    /// <c>CancellationTokenSource</c> over the same 12 s a single request gets. <b>I3</b> applies to
-    /// the catch — an <c>HttpClient</c> timeout is an <c>OperationCanceledException</c> whose token
-    /// is NOT cancelled, so the filter asks the SOURCE and never the exception type. There is no
-    /// cancel gesture on this button, so a cancelled token can only be the budget (or the window
-    /// closing, where nothing is left to read) and it is rendered as the timeout it is — exactly
-    /// what read-once does with its own budget.</para>
+    /// <para><b>Bounded</b>, because a test that hangs leaves the button dead — by
+    /// <see cref="TranslationPolicy.KeyTestBudgetSeconds"/>, which is a BUDGET and not a request
+    /// timeout (review). The probe goes through <c>HttpProviderCore</c>, so it is one logical call
+    /// of up to <see cref="TranslationPolicy.MaxAttempts"/> requests: bounding it by a single
+    /// request's 12 s deleted the core's retry from this path and, because the cut is a genuine
+    /// cancel the core lets past unreported, stranded a half-open probe that then refused every
+    /// real translation until the gate re-armed itself. <b>I3</b> applies to the catch — an
+    /// <c>HttpClient</c> timeout is an <c>OperationCanceledException</c> whose token is NOT
+    /// cancelled, so the filter asks the SOURCE and never the exception type. A cancelled token is
+    /// either that budget, rendered as the timeout it is, or <see cref="CancelKeyTests"/> — a
+    /// close, a save, a region change — which renders nothing, because whatever cancelled it has
+    /// already written the truer line.</para>
     ///
     /// <para><c>internal</c> so the suite can drive it with its own probe: the failure path, the
     /// restored label and the untouched settings are the assertions that matter here, and none of
@@ -529,8 +586,15 @@ public partial class MainWindow
         var label = button.Content;                 // restore EXACTLY what was there (the labels differ)
         button.IsEnabled = false;
         button.Content = UserMessages.TestingLabel();
-        using var cts = new CancellationTokenSource(
-            budget ?? TimeSpan.FromSeconds(TranslationPolicy.RequestTimeoutSeconds));
+
+        // Two bounds, one token. The window-lifetime source is what a close, a save or a region
+        // change cancels (CancelKeyTests); the budget is this press's own ceiling. `superseded` is
+        // the read-once `_readOnceStopped` idea in its smallest form: only the BUDGET has something
+        // to say, because the other three gestures have already written the line a result would
+        // overwrite with an answer about credentials that are no longer current.
+        var lifetime = _keyTestsCts;
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        cts.CancelAfter(budget ?? TimeSpan.FromSeconds(TranslationPolicy.KeyTestBudgetSeconds));
         try
         {
             var result = await probe(cts.Token);
@@ -539,8 +603,9 @@ public partial class MainWindow
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
-            status.Text = UserMessages.KeyTestSentence(providerId,
-                KeyTestResult.Failed(TranslationErrorKind.Timeout), region, null);
+            if (!lifetime.IsCancellationRequested)
+                status.Text = UserMessages.KeyTestSentence(providerId,
+                    KeyTestResult.Failed(TranslationErrorKind.Timeout), region, null);
         }
         catch (Exception ex)
         {
@@ -566,7 +631,14 @@ public partial class MainWindow
     /// result from being erased half a second later): this method and the Save handlers write the
     /// <i>configured</i> state — what the app will do with the key it has. A <b>Test</b> result
     /// overwrites that with what a real request just found out, and the next Save, region change or
-    /// restart resets it. Neither is suppressed for the other.</para>
+    /// restart resets it.</para>
+    ///
+    /// <para>"The next Save resets it" is only true because a Save also <b>cancels</b> the test
+    /// (<see cref="CancelKeyTests"/>) — the review found the ordering claimed here read backwards
+    /// without it. A test can run for a whole budget, so the last writer would otherwise be the
+    /// STALE one: clear the Azure key, press Save, and the probe launched beforehand would land
+    /// afterwards saying "✓ Key works (westeurope)" over a settings file with no Azure key in
+    /// it.</para>
     /// </summary>
     private void UpdateEngineStatusUi()
     {

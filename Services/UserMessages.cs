@@ -432,9 +432,14 @@ internal static class UserMessages
             // Azure's row drops §3.7's "resets on the 1st": the reset DAY is not verified anywhere,
             // and even the monthly allowance is still [UNKNOWN] U4 (E6.S1 has never been run against
             // a real resource). The sentence keeps what is known and promises no date.
-            TranslationErrorKind.QuotaExhausted => IsAzure(providerId)
+            // …and this row JOINS the usage text where the provider volunteered one, exactly as the
+            // ok row above does. DeepL's `/v2/usage` answers the counts on the spent path too, and
+            // dropping them there (review) withheld the numbers on the one row where a player most
+            // wants to see them.
+            TranslationErrorKind.QuotaExhausted => Joined(IsAzure(providerId)
                 ? "⚠ Your 2 million free characters for this month are used up."
                 : "⚠ The key works, but the DeepL quota is used up — the free engines are used until it resets.",
+                result.UsageText),
 
             // §3.7's own row, and the reason T4 says this keys off the classifier's Kind and never
             // off a string match: "no internet" is a transport fact, not a word in a body.
@@ -477,11 +482,16 @@ internal static class UserMessages
     private static string Number(long n) => n.ToString("N0", CultureInfo.InvariantCulture);
 
     /// <summary>Ruling E6-b's third clause. It names no failure, because there was none: the call
-    /// was refused before it left the machine.</summary>
+    /// was refused before it left the machine.
+    ///
+    /// <para>The sentence is written ONCE and the countdown joined to it, rather than spelled in
+    /// both arms of a conditional — UX-DR19 says exactly once, and the review's occurrence-counting
+    /// scan is what stopped it being twice. The <c>{t}</c> is already rendered by
+    /// <c>MainWindow.CountdownText</c>, the band formatter the LIVE loop and read-once share
+    /// (I2 — <c>Services/</c> counts seconds and never formats them).</para></summary>
     private static string KeyTestPaused(string providerId, string? tryAgainIn)
-        => tryAgainIn is null
-            ? $"⚠ Not checked — {Display(providerId)} is paused right now."
-            : $"⚠ Not checked — {Display(providerId)} is paused right now. Try again in {tryAgainIn}.";
+        => Joined($"⚠ Not checked — {Display(providerId)} is paused right now.",
+                  tryAgainIn is null ? null : $"Try again in {tryAgainIn}.");
 
     /// <summary>The §3.7-less kinds, as the deck's own sentence after a colon.</summary>
     private static string Reason(TranslationErrorKind? kind)

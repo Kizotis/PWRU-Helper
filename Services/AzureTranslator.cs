@@ -174,10 +174,12 @@ public class AzureTranslator : ITranslator
     /// <para><b>Through <see cref="HttpProviderCore"/>, deliberately</b> (the story's OQ-f, recorded
     /// beside the send). This IS a translation: routing it around the core would send while the gate
     /// is open — the one thing Epic 2 exists to prevent — and would lose the redaction and the
-    /// §10.1 line with it. That three wrong keys in a row open the user's own Azure gate is correct
-    /// behaviour (ruling E2-a: nothing may lock the user out without a way back, and the way back is
-    /// the Save button's <c>ClearAuthBlock</c>). A test <b>never</b> clears a gate: ruling E2-i gives
-    /// that to a key SAVE alone.</para>
+    /// §10.1 line with it. That a wrong key opens the user's own Azure gate is correct behaviour
+    /// (ruling E2-a: nothing may lock the user out without a way back, and the way back is the Save
+    /// button's <c>ClearAuthBlock</c>). <b>ONE</b> is enough, and the review corrected this comment
+    /// from "three": only the <c>BadResponse</c> row has a three-strike threshold — the Auth row
+    /// blocks on the first refusal, account-scoped, until a key is saved. A test <b>never</b>
+    /// clears a gate: ruling E2-i gives that to a key SAVE alone.</para>
     ///
     /// <para>Interactive: a person is watching a button. A genuine cancel travels out untouched
     /// (I3) — the catches here are typed, and the filtered OCE catch stays in the core.</para>

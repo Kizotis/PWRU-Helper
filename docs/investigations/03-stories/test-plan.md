@@ -307,11 +307,12 @@ needs the window is L2 with a fake capture/OCR/translator triple.
 | TP-SET-11 | `ProviderGateOverrides` is a safe hatch | L1 | unparseable JSON / ignored, `TranslationPolicy` defaults used, no throw | policy values | §12, R2 |
 | TP-SET-12 | **`Test key` — DeepL spends nothing** | L2 | a `:fx` key / exactly one `GET api-free.deepl.com/v2/usage`, the key in the `Authorization` header and nowhere in the URI; a paid key / `api.deepl.com` | recorded request | **E6-b**, E6.S5 AC 3 |
 | TP-SET-13 | **`Test key` — Azure spends five characters, once** | L2 | / exactly one `POST …/translate?api-version=3.0&from=en&to=ru` with body `[{"Text":"hello"}]` and both headers | recorded request | E6-b, §7.5 |
-| TP-SET-14 | **A spent DeepL allowance is read off `/usage`** | L2 | `character_count == character_limit` on a 200 / the quota row, with no translate call | result Kind | E6-b, §5.3 |
-| TP-SET-15 | **A paused provider's test says it is paused** | L2 | the gate is open / zero requests and the pause sentence, for both providers | request count + string | E6-b, §5.4 |
+| TP-SET-14 | **A spent DeepL allowance is read off `/usage`** | L2 | `character_count == character_limit` on a 200 / the quota row, carrying the counts it was read from; a non-positive `character_limit` / no limit claimed at all | result Kind + string | E6-b, §5.3 |
+| TP-SET-15 | **A paused provider's test says it is paused** | L2 | the gate is open / zero requests for both providers, and the pause sentence (asserted on DeepL) | request count + string | E6-b, §5.4 |
 | TP-SET-16 | **A key test never clears a gate** | L2 | a 401 test, then a second press / the `AuthFailed` row is still there and nothing was sent | gate snapshot | **E2-i**, E2-a |
-| TP-SET-17 | **The §3.7 outcomes, one case each** | L1 | each outcome / the deck's sentence verbatim, `{region}` interpolated from a value the app never offers | string equality | AC 2, UX-DR19 |
+| TP-SET-17 | **The §3.7 outcomes that SHIP, one case each** | L1 | each shipped outcome / the deck's sentence verbatim, `{region}` interpolated from a value the app never offers. The wrong-region and `cleared` rows are deliberately absent — see E6.S5's Completion Notes | string equality | AC 2, UX-DR19 |
 | TP-SET-18 | **The in-flight state always comes back** | L3 | a probe that throws, and one cut by the budget / label and `IsEnabled` restored, the sentence in the status line, no `MessageBox` named in the file | UI state + source scan | AC 1, I3 |
+| TP-SET-19 | **A key test is bounded by a whole logical call, and a save supersedes it** | L1 + L3 | the budget vs `RequestTimeoutSeconds × MaxAttempts`; a save landing mid-test / the late answer writes nothing and the button still comes back | policy value + UI state | E6.S5 review, §5.4 |
 
 ### 3.10 Observability (increment 0, story 5; increment 1, story 12)
 

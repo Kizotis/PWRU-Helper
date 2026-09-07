@@ -315,6 +315,33 @@ internal static class TranslationPolicy
     // [ASSUMED] architecture-cible.md §9.4 (the number is named there and nowhere measured)
     public const int ReadOnceBudgetSeconds = 30;
 
+    // ---- "Test key" (E6.S5) -------------------------------------------------------------------
+    // Read by MainWindow.Translate.cs, which builds one CancellationTokenSource per press from it.
+
+    /// <summary>How long one press of <b>Test key</b> may run before it gives up and says so.
+    ///
+    /// <para>Like <see cref="ReadOnceBudgetSeconds"/> it is a <b>budget</b> and not a request
+    /// timeout, and the review that added it found the story had used the latter. A key test goes
+    /// through <see cref="HttpProviderCore"/>, so it is ONE LOGICAL CALL — up to
+    /// <see cref="MaxAttempts"/> requests, each bounded by <see cref="RequestTimeoutSeconds"/>,
+    /// plus the admission wait and the jittered back-off between them. Bounding that by a single
+    /// request's timeout does two things nobody wanted: the core's retry becomes structurally
+    /// unreachable from this path (a blip the translation path recovers from is reported to the
+    /// player as "took too long"), and the cut lands as a GENUINE cancel, which the core lets past
+    /// unreported by design — so a granted half-open probe is left outstanding and the provider
+    /// refuses every real translation until <c>ProviderGate.ProbeTimeout</c> re-arms it.</para>
+    ///
+    /// <para>Derived rather than chosen, exactly as <c>ProviderGate.ProbeTimeout</c> is derived
+    /// from the same three numbers, so E2.S7 cannot tune one without the other. Full jitter draws
+    /// below <c>BackoffBaseMs &lt;&lt; n</c>, so the <c>MaxAttempts - 1</c> gaps sum to less than
+    /// <c>BackoffBaseMs * (2^(MaxAttempts-1) - 1)</c>; the milliseconds are rounded up to the
+    /// second so the budget can only ever be generous.</para></summary>
+    // [ASSUMED] derived, not chosen: RequestTimeoutSeconds × MaxAttempts plus the admission wait
+    // and the back-off ceiling, the same three numbers ProviderGate.ProbeTimeout is built from.
+    public const int KeyTestBudgetSeconds =
+        RequestTimeoutSeconds * MaxAttempts
+        + (MaxSpacingWaitMs + BackoffBaseMs * ((1 << (MaxAttempts - 1)) - 1) + 999) / 1000;
+
     // ---- HTML abuse-page markers (§4.3) ------------------------------------------------------
     // Matched lower-cased against DE-TAGGED text — E1.S4 does the de-tagging and lower-casing, so
     // the literals are kept lower-case here and no call site has to remember. Order matters at the

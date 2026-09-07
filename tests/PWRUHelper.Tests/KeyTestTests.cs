@@ -133,6 +133,55 @@ public class KeyTestTests : GatesTestBase
         Assert.Equal(TranslationErrorKind.BadResponse, result.Kind);
     }
 
+    /// <summary>
+    /// A number-shaped <c>character_count</c> the parser cannot represent is a <b>BadResponse</b>
+    /// like any other body that is not the provider's shape — review: <c>GetInt64</c> raises
+    /// <see cref="FormatException"/> here, not <c>InvalidOperationException</c>, so it used to
+    /// escape the filter, reach the gate as <c>Unknown</c> and put a raw .NET message on the
+    /// status line.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"character_count":1.5,"character_limit":500000}""")]
+    [InlineData("""{"character_count":99999999999999999999,"character_limit":500000}""")]
+    public async Task A_usage_number_that_is_not_an_integer_is_a_BadResponse(string body)
+    {
+        var fake = new FakeHandler().RespondJson(body);
+
+        var result = await new DeepLTranslator(FreeKey, fake).TestKeyAsync();
+
+        Assert.Equal(TranslationErrorKind.BadResponse, result.Kind);
+    }
+
+    /// <summary>
+    /// A limit that is not positive is not a limit (review): unmetered plans answer <c>0</c>, and
+    /// the sentence must fall back to the count alone rather than promising "of 0 characters".
+    /// </summary>
+    [Fact]
+    public async Task A_non_positive_limit_is_read_as_no_limit_at_all()
+    {
+        var fake = new FakeHandler().RespondJson("""{"character_count":183053,"character_limit":0}""");
+
+        var result = await new DeepLTranslator(FreeKey, fake).TestKeyAsync();
+
+        Assert.True(result.Ok);
+        Assert.Equal("183,053 characters used.", result.UsageText);
+        Assert.DoesNotContain(" of ", result.UsageText!, StringComparison.Ordinal);
+    }
+
+    /// <summary>The counts survive to the row that needs them most (review): a spent allowance says
+    /// HOW spent, instead of computing the numbers and dropping them.</summary>
+    [Fact]
+    public async Task The_quota_row_carries_the_counts_it_was_read_from()
+    {
+        var fake = new FakeHandler().RespondJson(Fixture("deepl-usage-spent.json"));
+
+        var result = await new DeepLTranslator(FreeKey, fake).TestKeyAsync();
+
+        Assert.Equal("⚠ The key works, but the DeepL quota is used up — the free engines are used "
+            + "until it resets. 500,000 of 500,000 characters used.",
+            UserMessages.KeyTestSentence(ProviderIds.DeepL, result, "", null));
+    }
+
     /// <summary>An empty box costs no request: a real 401 would earn a real AuthFailed block for a
     /// mistake no request can fix.</summary>
     [Fact]
@@ -485,15 +534,28 @@ public class KeyTestTests : GatesTestBase
 
         foreach (var fragment in fragments)
         {
-            var files = ProductionSources()
-                .Where(f => Code(File.ReadAllText(f)).Contains(fragment, StringComparison.Ordinal))
-                .Select(Path.GetFileName)
+            // OCCURRENCES and not files (review). Counting files could not see the likeliest
+            // duplication of all — the same sentence twice inside UserMessages.cs, which is where
+            // all the copy lives — and it was already true of the pause row, spelled once with a
+            // countdown and once without.
+            var hits = ProductionSources()
+                .Select(f => (File: Path.GetFileName(f), Count: Occurrences(Code(File.ReadAllText(f)), fragment)))
+                .Where(x => x.Count > 0)
                 .ToList();
 
-            Assert.True(files.Count == 1,
-                $"\"{fragment}\" appears in {files.Count} production files ({string.Join(", ", files)}) — UX-DR19");
-            Assert.Equal("UserMessages.cs", files[0]);
+            var total = hits.Sum(x => x.Count);
+            Assert.True(total == 1,
+                $"\"{fragment}\" appears {total} times in production source "
+                + $"({string.Join(", ", hits.Select(x => $"{x.File}×{x.Count}"))}) — UX-DR19");
+            Assert.Equal("UserMessages.cs", hits[0].File);
         }
+    }
+
+    private static int Occurrences(string text, string fragment)
+    {
+        int count = 0, at = 0;
+        while ((at = text.IndexOf(fragment, at, StringComparison.Ordinal)) >= 0) { count++; at += fragment.Length; }
+        return count;
     }
 
     /// <summary>AC 1's cheap half, and the one a reviewer would otherwise have to take on trust:

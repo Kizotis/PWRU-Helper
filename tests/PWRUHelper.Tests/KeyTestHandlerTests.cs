@@ -129,6 +129,55 @@ public class KeyTestHandlerTests
         });
     }
 
+    /// <summary>
+    /// The stale-result direction of the status-line ownership rule (review). A save that lands
+    /// while a test is in flight cancels it, and the late answer — about the credential that WAS in
+    /// the box — must not overwrite the line the save just wrote. Without the cancel the last
+    /// writer is the stale one, and a cleared key can be followed seconds later by "Key works".
+    /// </summary>
+    [Fact]
+    public void A_save_supersedes_a_test_in_flight_and_the_late_answer_says_nothing()
+    {
+        using var temp = new TempSettings("{}");
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+
+            async Task<KeyTestResult> NeverAnswers(CancellationToken ct)
+            {
+                await Task.Delay(Timeout.Infinite, ct);
+                return KeyTestResult.Works();
+            }
+
+            var task = window.RunKeyTestAsync(window.DeepLTestButton, window.DeepLStatus,
+                ProviderIds.DeepL, "", NeverAnswers);
+
+            // The save writes the configured line and cancels the test with the same gesture.
+            Click(window, "DeepLSaveKey_Click");
+            var afterSave = window.DeepLStatus.Text;
+            Pump(task);
+
+            Assert.Equal(afterSave, window.DeepLStatus.Text);   // the late answer wrote nothing
+            Assert.True(window.DeepLTestButton.IsEnabled);      // …and the button still came back
+            Assert.Equal(UserMessages.TestKeyLabel(), window.DeepLTestButton.Content);
+        });
+    }
+
+    /// <summary>
+    /// The budget is a whole-LOGICAL-CALL bound and not a single request's timeout (review). A test
+    /// goes through <c>HttpProviderCore</c>, so bounding it by <c>RequestTimeoutSeconds</c> deleted
+    /// the core's retry from this path and stranded a half-open probe on every cut. Asserted on the
+    /// policy rather than by waiting (CI-3).
+    /// </summary>
+    [Fact]
+    public void The_key_test_budget_covers_a_whole_logical_call()
+        => Assert.True(
+            TranslationPolicy.KeyTestBudgetSeconds
+                >= TranslationPolicy.RequestTimeoutSeconds * TranslationPolicy.MaxAttempts,
+            $"a key test is one logical call of up to {TranslationPolicy.MaxAttempts} requests; "
+            + $"{TranslationPolicy.KeyTestBudgetSeconds} s cannot bound it");
+
     /// <summary>AC 1's other negative: a failed test writes nothing. The key box still holds what
     /// was typed, <c>settings.json</c> is byte-for-byte what it was, and the in-memory settings
     /// object never saw an Azure key at all.</summary>
