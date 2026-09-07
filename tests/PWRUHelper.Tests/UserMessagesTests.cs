@@ -1086,6 +1086,9 @@ public class UserMessagesTests : GatesTestBase
             "○ Live paused — back in ",
             "○ Live paused — about to retry",
             "○ Live paused — it resumes on its own",
+            // §3.2's S6 rows and §3.5's fallback notice, added by E7.S4.
+            "○ Live — paused, no internet connection.", "○ Live paused — no internet",
+            "Translated by ", " is paused.",
             // §3.3 and §3.3a.
             "Done — ", " — none could be translated.", " — every engine is paused, ",
             "they fill in when one is back.", "Could not read the screen: ",

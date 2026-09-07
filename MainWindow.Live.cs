@@ -217,7 +217,14 @@ public partial class MainWindow
     /// left "Reading…" and every OCR error invisible to someone working from the overlay.</summary>
     private void SetScreenStatus(string msg)
     {
-        ScreenReadStatus.Text = msg;
+        // §3.5's one-time notice RIDES on the next line the loop writes, rather than replacing one
+        // (E7.S4). §3.2's "resumed" row asks for exactly that — "the normal running line, plus
+        // §3.5's one-time `Back on {P}.`" — and it is what keeps the notice from being either
+        // clobbered by the next tick 700 ms later or written over a fresh status of its own.
+        // The overlay's column for that row is "chip cleared, normal status": forty characters do
+        // not stretch to a notice, so it is the main window's line that carries it.
+        ScreenReadStatus.Text = WithNotice(msg, _stateNotice);
+        _stateNotice = null;
         // The overlay's third placement of the chip (E7.S3 AC 1): it has no TextBlock of its own
         // there — the window is 360 px wide — so MainWindow composes "{chip}  {status}" and the
         // overlay renders it (I2). OverlayLine returns the status untouched when the chain is
@@ -226,10 +233,25 @@ public partial class MainWindow
         _overlay?.SetStatus(OverlayLine(msg));
     }
 
+    /// <summary>§3.2's "resumed" row, as a join: <i>the normal running line, plus §3.5's one-time
+    /// notice</i>. Two spaces and no punctuation of its own — the notice is already a terminated
+    /// sentence (§3.5) and the line it rides on ends in its own stop or ellipsis. Pure, so the
+    /// composition is a unit test rather than something only a running loop could show.</summary>
+    internal static string WithNotice(string status, string? notice)
+        => notice is null ? status : status + "  " + notice;
+
     private void SetLiveUi(bool on)
     {
-        LiveIndicator.Text = "●  LIVE";
+        // E7.S4 — the PAUSED write is authoritative. This line used to hard-set "●  LIVE" on every
+        // call, so anything that touched the LIVE UI while the read path was paused silently
+        // un-froze the heartbeat (a partially frozen indicator is R-02 again, harder to see).
+        // Starting LIVE into a standing pause therefore shows the paused form at once, rather than
+        // blinking for up to a second until the countdown's first tick.
+        LiveIndicator.Text = _livePaused ? LiveIndicatorPaused : LiveIndicatorRunning;
         LiveIndicator.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        // A notice that was waiting to ride on a running line has nothing to ride on any more:
+        // "Live stopped.  Back on Google." is two states in one sentence.
+        if (!on) _stateNotice = null;
         StopLiveButton.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
         LiveButton.Content = on ? "■  Stop live translation" : "▶  Start live translation";
         UpdateResumeLiveButton();
@@ -241,6 +263,39 @@ public partial class MainWindow
         // one (E7.S2's AC 4). Polling a breaker every 250 ms is exactly the cost this epic removes.
         UpdateEngineChip();
     }
+
+    /// <summary>
+    /// <b>E7.S4 / AC 1 and AC 2 — the paused heartbeat, on BOTH surfaces, from ONE decision.</b>
+    /// The main window's <c>LiveIndicator</c> takes the fuller <c>○  LIVE (paused)</c> form (a
+    /// frozen <c>●</c> is still a claim that something is being sent, NFR11: the word carries it,
+    /// not the glyph alone), and the overlay is TOLD — one way, the way <c>SetStatus</c> already
+    /// goes — so its own 600 ms blink timer stops.
+    ///
+    /// <para><b>Who decides.</b> The caller, from <c>ChainTranslator.PauseNow().AllPaused</c> — the
+    /// very call the LIVE loop skips its tick on, so the indicator cannot disagree with the loop
+    /// that owns the tick. S3 <i>with something below still serving</i> is deliberately NOT this:
+    /// requests really are flowing and the heartbeat must keep blinking (flow (a).1). A rate-ceiling
+    /// wait is not this either — it sets no <c>BlockedUntil</c>, so <c>PauseNow()</c> cannot see it
+    /// (rulings E5-a/E5-b).</para>
+    ///
+    /// <para>It is <b>not</b> gated on a running loop: both indicators are <c>Collapsed</c> with
+    /// LIVE off, so there is nothing to get wrong, and remembering the state is what lets
+    /// <see cref="SetLiveUi"/> render the paused form the instant LIVE starts inside a window.</para>
+    ///
+    /// <para>Guarded on the transition, which is AC 4 in its cheapest form: at 1 Hz the countdown
+    /// hands the same answer sixty times a minute and this writes nothing at all.</para></summary>
+    internal void SetLivePaused(bool paused)
+    {
+        if (_livePaused == paused) return;
+        _livePaused = paused;
+        LiveIndicator.Text = paused ? LiveIndicatorPaused : LiveIndicatorRunning;
+        _overlay?.SetPaused(paused);
+    }
+
+    /// <summary>The three forms of the main window's LIVE indicator. <c>(paused)</c> is AC 1's own
+    /// wording and §2.2's: the state is legible with the palette stripped out (NFR11).</summary>
+    internal const string LiveIndicatorRunning = "●  LIVE", LiveIndicatorOff = "○  LIVE",
+                          LiveIndicatorPaused = "○  LIVE (paused)";
 
     private async Task LiveLoop(System.Drawing.Rectangle rect, CancellationToken ct)
     {
@@ -304,8 +359,12 @@ public partial class MainWindow
                     // GATES' clock, and subtracting a different one is the two-clocks bug IS-6 and
                     // ProviderGate.Now() exist to prevent (review, E5.S1). The countdown asks the
                     // same PauseNow() for the same reason.
+                    //
+                    // pause.NoNetwork is §2.1's S6 (E7.S4): the same full pause with the one cause
+                    // the player can act on, and it comes from the SAME answer, so the sentence
+                    // cannot come to disagree with the tick that chose it.
                     SetScreenStatus(LivePausedStatus(
-                        LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now)));
+                        LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now), pause.NoNetwork));
                     EnsureCountdownRunning(pause);
 
                     // The auto-stop is not reached from this branch AT ALL, and that is ruling E5-c
@@ -326,7 +385,12 @@ public partial class MainWindow
                 else
                 {
                     _liveTicks++;
-                    LiveIndicator.Text = (_liveTicks % 2 == 0) ? "●  LIVE" : "○  LIVE";  // heartbeat
+                    // A tick that is NOT skipped is a tick that sends, so the heartbeat comes back
+                    // here rather than up to a second later on the countdown's next tick — both
+                    // surfaces at once (E7.S4), and a no-op on every tick but the first.
+                    SetLivePaused(false);
+                    LiveIndicator.Text = (_liveTicks % 2 == 0)
+                        ? LiveIndicatorRunning : LiveIndicatorOff;                       // heartbeat
 
                     // ---- E5.S3 / §9.3: the rows that failed during the blip go FIRST ----------------
                     // "The first tick after a successful translation" is how §9.3 words it, from before
@@ -484,8 +548,12 @@ public partial class MainWindow
     /// that table is keyed by <c>TranslationErrorKind</c> and this is a LIVE <i>status</i>, not a
     /// failure — and because a countdown is formatting, which stays out of
     /// <c>Services/</c>.</para></summary>
-    internal static string LivePausedStatus(int? secondsLeft)
-        => CountdownText(secondsLeft) switch
+    /// <param name="noNetwork">§2.1's <b>S6</b> rather than S5 — every rung is inside a window the
+    /// gate recorded for <c>Network</c>, so nothing resolves (<c>ChainPause.NoNetwork</c>, E7.S4).
+    /// It takes the whole line and not a clause: there is no honest countdown to a cable, and
+    /// ruling <b>GAP-3</b> made S6 the same full pause as S5 in every other respect.</param>
+    internal static string LivePausedStatus(int? secondsLeft, bool noNetwork = false)
+        => noNetwork ? UserMessages.LivePausedNoNetwork() : CountdownText(secondsLeft) switch
         {
             null            => UserMessages.LivePausedNoCountdown(),
             AboutToRetry    => UserMessages.LivePausedAboutToRetry(),
@@ -499,8 +567,9 @@ public partial class MainWindow
     /// <para><c>MainWindow</c> formats and <c>CompactOverlay</c> renders (I2, and the epic's
     /// technical note): the overlay is handed the finished string through its existing
     /// <c>SetStatus</c> / <c>SetStatusIfChanged</c> and never learns what a countdown is.</para></summary>
-    internal static string LivePausedOverlayStatus(int? secondsLeft)
-        => CountdownText(secondsLeft) switch
+    /// <param name="noNetwork">S6's own row, in the same 40 characters (E7.S4).</param>
+    internal static string LivePausedOverlayStatus(int? secondsLeft, bool noNetwork = false)
+        => noNetwork ? UserMessages.LivePausedOverlayNoNetwork() : CountdownText(secondsLeft) switch
         {
             null            => UserMessages.LivePausedOverlayNoCountdown(),
             AboutToRetry    => UserMessages.LivePausedOverlayAboutToRetry(),

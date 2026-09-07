@@ -38,7 +38,15 @@ internal readonly record struct ChainTier(string ProviderId, ProviderGate Gate, 
 /// <para><b>Not an error and not an event</b>: this is a poll (ruling R-2 / OQ-c — <c>Services/</c>
 /// emits nothing), and asking is side-effect free by contract.</para>
 /// </summary>
-internal sealed record ChainPause(bool AllPaused, DateTimeOffset? RetryAt, DateTimeOffset Now);
+/// <param name="NoNetwork"><b>§2.1's S6, and it is the same pause as S5 wearing the one cause a
+/// player can act on</b> (ruling GAP-3: the full pause is universal, so S6 does not read the screen
+/// either). True when EVERY rung of the chain is inside a window that the gate last recorded for
+/// <see cref="TranslationErrorKind.Network"/> — nothing resolves. The predicate above is unchanged:
+/// this flag never decides whether the chain is paused, only which sentence the surfaces write for
+/// the pause it already found. Default <c>false</c>, so the honest reading of "we cannot tell" is
+/// S5's wording rather than an internet diagnosis nobody made.</param>
+internal sealed record ChainPause(bool AllPaused, DateTimeOffset? RetryAt, DateTimeOffset Now,
+                                  bool NoNetwork = false);
 
 /// <summary>
 /// <c>architecture-cible.md</c> §6 — the ordered provider chain, and the second half of Epic 2's
@@ -346,6 +354,11 @@ public sealed class ChainTranslator : ITranslator
         var now = _tiers[0].Gate.Now();
 
         DateTimeOffset? earliest = null;
+        // §2.1's S6 (E7.S4): the SAME pause, with the one cause a player can act on. It is computed
+        // from the snapshot BlockedUntil is already reading — no second Snapshot() call, which would
+        // be a second reading of a state that can change between them — and it starts true only to
+        // be ANDed down: one tier blocked for anything else, and this is S5.
+        bool allNetwork = true;
         foreach (var tier in _tiers)
         {
             // E2.S4's lazy load, reached from a STATUS read (review, E5.S1). TryEnter is still the
@@ -358,12 +371,14 @@ public sealed class ChainTranslator : ITranslator
 
             // One open rung is enough: the chain is not paused, and the remaining gates are not
             // even read. "All" is the whole question — a partially paused chain still translates.
-            if (BlockedUntil(tier, out _) is not { } until) return new ChainPause(false, null, now);
+            if (BlockedUntil(tier, out var snapshot) is not { } until)
+                return new ChainPause(false, null, now);
+            allNetwork &= snapshot.LastKind == TranslationErrorKind.Network;
             if (earliest is null || until < earliest) earliest = until;
         }
         // RetryAt is therefore non-null here — the sentence a paused player reads always has an
         // instant behind it.
-        return new ChainPause(true, earliest, now);
+        return new ChainPause(true, earliest, now, allNetwork);
     }
 
     /// <summary>Ruling <b>E3-a</b>, written ONCE: the instant this tier is blocked until, or null if

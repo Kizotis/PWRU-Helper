@@ -361,6 +361,18 @@ internal static class UserMessages
 
     public static string LivePausedNoCountdown() => "○ Live — paused." + ResumesOnItsOwn;
 
+    /// <summary>§3.2's <b>no internet</b> row — §2.1's <b>S6</b>, which ruling <b>GAP-3</b> made a
+    /// full pause exactly like S5 (the loop stops capturing too; <c>ux</c> flow (e).3's "LIVE keeps
+    /// reading the screen" is superseded). It carries <b>no countdown</b>: a connection comes back
+    /// when it comes back, and the gate's soft-cooldown window is not a promise about the cable —
+    /// so the sentence says the cause instead, which is the one thing here the player can act on.
+    ///
+    /// <para>It shares <see cref="ResumesOnItsOwn"/> with the other paused rows (UX-DR19: the same
+    /// promise is written once), and it deliberately does not reuse §3.1's <c>Network</c> sentence:
+    /// that one is about a translation that failed, this one is about a loop that is waiting.</para></summary>
+    public static string LivePausedNoNetwork()
+        => "○ Live — paused, no internet connection." + ResumesOnItsOwn;
+
     /// <summary>The half of the paused line that is the same promise every time it is made, so it is
     /// written once — and it is the whole reason the row exists: nothing is lost while the app
     /// waits, and the player does not have to do anything for it to come back.</summary>
@@ -373,6 +385,27 @@ internal static class UserMessages
     public static string LivePausedOverlayAboutToRetry() => "○ Live paused — about to retry";
 
     public static string LivePausedOverlayNoCountdown() => "○ Live paused — it resumes on its own";
+
+    /// <summary>S6's overlay column (E7.S4). 27 characters, inside the 40 the one status line on a
+    /// 360 px window allows.</summary>
+    public static string LivePausedOverlayNoNetwork() => "○ Live paused — no internet";
+
+    /// <summary>
+    /// <b>§3.5's "fallback active" notice, and it is amendment A4's settlement of D2.</b> "— trying
+    /// another engine" was not restored as a tail of §3.1's sentences, because those are rendered
+    /// once the whole attempt has already failed and the promise would be false at the one moment
+    /// it is read. What the deck kept instead is this: a line written <b>once per switch</b>, after
+    /// a lower tier really did answer, naming both engines. The evidence is
+    /// <c>ChainTranslator.LastOutcome.Skipped</c> being non-empty with a <c>ProviderId</c> that
+    /// answered — <c>EngineStatus.FellBack</c>, ruling <b>E3-b</b> — so the app never promises a
+    /// fallback, it reports one.
+    ///
+    /// <para>Null when either name is unknown (§3.0 rule 1: no name is ever invented) — the caller
+    /// then writes nothing at all, exactly as it does for <see cref="BackOn"/>.</para></summary>
+    public static string? TranslatedBy(string? servingId, string? pausedId)
+        => ProviderNames.Display(servingId) is { } serving
+           && ProviderNames.Display(pausedId) is { } paused
+            ? $"Translated by {serving} — {paused} is paused." : null;
 
     // ---- §3.4: the compact overlay's quick reply ------------------------------------------------
     //

@@ -149,6 +149,16 @@ public partial class MainWindow : Window
     private System.Drawing.Rectangle? _liveRegion;
     private LiveDedup _dedup = new();                     // decides which lines are genuinely new
     private int _liveTicks;
+
+    /// <summary>E7.S4 — the read path is paused, so the heartbeat is frozen on BOTH windows. One
+    /// flag for both, written only by <see cref="SetLivePaused"/>, which is what makes "the overlay
+    /// blinks but the main window does not" unreachable rather than merely unlikely.</summary>
+    private bool _livePaused;
+
+    /// <summary>§3.5's one-time notice waiting for a line to ride on — <c>Back on {P}.</c> or
+    /// <c>Translated by {P} — {P2} is paused.</c> — while LIVE owns the status line. Consumed by
+    /// the next <c>SetScreenStatus</c> and cleared when LIVE stops.</summary>
+    private string? _stateNotice;
     private const int MaxHistory = 50;                   // keep the last 50 translated messages
     // Which lines are "new enough" to translate is decided by LiveDedup: it works on a
     // letter/digit-only signature (so animated emojis and colour flicker don't register as new
@@ -181,7 +191,15 @@ public partial class MainWindow : Window
         _readTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Background, out _readChain);
         _readOnceTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Interactive);
         InitializeComponent();                  // fires change handlers — _restoringSettings guards them
-        _toastTimer.Tick += (_, _) => { Toast.Visibility = Visibility.Collapsed; _toastTimer.Stop(); };
+        // …and the overlay's line goes back to describing the state when the toast that borrowed it
+        // is over (E7.S4's arbitration). One timer for both routes: the toast has one lifetime,
+        // whichever window it was shown on.
+        _toastTimer.Tick += (_, _) =>
+        {
+            Toast.Visibility = Visibility.Collapsed;
+            _toastTimer.Stop();
+            _overlay?.EndToast();
+        };
         // Subscribing is not starting (I10): the countdown ticks for the first time only when
         // something tells it a pause has begun, which cannot happen before the first request and so
         // cannot happen before the first paint.
@@ -585,10 +603,17 @@ public partial class MainWindow : Window
 
     private void ShowToast(string message)
     {
-        // In compact mode the main window (and its toast) are hidden — show it in the overlay.
-        if (_overlay is { IsVisible: true }) { _overlay.SetStatus(message); return; }
-        ToastText.Text = message;
-        Toast.Visibility = Visibility.Visible;
+        // In compact mode the main window (and its toast) are hidden — show it in the overlay,
+        // where it OWNS that window's single status line for its lifetime and the state comes back
+        // after (E7.S4). Until then this route started no timer at all, so the toast sat there
+        // until something else wrote the line — which, with a pause on, was the 1 Hz countdown
+        // within a second (E7.S2's review left the arbitration open; this is it).
+        if (_overlay is { IsVisible: true }) _overlay.ShowToast(message);
+        else
+        {
+            ToastText.Text = message;
+            Toast.Visibility = Visibility.Visible;
+        }
         _toastTimer.Stop();
         // Give longer messages more time to be read.
         _toastTimer.Interval = TimeSpan.FromSeconds(message.Length > 40 ? 3.5 : 1.6);
@@ -687,6 +712,13 @@ public partial class MainWindow : Window
     /// evaluated.</summary>
     internal void CountdownTick(ChainPause pause, bool chipNeedsIt)
     {
+        // E7.S4 / AC 1 — the heartbeat, on both windows, from the same answer this tick already
+        // holds. It is BEFORE the stop rule on purpose: the tick that finds nothing paused is the
+        // tick that un-freezes, and a `return` above this line would leave the app frozen on the
+        // one second it recovered (R-02 with the sign flipped). Guarded on the transition, so at
+        // 1 Hz it writes nothing at all while the answer is unchanged.
+        SetLivePaused(pause.AllPaused);
+
         // AC 1 / NFR7 — "never runs idle", now as two questions rather than one. The chip's half
         // deliberately excludes the AuthFailed sentinel (DateTimeOffset.MaxValue): that window
         // counts down to nothing, for ever, and its exit is a key save rather than a second.
@@ -698,9 +730,13 @@ public partial class MainWindow : Window
         // above, and the chip has already been repainted.
         if (_liveCts == null || !pause.AllPaused) return;
 
+        // Both lines carry §2.1's S5-or-S6 fork from the SAME pause the loop skipped its tick on
+        // (E7.S4), so the two windows cannot come to describe one state two ways (principle 1).
+        // The overlay's write goes through the toast arbitration inside CompactOverlay: while a
+        // toast owns that one line, this second is remembered rather than painted over it.
         int? left = LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now);
-        SetIfChanged(ScreenReadStatus, LivePausedStatus(left));
-        _overlay?.SetStatusIfChanged(LivePausedOverlayStatus(left));
+        SetIfChanged(ScreenReadStatus, LivePausedStatus(left, pause.NoNetwork));
+        _overlay?.SetStatusIfChanged(LivePausedOverlayStatus(left, pause.NoNetwork));
     }
 
     // ============================================================
@@ -942,12 +978,27 @@ public partial class MainWindow : Window
         var chip = ChipFor(status, statusLineOwnsTheClock: _liveCts != null && status.AllReadTiersPaused);
         PaintEngineChip(chip, EngineTooltip(status));
 
-        // §3.5's third line, once per recovery: the chip just changed back, and the player is told
-        // why rather than left to notice. It is written AFTER the chip so the two agree, and only
-        // when a degraded state was really observed first — otherwise every session's first
-        // translation would announce a recovery from nothing.
-        if (_chipWasDegraded && chip.IsHealthy && UserMessages.BackOn(status.LastAnswered) is { } back)
-            SetIfChanged(TranslateStatus, back);
+        // §3.5's notices, once per switch, written AFTER the chip so the two agree — and only when
+        // a degraded state was really observed first, otherwise every session's first translation
+        // would announce a recovery from nothing.
+        //
+        // E7.S4 adds the OTHER direction and the surface rule. "Back on {P}." on the way up;
+        // "Translated by {P} — {P2} is paused." on the way down, which is amendment A4's settlement
+        // of deviation D2: the chain's progress is told by the chip and by this one-time notice,
+        // never by a "— another engine is being tried" tail on a sentence that is only rendered
+        // once the whole attempt has already failed. Its evidence is LastOutcome.Skipped being
+        // non-empty behind a tier that ANSWERED (EngineStatus.FellBack, ruling E3-b), so the app
+        // reports a fallback rather than promising one.
+        string? notice = null;
+        if (_chipWasDegraded && chip.IsHealthy) notice = UserMessages.BackOn(status.LastAnswered);
+        else if (!chip.IsHealthy) notice = FallbackNotice(status);
+
+        // "Once per switch" as a comparison and not a flag: the same sentence is not re-announced
+        // while the state it describes lasts (principle 1 — a state is announced once and left
+        // there), and a state with nothing to say clears the memory so the next switch speaks.
+        if (notice is not null && !string.Equals(notice, _lastStateNotice, StringComparison.Ordinal))
+            ShowStateNotice(notice);
+        _lastStateNotice = notice;
         // "checking…" is NOT a degraded state, and the distinction is the whole notice: every
         // session starts unchecked, so counting it would announce "Back on Google." at the first
         // successful translation of every launch — a recovery from nothing.
@@ -955,6 +1006,43 @@ public partial class MainWindow : Window
 
         return status.NeedsTick;
     }
+
+    /// <summary>
+    /// <b>§3.5's "fallback active" line, and deviation D2's evidence</b> (amendment A4, E7.S4). It
+    /// renders only when a tier was really <i>skipped</i> and a lower one really <i>answered</i> —
+    /// <see cref="EngineStatus.FellBack"/> over <c>ChainTranslator.LastOutcome.Skipped</c>, ruling
+    /// E3-b — and only when one of the tiers at or above the one serving is actually paused, which
+    /// is the half the sentence names. No pause to name, no sentence: the app does not invent a
+    /// reason for a fallback it cannot explain (§3.0 rule 1).
+    ///
+    /// <para>Pure over the same record the chip is drawn from, so all of it is a unit test.</para>
+    /// </summary>
+    internal static string? FallbackNotice(EngineStatus status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+        if (!status.FellBack || status.LastAnswered is not { } serving) return null;
+
+        var readLines = status.ReadTiers.Select(status.For).OfType<EngineLine>().ToList();
+        // The same walk ChipFor's S3 arm makes: a tier paused BELOW the engine that answered costs
+        // the player nothing and is not what this sentence is about.
+        var paused = PreferredPause(readLines, serving);
+        return paused is null ? null : UserMessages.TranslatedBy(serving, paused.ProviderId);
+    }
+
+    /// <summary>Where §3.5's one-time notice goes, which is <b>the surface that owns the state</b>.
+    /// With LIVE running that is the read status line, and the deck's own "resumed" row (§3.2) says
+    /// how: the normal running line <i>plus</i> the notice — so it neither replaces a fresh status
+    /// nor is replaced by the next tick 700 ms later. With LIVE off it is the Translator tab's
+    /// line, where E7.S3 put it and where the write path's own chip sits beside it.</summary>
+    internal void ShowStateNotice(string sentence)
+    {
+        if (_liveCts != null) _stateNotice = sentence;
+        else SetIfChanged(TranslateStatus, sentence);
+    }
+
+    /// <summary>The last §3.5 sentence rendered, or null while the state has nothing to say —
+    /// "once per switch" needs something to compare a switch against.</summary>
+    private string? _lastStateNotice;
 
     /// <summary>The two main-window surfaces, written from one <see cref="EngineChip"/> — the whole
     /// of what this feature puts on a control, in one method, so <b>TP-RENDER-03</b> can drive all

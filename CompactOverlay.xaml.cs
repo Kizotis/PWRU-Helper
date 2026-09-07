@@ -21,6 +21,19 @@ public partial class CompactOverlay : Window
     private readonly INotifyCollectionChanged _feed;
     private bool _blink;
 
+    /// <summary>E7.S4 / AC 1 — <b>the read path is paused, so nothing is being sent.</b> Remembered
+    /// on the window rather than applied and forgotten, because <see cref="IsVisibleChanged"/>
+    /// restarts <see cref="_beat"/>: toggling to compact mode and back while paused would otherwise
+    /// bring the blink back over a stopped pipe, which is R-02 again and harder to see.
+    ///
+    /// <para><b>The overlay never asks anything.</b> <c>MainWindow</c> tells it, the way it already
+    /// does with <see cref="SetStatus"/> — one way, no dependency back.</para></summary>
+    private bool _paused;
+
+    /// <summary>The two forms of the heartbeat, named because three call sites write them and one
+    /// of them must never write the other (AC 1).</summary>
+    internal const string DotOn = "  ●  LIVE", DotOff = "  ○  LIVE";
+
     /// <summary>Max characters the game accepts in a single chat message. A reply longer than this
     /// is split into word-aligned blocks the user copies and sends one by one. Shared with the
     /// Translator tab, which highlights the same cut points instead of splitting.</summary>
@@ -47,8 +60,8 @@ public partial class CompactOverlay : Window
         _beat.Tick += (_, _) => UpdateLiveIndicator();
         IsVisibleChanged += (_, _) =>
         {
-            if (IsVisible) { _beat.Start(); UpdateLiveIndicator(); UpdateReplyHint(); }
-            else _beat.Stop();
+            SyncBeat();
+            if (IsVisible) { UpdateLiveIndicator(); UpdateReplyHint(); }
         };
         UpdateReplyHint();
     }
@@ -63,12 +76,15 @@ public partial class CompactOverlay : Window
         => EmptyHint.Visibility = (_owner.LiveItems.Count == 0 && !_owner.IsLive)
             ? Visibility.Visible : Visibility.Collapsed;
 
-    /// <summary>Show the live status / a routed toast in the overlay's own status line.</summary>
+    /// <summary>Show the live status in the overlay's own status line.
+    ///
+    /// <para>It goes through E7.S4's arbitration: while a toast owns this line, the status is
+    /// REMEMBERED rather than written, and lands the moment the toast's own lifetime ends. See
+    /// <see cref="ShowToast"/> for why that is not the same as dropping it.</para></summary>
     public void SetStatus(string msg)
     {
-        OverlayStatus.Text = msg;
-        OverlayStatus.Visibility = string.IsNullOrEmpty(msg) ? Visibility.Collapsed : Visibility.Visible;
-        UpdateEmptyHint();
+        if (_toastOwnsTheLine) { _statusAfterToast = msg; return; }
+        WriteStatus(msg);
     }
 
     /// <summary>The same status line, through E7.S2's repaint guard: the 1 Hz countdown writes this
@@ -82,19 +98,122 @@ public partial class CompactOverlay : Window
     /// <c>MainWindow</c> formats, this window renders (I2).</para></summary>
     internal void SetStatusIfChanged(string msg)
     {
-        if (!string.Equals(OverlayStatus.Text, msg, StringComparison.Ordinal)) SetStatus(msg);
+        if (_toastOwnsTheLine) { _statusAfterToast = msg; return; }
+        if (!string.Equals(OverlayStatus.Text, msg, StringComparison.Ordinal)) WriteStatus(msg);
     }
+
+    /// <summary>The write itself — the one place this window's status line is assigned, so the
+    /// arbitration above cannot be got round by a caller that only knows about one of the two
+    /// entry points.</summary>
+    private void WriteStatus(string msg)
+    {
+        OverlayStatus.Text = msg;
+        OverlayStatus.Visibility = string.IsNullOrEmpty(msg) ? Visibility.Collapsed : Visibility.Visible;
+        UpdateEmptyHint();
+    }
+
+    /// <summary>
+    /// <b>E7.S4 — the toast/status arbitration, and the rule is "a toast owns the line".</b> This
+    /// window has ONE status line, so a toast routed here (the main window is hidden in compact
+    /// mode, <c>MainWindow.ShowToast</c>) and the 1 Hz countdown are writing the same
+    /// <c>TextBlock</c>. Before this, the countdown won within a second and the player never read
+    /// the toast — E7.S2's review flagged exactly that and left the arbitration open.
+    ///
+    /// <para>So the toast holds the line for <b>its</b> lifetime and the state comes back after: the
+    /// status that would have been painted meanwhile is kept in <see cref="_statusAfterToast"/> —
+    /// the LAST one, because a state is a fact about now and not a queue — and written by
+    /// <see cref="EndToast"/>. Nothing is lost either way: a state line is re-derived once a second
+    /// anyway, and a toast that is shown for a fifth of its 1.6 s is not shown at all.</para>
+    ///
+    /// <para><b>No timer here.</b> The hold ends when <c>MainWindow</c>'s existing <c>_toastTimer</c>
+    /// says so (§2.4: one countdown for the whole app, and the 600 ms heartbeat is the only other
+    /// thing that may tick). The overlay is told; it does not decide.</para></summary>
+    internal void ShowToast(string message)
+    {
+        WriteStatus(message);
+        _toastOwnsTheLine = true;
+    }
+
+    /// <summary>The toast's lifetime is over: the line goes back to describing the state rather than
+    /// the last thing that happened. Idempotent, and a no-op for a toast that was shown on the main
+    /// window instead — <c>MainWindow</c> calls it from one place, its toast timer.</summary>
+    internal void EndToast()
+    {
+        if (!_toastOwnsTheLine) return;
+        _toastOwnsTheLine = false;
+        if (_statusAfterToast is not { } line) return;
+        _statusAfterToast = null;
+        SetStatusIfChanged(line);
+    }
+
+    private bool _toastOwnsTheLine;
+    private string? _statusAfterToast;
 
     public void ApplyFontScale(double scale)
         => FeedItems.LayoutTransform = new System.Windows.Media.ScaleTransform(scale, scale);
 
-    private void UpdateLiveIndicator()
+    /// <summary>
+    /// <b>E7.S4 / AC 1 — the heartbeat means "requests are flowing", so a paused path freezes it.</b>
+    /// <c>MainWindow</c> owns the decision (<c>SetLivePaused</c>, from the one
+    /// <c>ChainTranslator.PauseNow()</c> the LIVE loop itself uses) and hands it here.
+    ///
+    /// <para>When <paramref name="paused"/>, <see cref="_beat"/> <b>stops</b> — AC 2, and the whole
+    /// of UX-DR18's payoff: the degraded state costs <i>less</i> CPU than the healthy one — and the
+    /// dot is written once, on <c>○</c>. <see cref="_blink"/> is reset so a resume starts on a known
+    /// glyph instead of on whatever parity the pause interrupted.</para>
+    ///
+    /// <para>Stopping the timer is <b>not enough</b>: <see cref="UpdateLiveIndicator"/> has four
+    /// entry points (this one, the tick, <c>IsVisibleChanged</c> and the ▶/■ button), so the guard
+    /// lives in the method as well.</para></summary>
+    internal void SetPaused(bool paused)
+    {
+        if (_paused == paused) return;   // one write per transition (AC 4)
+        _paused = paused;
+        _blink = false;                  // a known state to resume from, whichever way we just went
+        SyncBeat();
+        UpdateLiveIndicator();
+    }
+
+    /// <summary>The 600 ms heartbeat runs when, and only when, <see cref="BeatShouldRun"/> says so.
+    /// One call site for <c>_beat.Start()</c> in the whole file is the point: the trap this story
+    /// exists to close is a <i>second</i> site re-enabling a blink that was correctly stopped.</summary>
+    private void SyncBeat() => SyncBeat(IsVisible);
+
+    /// <summary>The same, with the visibility handed in: AC 2 is about a timer, and a test may not
+    /// <c>Show()</c> a 360 px always-on-top window on a build agent to watch one (CI-3/CI-4). The
+    /// parameterless form above is what the two production call sites use.</summary>
+    internal void SyncBeat(bool visible)
+    {
+        if (BeatShouldRun(visible, _paused)) _beat.Start();
+        else _beat.Stop();
+    }
+
+    /// <summary>The rule, pure so both of its halves can be asserted without showing a window: the
+    /// blink costs nothing while the overlay is hidden (as before), <b>and</b> nothing while the
+    /// path is paused (AC 2) — which is also why toggling compact mode during a pause does not
+    /// restart it.</summary>
+    internal static bool BeatShouldRun(bool visible, bool paused) => visible && !paused;
+
+    /// <summary>Whether the 600 ms heartbeat is actually running. AC 2 is about the timer and not
+    /// about the text, so the test asserts this rather than waiting 600 ms for a glyph (CI-3).</summary>
+    internal bool BeatRunning => _beat.IsEnabled;
+
+    internal void UpdateLiveIndicator()
     {
         bool live = _owner.IsLive;
         LiveDot.Visibility = live ? Visibility.Visible : Visibility.Collapsed;
-        if (live) { LiveDot.Text = _blink ? "  ●  LIVE" : "  ○  LIVE"; _blink = !_blink; }
         LiveToggleButton.Content = live ? "■ Live" : "▶ Live";
+        // Frozen on ○ — and it returns rather than falling through, so none of the four entry
+        // points can advance _blink while nothing is being sent (R-02: a blinking dot over a
+        // stopped pipe is the lie this whole story is about).
+        if (_paused) { LiveDot.Text = Heartbeat(paused: true, blink: false); return; }
+        if (live) { LiveDot.Text = Heartbeat(paused: false, _blink); _blink = !_blink; }
     }
+
+    /// <summary>The heartbeat's one decision, pure so TP-LIVE-17 can drive N ticks of it headlessly:
+    /// <b>the glyph is the same on both parities while paused</b> — which is what "does not
+    /// alternate" means — and differs on them while requests are flowing.</summary>
+    internal static string Heartbeat(bool paused, bool blink) => !paused && blink ? DotOn : DotOff;
 
     private void Header_MouseDown(object sender, MouseButtonEventArgs e)
     {

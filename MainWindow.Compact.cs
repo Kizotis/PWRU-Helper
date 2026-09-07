@@ -43,6 +43,11 @@ public partial class MainWindow
             }
         }
         _overlay.Show();
+        // E7.S4 — the overlay never asks anything, so it is told: a window opened DURING a pause
+        // would otherwise start its 600 ms blink on Show() (IsVisibleChanged) over a pipe that is
+        // sending nothing, which is R-02 reached through the one door that does not go through the
+        // countdown tick. After Show(), so the visibility change it answers has already happened.
+        _overlay.SetPaused(_livePaused);
         _overlay.Activate();
         Hide();
     }
