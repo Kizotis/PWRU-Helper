@@ -282,7 +282,13 @@ Continuous execution, story by story: Amelia **DS** (test-first, one commit) the
 | E6.S4 read opt-in + E6-d/E6-e | `80f08d6` | approve-with-fixes · `c474365` | → 1015 | Read chain `[azure, dict, gtx]` only with key + region + tick; quota hint with derivation (≈21–35 h/month); cache never pads (whole call fails, hits kept); `_restoringSettings` misuse replaced by a narrow flag; status ⇔ chain[0] pinned across every permutation. |
 | E6.S5 Test key | `bdee0cf` | approve-with-fixes · `d12f911` | → 1060 | DeepL `/usage` (free, usage line), Azure one "hello" request through the core (gate consulted, probe token honoured); never saves, never clears a gate; review: the Azure Test button was clipped off-screen at the default width (`WrapPanel`), the per-request timeout replaced by a logical-call budget (27 s), cancel on close/save/region change. |
 
-**Epic E6 complete (2026-09-07) apart from the two owner spikes: 4 stories, 897 → 1060 tests.** Next: E7 (s2 → s1 → s3 → s4 → s5 → s6 → s7 → s8) from Sally's amended deck.
+**Epic E6 complete (2026-09-07) apart from the two owner spikes: 4 stories, 897 → 1060 tests.**
+
+| Story | DS commit | CR verdict / commit | Tests | Notes |
+|---|---|---|---|---|
+| E7.S2 countdown bands at 1 Hz | `cceef03` | approve-with-fixes · `93aa3a6` | 1060 → 1092 | `about to retry` ≤ 4 s · `m:ss` 5–90 s · `about N min` · cap; one `DispatcherTimer` only while paused, repaint only on change, never before `Loaded`; review flagged the single stop condition for E7.S3's chip. |
+| E7.S1 one sentence per error kind | `92e3c51` | (review) | → 1116 | Deck A1–A12 as authority; `{P}` from the failing provider's id (`ProviderNames.Display`), D2 clause behind evidence (E7.S4/S5), `Failed:` retired, coarse `{t}` off ticking lines (E7-a), overlay short forms, auto-stop sentence with `{n}`, orphan literals moved into `UserMessages`. |
+| E7.S3 → S8 | — | — | — | Provider chip + tooltip (E6-a `EnsureGateStateLoaded` after first paint) → paused state + frozen heartbeat on both surfaces → LIVE/read-once/overlay copy incl. "Cancel read" → pending-row render test → About "Translation engines" block (+ cache privacy, "Clear cache") → README/About copy. |
 | E6.S1 / E6.S6 spikes | — | — | — | **Owner-blocked** (U4 real Azure F0 account; U5 an already-issued DeepL `:fx` key). Copy only; code not gated. |
 
 _Process note (2026-09-07): an agent reverted this README's working-copy edits during A.2 (rulings E4-a…E5-g and both tables were lost and re-entered here). Orchestrator edits are now committed immediately after each ruling._
