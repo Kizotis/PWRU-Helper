@@ -837,8 +837,21 @@ public partial class MainWindow : Window
     ///       the decision is re-asked there under that lock (<c>UnloadIfIdle</c>) rather than
     ///       trusted from here.</item>
     /// </list>
+    ///
+    /// <para><b>Internal so answer 2 can be asked without waiting ten real minutes</b> (CI-3, the
+    /// shape <see cref="CountdownTick"/> already uses): the re-arm is the half that turns "defer"
+    /// into "defer and remember", and a source scan cannot tell those apart.</para>
+    ///
+    /// <para><b>The one gap, and its owner.</b> Answer 3 hands the decision to the pool, where it is
+    /// asked again under the provider's lock — and if a translation lands in the microseconds
+    /// between the question here and the answer there, <c>UnloadIfIdle</c> declines and <b>nothing
+    /// re-arms</b>: that engine then waits for the next call into the provider (the (a) sweep) or for
+    /// <see cref="OnClosing"/>. Re-arming from the pool means marshalling back onto a dispatcher that
+    /// may already be shutting down, which is a worse bug in a story about a rooted timer — so it is
+    /// recorded for <b>E8.S5</b>, which is the story that first makes a concurrent offline
+    /// translation possible at all (nothing is wired to this provider today).</para>
     /// </summary>
-    private void OfflineIdleTick()
+    internal void OfflineIdleTick()
     {
         _offlineIdleTimer.Stop();           // one-shot: it never runs twice off one arming
         if (_liveCts != null) return;

@@ -214,6 +214,16 @@ public partial class MainWindow
     /// <para><b>Static, and that is the seam.</b> Driving <c>RemoveOfflineEngine</c> would mean a
     /// modal in a headless run; as two arguments the ORDER — the only thing this method is — is
     /// provable against the fake engine with no window at all.</para>
+    ///
+    /// <para><b>What it does NOT do, and its owner.</b> Freeing is not closing: a translation
+    /// arriving between the <c>Unload</c> and the <c>Delete</c> loads the engine again, the delete
+    /// fails on the mapped DLL, and the row is back to E8.S3's untrue "removed — 0 MB freed". Nothing
+    /// is wired to this provider yet, so the window is unreachable today; shutting it needs a
+    /// terminal state on <see cref="BergamotTranslator"/> (a load that refuses after a retire), which
+    /// is the same thing E8.S2's review already handed to <b>E8.S5</b> ("Dispose is not terminal").
+    /// The residual case — a delete that fails for a reason no unload can remove, an AV hold — still
+    /// owes a truthful sentence in <c>UserMessages</c> and in the copy deck, in one commit
+    /// (ruling E8-b).</para>
     /// </summary>
     internal static long UnloadThenRemove(BergamotTranslator engine, OfflineModelStore store)
     {

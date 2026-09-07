@@ -33,9 +33,13 @@ public class BergamotLifetimeTests : GatesTestBase
     /// assignment.</summary>
     private sealed class FakeClock
     {
-        internal DateTimeOffset Now = Start;
+        // Ticks and not a DateTimeOffset field: the interleaving case below advances this from six
+        // threads while the provider reads it, and a 16-byte struct has no atomic assignment — a
+        // torn read there would be a test failing for a reason that is not the code's.
+        private long _ticks = Start.UtcTicks;
+        internal DateTimeOffset Now => new(Volatile.Read(ref _ticks), TimeSpan.Zero);
         internal DateTimeOffset Read() => Now;
-        internal void Advance(TimeSpan by) => Now += by;
+        internal void Advance(TimeSpan by) => Interlocked.Add(ref _ticks, by.Ticks);
     }
 
     /// <summary>A model directory that exists and holds the config file the provider looks for. The
@@ -503,7 +507,124 @@ public class BergamotLifetimeTests : GatesTestBase
         // The unload never happens on the UI thread. Every site that can free the engine either
         // hands it to the pool or is a user gesture that deliberately waits (RemoveOfflineEngine).
         Assert.Contains("Task.Run(() => engine.UnloadIfIdle());",
-                        Body(main, "private void OfflineIdleTick()"), StringComparison.Ordinal);
+                        Body(main, "internal void OfflineIdleTick()"), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <b>Answer 2 of the tick, driven rather than read.</b> A translation that lands between
+    /// <c>StopLive</c> and the fire moves the window, and the tick must arm again for what is left —
+    /// deferring is not cancelling. A freshly built window is exactly that state: its lifetime was
+    /// stamped in the constructor a moment ago, so the whole window is still ahead of it.
+    /// </summary>
+    [Fact]
+    public void The_tick_re_arms_when_it_finds_the_window_has_moved()
+    {
+        using var settings = new TempSettings("""{ "SettingsVersion": 3 }""");
+        using var models = new TempModels();
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+
+            window.DisarmOfflineIdleUnload();
+            Assert.False(window.OfflineIdleUnloadArmed);
+
+            window.OfflineIdleTick();
+
+            Assert.True(window.OfflineIdleUnloadArmed,
+                "the one-shot found the window had moved and then forgot about it — nothing would "
+                + "have freed the engine until the next call into the provider");
+        });
+    }
+
+    // =============================================================================================
+    //  E8.S5 inherits this: ONE provider instance in the whole app
+    // =============================================================================================
+
+    /// <summary>
+    /// <b>There is exactly one <c>BergamotTranslator</c> in the process, and it is the one this
+    /// window owns.</b> E8.S5 wires the offline rung into the chains and must hand <b>this</b>
+    /// instance to the builders: a second one constructed inside <c>TranslationChains</c> would be a
+    /// second 121 MiB that no lifetime here could unload, and the two would disagree about what is
+    /// resident — while <see cref="MainWindow.OnClosing"/> and the one-shot would both be freeing the
+    /// wrong one. Pinned now so the next story cannot introduce it quietly.
+    /// </summary>
+    [Fact]
+    public void The_app_constructs_exactly_one_offline_provider()
+    {
+        var sites = ProductionSources()
+            .Select(f => (Name: Path.GetFileName(f),
+                          Count: Occurrences(Code(File.ReadAllText(f)), "new BergamotTranslator(")))
+            .Where(x => x.Count > 0)
+            .Select(x => $"{x.Name}: {x.Count}")
+            .OrderBy(x => x, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal(new[] { "MainWindow.xaml.cs: 1" }, sites);
+    }
+
+    // =============================================================================================
+    //  translator_free exactly once per load — every door at once, under a randomised interleaving
+    // =============================================================================================
+
+    /// <summary>
+    /// <b>Two frees on one handle is a native crash</b>, and the four doors that can free one
+    /// (the sweep at the top of a translate, <c>UnloadIfIdle</c>, <c>Unload</c>, <c>Dispose</c>) are
+    /// each proven in isolation above. This case opens all of them at once, on a seeded interleaving
+    /// with the clock and the LIVE flag moving underneath, and asks the only question that matters of
+    /// every engine the factory ever built: freed once, never called after its free, never freed with
+    /// a call inside it, never two calls inside it at a time.
+    ///
+    /// <para>Seeded, so a failure is reproducible; no sleep and no timing assertion (CI-3) — the
+    /// concurrency is real but nothing here waits for a duration.</para>
+    /// </summary>
+    [Fact]
+    public async Task Every_door_at_once_still_frees_each_engine_exactly_once()
+    {
+        var clock = new FakeClock();
+        var factory = new FakeBergamotEngineFactory();
+        using var model = new TempModel();
+        var live = 0;
+        var provider = Provider(factory, model,
+            new BergamotLifetime(() => Volatile.Read(ref live) != 0, clock.Read, Timeout));
+
+        var seeds = new Random(20260907);
+        var workers = Enumerable.Range(0, 6).Select(_ => seeds.Next()).Select(seed => Task.Run(async () =>
+        {
+            var r = new Random(seed);
+            for (var i = 0; i < 30; i++)
+                switch (r.Next(6))
+                {
+                    case 0: provider.UnloadIfIdle(); break;
+                    case 1: provider.Unload(); break;
+                    case 2: clock.Advance(TimeSpan.FromMinutes(r.Next(0, 20))); break;
+                    case 3: Volatile.Write(ref live, r.Next(2)); break;
+                    case 4:
+                        await provider.TranslateLinesAsync(new[] { "а", "б" }, "ru", "en")
+                                      .ConfigureAwait(false);
+                        break;
+                    default:
+                        await provider.TranslateAsync("строка", "ru", "en").ConfigureAwait(false);
+                        break;
+                }
+        })).ToArray();
+
+        await Task.WhenAll(workers);
+        provider.Dispose();
+
+        Assert.False(provider.IsLoaded);
+        // Not vacuous: the storm really did free engines and load fresh ones, so "exactly once" below
+        // is a statement about several handles and not about the one that was never let go.
+        Assert.True(factory.Initialisations > 1,
+                    $"the interleaving never reloaded — {factory.Initialisations} engine(s) built");
+        Assert.Equal(factory.Initialisations, factory.All.Count);
+        foreach (var engine in factory.All)
+        {
+            Assert.Equal(1, engine.Disposals);            // translator_free, exactly once per load
+            Assert.False(engine.WasCalledAfterDispose);
+            Assert.False(engine.WasDisposedWhileInFlight);
+            Assert.Equal(1, engine.PeakConcurrentCalls);
+        }
     }
 
     // =============================================================================================
