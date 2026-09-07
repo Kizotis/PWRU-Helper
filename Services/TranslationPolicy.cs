@@ -74,8 +74,11 @@ internal static class TranslationPolicy
     ///
     /// <para>What the number buys: <c>analyse…</c> S6/A11 measured a mismatch on a 14-line LIVE tick
     /// turning one logical translation into up to 30 requests inside that tick, on a connection that
-    /// was already being throttled. At 8 the worst case is 8 requests, and the measured LIVE batch
-    /// size is ≈2.1 lines — so on a healthy tick this constant never fires at all.</para>
+    /// was already being throttled. At 8 the worst case is <b>8 lines asked</b> instead of thirty —
+    /// lines and not requests, because one line can cost several (a line over
+    /// <see cref="MaxQueryBytes"/> is chunked) or none at all (the gate refused it, or it was
+    /// blank). The measured LIVE batch size is ≈2.1 lines, so on a healthy tick this constant never
+    /// fires at all.</para>
     ///
     /// <para><b>It bounds the FALLBACK and never a primary per-line path</b> (ruling E3-e):
     /// <c>GoogleDictTranslator</c> ships per line by design under OQ-A, whose answer accepts "≈2× the

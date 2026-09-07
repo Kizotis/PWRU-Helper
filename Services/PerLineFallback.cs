@@ -1,3 +1,5 @@
+using System.Runtime.ExceptionServices;
+
 namespace PWRUHelper.Services;
 
 /// <summary>
@@ -43,8 +45,17 @@ namespace PWRUHelper.Services;
 /// failure was <c>RateLimited</c>, <c>Blocked</c>, or a <c>NotSent</c> refusal raised by
 /// <see cref="HttpProviderCore"/>'s admission, the last such failure is rethrown <i>as it is</i> —
 /// carrying its <c>RetryAt</c> and its <c>NotSent</c> flag, so the chain can still tell a tier that
-/// was skipped from one that tried. A PARTIAL failure still returns placeholders: some of those
-/// lines really were translated.</para>
+/// was skipped from one that tried.</para>
+///
+/// <para><b>Anything else in the loop switches that throw off</b> — a success, but also a failure
+/// that is this provider's own answer about a line (a timeout, an unparseable body), because the
+/// ruling names three gate kinds and no others. Be exact about what that costs, because "a partial
+/// failure still returns placeholders, and some of those lines really were translated" is <i>not</i>
+/// always true (E3.S8 review): a SOFT failure on line 1 is a §5.3 <c>SoftCooldown</c>, so the gate
+/// closes for 5 s and lines 2..N come back as <c>NotSent</c> refusals — the loop then returns N
+/// placeholders of which none is a translation, and the chain reads that list as a success with a
+/// healthy tier untried. The behaviour is E3-f's text applied literally and is pinned as it stands;
+/// widening the predicate is a change to the ruling and therefore the architect's, not a review's.</para>
 ///
 /// <para><b>The placeholder strings are E7.S1's copy and this file's policy</b> (ruling E2-d): they
 /// are byte-for-byte what they were in the two providers, and they are not reworded here. All of
@@ -92,6 +103,18 @@ internal static class PerLineFallback
         foreach (var line in lines)
         {
             if (rateLimited) { result.Add(SkippedMessage); continue; }
+
+            // A BLANK line is not evidence about anything, and this guard is why (E3.S8 review).
+            // Both providers answer "" for one before they reach the gate — TranslateAsync trims
+            // and returns early — so it costs no request. Passed to the loop it used to buy two
+            // things it had not earned: a slot of the cap it cannot spend, and, worse, a "this tier
+            // answered" tick that switched OFF ruling E3-f's throw. One truncated OCR row ("Nick:"
+            // with nothing after the colon — LIVE never filters those, and a blank line is never
+            // cacheable so it is forwarded on EVERY tick) was therefore enough to make a tier that
+            // had been refused on every real line read to ChainTranslator as a success, leaving a
+            // healthy tier untried. The loop answers "" itself now, so the answer no longer depends
+            // on which provider was handed in.
+            if (string.IsNullOrWhiteSpace(line)) { result.Add(""); continue; }
 
             // The cap counts LINES ATTEMPTED, not requests issued: a line can cost zero requests (the
             // gate refused it) or several (a very long line is chunked), and a bound the reader can
@@ -144,8 +167,11 @@ internal static class PerLineFallback
         // Ruling E3-f. Nothing got through and nothing failed for a reason the next tier shares:
         // this is one failure of the PROVIDER, not N failures of N lines, and it is thrown so the
         // chain moves on. Rethrown as the instance it is — RetryAt, ProviderId and NotSent included —
-        // rather than rebuilt, because ChainTranslator reads all three.
-        if (gated is not null && !anythingElse) throw gated;
+        // rather than rebuilt, because ChainTranslator reads all three. Through
+        // ExceptionDispatchInfo and not `throw gated;`, which would reset the stack to THIS line
+        // and lose the throw site inside the core — on the one path the epic exists to make
+        // reportable (E3.S8 review).
+        if (gated is not null && !anythingElse) ExceptionDispatchInfo.Capture(gated).Throw();
 
         return result;
     }

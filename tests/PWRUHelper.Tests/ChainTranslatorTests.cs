@@ -254,6 +254,45 @@ public class ChainTranslatorTests : GatesTestBase
     }
 
     /// <summary>
+    /// <b>Ruling E3-f's far end, on the BATCH method</b> (E3.S8 review). Since E3.S8 there is a
+    /// second producer of the <c>NotSent</c> shape above: a per-line loop refused at admission on
+    /// EVERY line rethrows the core's refusal <i>as the instance it is</i>
+    /// (<c>PerLineFallback.cs:148</c>), so a tier that never spoke arrives at this chain through
+    /// <see cref="ChainTranslator.TranslateLinesAsync"/> rather than through the single-text method
+    /// TP-CHN-06 pins. The verdict must be the same one: <b>a skip, not a failure</b> — tier 1 is
+    /// recorded in <c>Skipped</c> with its window, and tier 2 answers.
+    ///
+    /// <para>Without it, the rethrow E3.S8 added to stop a list of apologies from ending the chain
+    /// early would end it early in the other direction: as <c>lastFailure</c>, thrown at the player
+    /// while a healthy tier had never been asked. Pinned on the shape rather than end to end for
+    /// TP-CHN-06's reason — the chain skips a blocked gate <i>before</i> calling the tier, so the
+    /// loop's own refusal is unreachable from a chain whose gate is closed.</para>
+    /// </summary>
+    [Fact]
+    public async Task E3_f_a_batch_refused_on_every_line_is_a_skip_and_the_next_tier_answers()
+    {
+        var gate = new ProviderGate();
+        var retryAt = gate.Now() + TimeSpan.FromMinutes(5);
+        // Exactly what PerLineFallback rethrows when every line was refused at admission.
+        var refused = new Fake(() => throw new TranslationException(
+            TranslationErrorKind.RateLimited, "paused", retryAt, ProviderIds.GoogleGtx) { NotSent = true });
+        var second = new Fake(() => "G");
+        var chain = new ChainTranslator(new[]
+        {
+            new ChainTier(ProviderIds.GoogleGtx, gate, refused),
+            new ChainTier(ProviderIds.GoogleDict, new ProviderGate(), second),
+        });
+
+        Assert.Equal(new[] { "G", "G" },
+            await chain.TranslateLinesAsync(new[] { "раз", "два" }, "ru", "en"));
+        Assert.Equal(1, second.Calls);
+        Assert.Equal(new[] { ProviderIds.GoogleGtx },
+            chain.LastOutcome!.Skipped.Select(s => s.ProviderId));
+        Assert.Equal(retryAt, chain.LastOutcome!.RetryAt);
+        Assert.Null(chain.LastOutcome!.Kind);          // nothing failed: the tier was never asked
+    }
+
+    /// <summary>
     /// <b>Risk R-01, and the reason ruling E3-a spells the predicate out.</b> The skip is
     /// <c>BlockedUntil &gt; Now()</c> and <b>not</b> <c>State == Open</c>: a gate stays
     /// <see cref="GateState.Open"/> after its window has elapsed, deliberately, until a caller

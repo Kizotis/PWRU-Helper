@@ -60,9 +60,12 @@ public class DeepLTranslatorTests : GatesTestBase
     /// translation. The provider has been correct since that bug; this case is the guard, so a
     /// future 1:1 provider (Azure, E6.S2) inherits a pin rather than a habit.
     ///
-    /// <para>Asserted twice over: the exception, and that not one source line came back as its own
-    /// translation — which is exactly the shape padding produces and the only assertion an
-    /// implementation that "helpfully" filled the gap could not satisfy.</para>
+    /// <para>The assertion that carries the weight is <c>ThrowsAsync</c> itself: a padding
+    /// implementation returns a list and never reaches it. The second one is non-vacuity, not a
+    /// second proof — it shows the request really was made and really carried all four lines, so
+    /// the mismatch is the provider's answer and not a call that never happened (E3.S8 review: the
+    /// earlier wording claimed the message check was the padding guard, which it cannot be —
+    /// <c>ex.Message</c> is a constant).</para>
     /// </summary>
     [Fact]
     public async Task TP_CHN_09_a_short_batch_is_a_BadResponse_and_the_list_is_never_padded()
@@ -79,8 +82,10 @@ public class DeepLTranslatorTests : GatesTestBase
         // mismatch is the provider's answer and not a call that never happened.
         var sent = Assert.Single(fake.Calls).Body ?? "";
         Assert.All(lines, l => Assert.Contains(HttpUtility.UrlEncode(l), sent, StringComparison.OrdinalIgnoreCase));
-        // And nothing came back at all: a padded implementation returns a list whose fourth element
-        // is the untranslated source. There is no list to inspect, which is the point.
-        Assert.DoesNotContain("четыре", ex.Message);
+        // There is deliberately no third assertion. A padded implementation returns a list whose
+        // fourth element is the untranslated source — and it would fail on ThrowsAsync above, long
+        // before anything could inspect it. The `Assert.DoesNotContain("четыре", ex.Message)` that
+        // stood here read like a padding guard and was a tautology: ex.Message is the constant at
+        // DeepLTranslator.cs:111 and could not contain a source line whatever the code did.
     }
 }

@@ -67,8 +67,13 @@ public class PerLineFallbackTests : GatesTestBase
             Assert.All(outp.Skip(TranslationPolicy.PerLineCap),
                 l => Assert.Equal(PerLineFallback.SkippedMessage, l));
 
-            // One line, counts only, no user text (I11).
-            var capped = File.ReadAllLines(Path.Combine(dir, "log.txt"))
+            // One line, counts only, no user text (I11). Read through the guard both established
+            // readers of this file use (`GateLoggingTests.Lines`, `HttpProviderCoreTests.LinesFor`):
+            // `Logging.DirectoryOverride` is a process-global static and `LogFileCollection` swaps
+            // it too, so a missing file must fail as "no WARN was found" and not as a
+            // FileNotFoundException nobody can read (E3.S8 review).
+            var log = Path.Combine(dir, "log.txt");
+            var capped = (File.Exists(log) ? File.ReadAllLines(log) : Array.Empty<string>())
                              .Where(l => l.Contains("capped at")).ToList();
             var line = Assert.Single(capped);
             Assert.Contains(ProviderIds.GoogleGtx, line);
@@ -128,6 +133,42 @@ public class PerLineFallbackTests : GatesTestBase
     }
 
     /// <summary>
+    /// <b>The cap counts LINES ATTEMPTED, not requests issued</b> — the half of the architect's
+    /// Phase-4 instruction a later reader is most likely to take for an off-by-something, so it is
+    /// pinned and not only commented (review ruling (a)). A line too long for one query is chunked
+    /// by <see cref="TextChunker"/> and costs THREE requests inside one <c>translateOne</c> call,
+    /// and still spends exactly one of the cap's eight: twelve lines cost 8 × 3 requests, and four
+    /// lines are never asked.
+    ///
+    /// <para>Driven straight at the shared loop rather than through a provider, because no provider
+    /// can produce this shape: a group whose <c>\n</c>-join fits <c>MaxQueryBytes</c> cannot contain
+    /// a line that does not, so the only way a capped fan-out meets a chunked line is a future
+    /// provider with a different budget — which is exactly the reader this case is written for.</para>
+    /// </summary>
+    [Fact]
+    public async Task The_cap_counts_lines_attempted_even_when_one_line_costs_several_requests()
+    {
+        // 2000 Cyrillic characters = 4000 UTF-8 bytes against a 1500-byte budget: three chunks,
+        // three requests, one line.
+        var line = new string('я', 2000);
+        var fake = new FakeHandler().RespondJson(GoogleOk);
+        var gtx = new GoogleGtxTranslator(fake);
+
+        var outp = await PerLineFallback.RunAsync(
+            Enumerable.Repeat(line, 12).ToArray(),
+            (l, token) => gtx.TranslateAsync(l, "ru", "en", token),
+            ProviderIds.GoogleGtx, afterFailedBatch: true, CancellationToken.None);
+
+        // The stitched answer is what proves the chunking really happened rather than being assumed.
+        Assert.All(outp.Take(TranslationPolicy.PerLineCap), l => Assert.Equal("hellohellohello", l));
+        Assert.Equal(12 - TranslationPolicy.PerLineCap,
+                     outp.Count(l => l == PerLineFallback.SkippedMessage));
+        // A cap on REQUESTS would have stopped after the third line. This one stopped after the
+        // eighth and let the chunker spend what it had to.
+        Assert.Equal(3 * TranslationPolicy.PerLineCap, fake.Requests);
+    }
+
+    /// <summary>
     /// <b>Ruling E3-e, the half that is easy to get wrong.</b> The cap bounds the fallback after a
     /// FAILED BATCH and never a provider's primary per-line path: <c>GoogleDictTranslator</c> ships
     /// one request per line under OQ-A, whose answer explicitly accepts "≈2× the LIVE request
@@ -165,6 +206,33 @@ public class PerLineFallbackTests : GatesTestBase
 
         Assert.Equal(10, fake.Requests);                    // no batch request, and no cap
         Assert.All(outp, l => Assert.Equal("hello", l));
+    }
+
+    /// <summary>
+    /// <b>A blank line costs no request, so it may not spend a slot of the cap</b> (E3.S8 review).
+    /// Eight blank bodies in front of eight real ones: every real line is still asked. Before the
+    /// guard the blanks consumed the whole budget — <c>attempted++</c> ran before a call that
+    /// returns <c>""</c> without touching the endpoint — so a tick like this one issued exactly ONE
+    /// request and rendered all eight real messages as "(skipped — rate-limited…)" while nothing
+    /// had rate-limited anything.
+    ///
+    /// <para>Not a contrived shape: <c>SplitSpeakerStrict</c> gives a truncated OCR row ("Nick:"
+    /// with nothing after the colon) an empty body, LIVE never filters those out, and a blank line
+    /// is never cacheable — so it is forwarded on every tick it appears in.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_blank_line_does_not_spend_a_slot_of_the_cap()
+    {
+        var lines = Enumerable.Repeat("", TranslationPolicy.PerLineCap)
+                              .Concat(Lines(TranslationPolicy.PerLineCap)).ToArray();
+        var fake = new FakeHandler().RespondJson(GoogleOk);
+
+        var outp = await new GoogleGtxTranslator(fake).TranslateLinesAsync(lines, "ru", "en");
+
+        Assert.Equal(1 + TranslationPolicy.PerLineCap, fake.Requests);
+        Assert.All(outp.Take(TranslationPolicy.PerLineCap), l => Assert.Equal("", l));
+        Assert.All(outp.Skip(TranslationPolicy.PerLineCap), l => Assert.Equal("hello", l));
+        Assert.DoesNotContain(PerLineFallback.SkippedMessage, outp);
     }
 
     // =============================================================================================
@@ -231,6 +299,62 @@ public class PerLineFallbackTests : GatesTestBase
         Assert.Equal(3, outp.Count);
         Assert.All(outp, l => Assert.StartsWith("(translation failed: ", l));
         Assert.Equal(3, fake.Requests);
+    }
+
+    /// <summary>
+    /// <b>The shape ruling E3-f does NOT cover, pinned as it behaves</b> (E3.S8 review — recorded
+    /// for the architect rather than changed inside a review). A soft failure on line 1 is a §5.3
+    /// <c>SoftCooldown</c>: the gate closes for 5 s, so lines 2-5 are refused at admission with
+    /// <c>NotSent</c> and cost nothing. But line 1's timeout already counted as "something other
+    /// than a gate reason happened", so the throw stays off and the loop returns five placeholders
+    /// of which <b>none is a translation</b> — a list <see cref="ChainTranslator"/> reads as a
+    /// success, leaving the healthy tier below untried. One timeout is enough to reach it.
+    ///
+    /// <para><c>E3_f_soft_failures_on_every_line_still_return_placeholders</c> cannot see this: at
+    /// three lines against <c>BadResponseStrikesToOpen = 3</c> the gate never closes mid-loop, so
+    /// the suite pinned E3-f's two clean poles and nothing between them. This is that middle.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_soft_failure_that_closes_the_gate_leaves_the_rest_refused_and_still_does_not_throw()
+    {
+        var fake = new FakeHandler()
+            .RespondJson(GoogleOk)   // batch: one part for five lines — mismatch
+            .TimesOut();             // line 1: a Timeout, i.e. an immediate 5 s SoftCooldown
+
+        var outp = await new GoogleGtxTranslator(fake).TranslateLinesAsync(Lines(5), "ru", "en");
+
+        Assert.Equal(5, outp.Count);
+        Assert.All(outp, l => Assert.StartsWith("(translation failed: ", l));
+        Assert.DoesNotContain("hello", outp);        // not one line was translated
+        // The batch, then line 1's attempt and its single §5.6 retry (MaxAttempts = 2). Lines 2-5
+        // were refused at admission behind the cooldown — no request, and no translation either.
+        Assert.Equal(1 + TranslationPolicy.MaxAttempts, fake.Requests);
+    }
+
+    /// <summary>
+    /// <b>E3-f's off switch, and the bug it had</b> (E3.S8 review). The ruling turns itself off as
+    /// soon as one line produced something — which is right, because a translation the player can
+    /// read must not be thrown away. A BLANK line produces something too: both providers answer
+    /// <c>""</c> for one <i>before</i> they reach the gate, at the cost of no request whatsoever. So
+    /// one truncated OCR row was enough to convince the loop that a tier refused on every real line
+    /// had answered: it returned a list, <see cref="ChainTranslator"/> read the list as a success,
+    /// and the healthy tier below was never asked — the precise failure E3-f exists to prevent,
+    /// re-entered through the one input LIVE produces most often.
+    /// </summary>
+    [Fact]
+    public async Task E3_f_a_blank_line_is_not_evidence_that_the_tier_answered()
+    {
+        var fake = new FakeHandler()
+            .RespondJson(GoogleOk)                          // batch: one part for three lines
+            .Respond(HttpStatusCode.TooManyRequests, "");   // the first REAL line, and the latch
+
+        var ex = await Assert.ThrowsAsync<TranslationException>(
+            () => new GoogleGtxTranslator(fake).TranslateLinesAsync(
+                new[] { "", "раз", "два" }, "ru", "en"));
+
+        Assert.Equal(TranslationErrorKind.RateLimited, ex.Kind);
+        // The batch and one refused line: the blank cost nothing, and proved nothing.
+        Assert.Equal(2, fake.Requests);
     }
 
     /// <summary>The partial case, which is the common one: two lines fail softly, one succeeds, and
