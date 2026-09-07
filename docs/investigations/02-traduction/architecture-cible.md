@@ -418,7 +418,7 @@ internal static class TranslationPolicy
     public const int BackoffBaseMs     = 500;   // full jitter: delay = rand(0, base << attempt)
 
     // ---- batching / LIVE  [ASSUMED]
-    public const int PerLineCap        = 8;     // above this, a batch mismatch is a BadResponse
+    public const int PerLineCap        = 8;     // ruling E3-e: bounds the per-line FAN-OUT after a failed batch (lines beyond it get the skipped placeholder, zero requests); never a provider's primary per-line path
     public const int LiveBackoffCapMs  = 5000;
     public const int AutoStopWindowMinutes = 2;
     public const int PendingRetryMaxAttempts = 2;
@@ -536,7 +536,7 @@ Three properties this buys, stated because stories will be written against them:
 | Provider family | Batch mechanism | Count mismatch |
 |---|---|---|
 | DeepL, Azure | native array, one result per input, in order | `BadResponse`, **never padded** (`DeepLTranslator.cs:49-53`) |
-| Google (gtx and dict), Edge | lines joined with `\n`, response split on `\n` | falls through to **per-line, and only while `lines.Count <= PerLineCap` (8)**; above that it is a `BadResponse` |
+| Google (gtx and dict), Edge | lines joined with `\n`, response split on `\n` | falls through to **per-line for at most `PerLineCap` (8) lines**; the remaining lines get the skipped placeholder with zero requests and one `Warn` line _(ruling E3-e, 2026-09-07 — supersedes the earlier "above the cap it is a `BadResponse`")_. A provider whose primary path is per-line (dict until U1) is bounded by the rate ceiling, not by the cap. **Ruling E3-f/E3-g:** a tier that translated **no** line throws its last failure so the chain tries the next tier; placeholders are returned only for partial success. |
 
 The per-line cap is new and it closes a measured amplifier: today a mismatch on a 14-line tick turns one logical
 translation into up to 30 requests inside one tick (`analyse…` S6, A11). The existing `rateLimited` latch
@@ -1045,7 +1045,7 @@ what makes P2 provable instead of arguable.
 | T16 | Pending-retry queue | a failed row is re-translated after recovery; a row evicted by `MaxHistory` is dropped; the queue is bounded and cleared on stop |
 | T17 | Cache persistence + the `(`-prefix rule on disk | a `(`-prefixed value is never written; MRU order survives a reload; a corrupt file yields an empty cache |
 | T18 | Shared store across the two decorators | the write decorator serves a value stored by the read decorator; `BuildWriteChain()` on key save does **not** lose it |
-| T19 | Per-line cap | a batch mismatch on 14 lines raises `BadResponse` instead of issuing 14 requests |
+| T19 | Per-line cap | a batch mismatch on 14 lines issues at most 8 per-line requests; the other 6 get the skipped placeholder (ruling E3-e) |
 
 ### 11.3 What must keep passing
 

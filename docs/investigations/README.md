@@ -247,6 +247,18 @@ Continuous execution, story by story: Amelia **DS** (test-first, one commit) the
 
 **Behaviour changes carried to the A.1 PR description:** 429 → 1 request (was 3) · 403/401/456/`BadResponse`/`Network` → 1 · 5xx → 2 · timeout → 2 (now retried) · full jitter replaces 300/600 ms · DeepL gains retries + log lines (key redacted) · both providers consult a gate (paused ⇒ 0 requests, typed exception with `RetryAt`) · the rate ceiling paces real traffic (3rd rapid request waits ≤ 500 ms) · `IOException` classified `Network` · the error body reaches the classifier · `ProbeTimeout` derived from the retry policy · no user-visible string changed.
 
+### Epic E3 — endpoint chain — **shipped without Edge, 2026-09-07** (same branch/PR #56)
+| Story | DS commit | CR verdict / commit | Tests | Notes |
+|---|---|---|---|---|
+| E3.S3 `ChainTranslator` | `79059b7` | approve · `ffe405e` | 609 → 630 | Skip on `BlockedUntil > Now()` (never on state, R-01 pin); both cancel guards were vacuous → fixed; exit rule pinned (last real failure propagates; all skipped → `AllProvidersPaused(min)`); `FallbackTranslator` deleted. |
+| E3.S6 gtx demoted + `TextChunker` | `f4a1515` | approve · `97b2188` | → 637 | `git mv` (history kept), scans made pattern-based, latch narrowed to `RateLimited`/`Blocked`. |
+| E3.S4 `GoogleDictTranslator` | `581af58` | approve-with-fixes · `663a674` | → 683 | Default provider; strict parser (multi-element root rejected, `sl`/`tl` encoded); per-line until U1 behind a `[UNKNOWN]`-graded flag; surrogate-safe `HardSplit`. |
+| E3.S8 `PerLineFallback` + cap | `fcce5fc` | approve-with-fixes · `01b17af` | → 705 | Shared loop; cap bounds the batch fan-out only (E3-e); throw when nothing translated (E3-f/g); blank OCR lines no longer count as successes. |
+| E3.S7 both chains | `f2bc874` | approve-with-fixes · `c5b1485` | → 716, 2 s | `TranslationChains.BuildRead/BuildWrite`: read `google-dict → google-gtx` (`Background`), read-once second `Interactive` instance, write `[deepl] → google-dict → google-gtx`; I8/I10 pins non-vacuous; no gate reference in code-behind. |
+| E3.S1 / S2 / S9 | — | — | — | **Owner-blocked** (captures U1/U2, soak U3 — from a connection the owner designates). E3.S5 Edge blocked on U2. |
+
+**Release A.1 = E2 + E3 (without Edge): 11 stories, 405 → 716 tests. PR #56 marked ready for review (merge order #54 → #55 → #56).** Next: release A.2 (E4 shared persistent cache, E5 LIVE loop) on `feature/p2-a2-cache-and-live`, stacked on A.1.
+
 **Architect's rulings for E2 (recorded before/while the stories ran):**
 Story files E2.S3–S6 written by Amelia (CS) on 2026-09-06; eight drifts vs `epics.md` recorded in the stories (E1 shifted every `file:line`; the Chrome UA is Google's only — a provider option in `HttpProviderCore`; DeepL gains a retry loop it never had — max 2, `Unavailable`/`Timeout` only). **Architect's rulings for E2:**
 | # | Question | Ruling |
@@ -264,6 +276,10 @@ Story files E2.S3–S6 written by Amelia (CS) on 2026-09-06; eight drifts vs `ep
 | E3-b | "Skipped" vs "tried and failed" indistinguishable for `LastOutcome`/UX | `internal bool TranslationException.NotSent`, set by `HttpProviderCore.Paused()`; the chain records skip reasons from it. |
 | E3-c | The gate has no `Id`; the composition sites (`MainWindow.xaml.cs:43`, `Translate.cs:229-232`) may not name `ProviderGates` (TP-START-02) | `ChainTier` carries a `ProviderId`; chains are built by `Services/TranslationChains.cs` (`ChainTranslator.Of(...)`), so the code-behind composes without touching the registry. |
 | E3-d | Release A.1 without `EdgeTranslator` (U2 owner-blocked) | **Allowed:** read `GoogleDict → GoogleGtx`, write `[DeepL] → GoogleDict → GoogleGtx`; vendor independence (R1) is raised in the release note. Edge lands when the owner designates a capture connection. |
+| E3-e | `PerLineCap` (8) applied literally would break `GoogleDict`, whose only path is per-line until U1 (E3.S4 review) | **The cap bounds the fallback fan-out after a failed batch** (gtx: batch → per-line), never a provider's primary per-line path; that path is bounded by the rate ceiling (a 14-line LIVE tick ≈ 7 s). **U1 is now the most valuable owner capture.** E5 owns the LIVE tick budget. |
+| E3-f | The 1-line / N-line contract fork: `SafeOne` throws, the per-line loop returns placeholders, so the chain falls through on group size, and a tier returning only failures reads as a success (E3.S3/S4 reviews) | **A per-line loop whose lines ALL failed for a gate/rate reason (`RateLimited`/`Blocked`/`NotSent`) throws that failure** so the chain tries the next tier; placeholders are returned only for partial failures. Shared loop extracted in E3.S8 (three copies now: gtx, dict, and the rule). |
+| E3-g | E3-f's predicate ("all failures were gate reasons") lets a timeout on line 1 + N `NotSent` refusals return N placeholders and read as success (E3.S8 review D1) | **Widened: a tier that translated NO line throws its last failure** (any kind, `RetryAt`/`NotSent` intact); placeholders only when at least one line was translated. Lands in E3.S7. |
+| E3-h | Lines beyond the cap never reach a healthy tier in the same tick (E3.S8 review D2) | **Accepted for A.1** — the cap is a load bound; those rows are marked failed and are re-translated after recovery by E5 (retry-after-recovery). |
 | E2-e | E2.S4 AC 2 "first `TryEnter`" trigger | Lazy load hangs off `ProviderGate.TryEnter` (the read chain is a field initializer, pre-first-paint); "off the UI thread" becomes true with E2.S5's `ConfigureAwait(false)`; `Flush()` in `OnClosing` is the one permitted `ProviderGates` reference outside `Services/` and TP-START-02's scan carves it out. |
 
 ### Field data received during Phase 4
