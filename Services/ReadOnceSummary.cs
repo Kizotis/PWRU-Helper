@@ -48,10 +48,13 @@ internal static class ReadOnceSummary
     /// The status a finished read shows, from what it actually produced.
     /// <paramref name="error"/> is the failure to name, or null when there was none.
     ///
-    /// <para>The <c>error is null</c> in the first branch is not redundant: a partial result CAN
-    /// arrive with an exception (one source group answered, the other threw), and a claim of "Done"
-    /// over a batch that carried a failure is the exact class of lie this type exists to stop. Both
-    /// conditions have to hold.</para>
+    /// <para>The <c>error is null</c> in the first branch is a guard against a shape today's caller
+    /// cannot quite produce, and it is kept deliberately. <c>TranslateBodiesAsync</c> awaits its two
+    /// source groups in sequence, so the first throw aborts the batch and the caller reports
+    /// <c>(0, error)</c> — a full count alongside a live exception is unreachable from THAT call
+    /// site. It is one edit away from being reachable, though (a batch that tolerates a partial
+    /// failure is E5.S3's whole subject), and a claim of "Done" over a batch that carried a failure
+    /// is the exact class of lie this type exists to stop. Both conditions have to hold.</para>
     /// </summary>
     internal static string Status(int lines, int translated, Exception? error)
     {

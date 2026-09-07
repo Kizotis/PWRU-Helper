@@ -264,8 +264,8 @@ public class UserMessagesTests : GatesTestBase
                 $"Live hiccup ({s}) — retrying…",                   // Live.cs:238
                 $"Live stopped after repeated errors ({s}).",       // Live.cs:235
                 // E5.S4 replaced "OCR failed: {s}" — developer-speak for a component the player
-                // does not have and cannot act on (§3.3) — and the new join lower-cases the deck
-                // sentence, which is the rule §3.3 states and the reason the helper is public.
+                // does not have and cannot act on (§3.3). This is the COLON join, the one §3.3's
+                // "lower-cased at the join" was written for, and the reason the helper is public.
                 UserMessages.ReadFailed(new TranslationException(TranslationErrorKind.Unknown, s)),
                 // …and read-once's other three statuses, which join the same sentence three more
                 // ways. Composed through the deck rather than copied, so a wording change to any of
@@ -311,11 +311,11 @@ public class UserMessagesTests : GatesTestBase
         var offline = new TranslationException(TranslationErrorKind.Network, "raw provider text (HTTP 000)");
 
         Assert.Equal("Done — 3 line(s) translated.", UserMessages.ReadOnceAllTranslated(3));
-        Assert.Equal("Read 5 line(s) — 3 translated, 2 could not be. no internet connection — nothing can be translated until it is back",
+        Assert.Equal("Read 5 line(s) — 3 translated, 2 could not be. No internet connection — nothing can be translated until it is back.",
                      UserMessages.ReadOncePartlyTranslated(5, 3, offline));
         Assert.Equal("Read 5 line(s) — 3 translated, 2 could not be.",
                      UserMessages.ReadOncePartlyTranslated(5, 3, null));
-        Assert.Equal("Read 4 line(s) — none could be translated. no internet connection — nothing can be translated until it is back",
+        Assert.Equal("Read 4 line(s) — none could be translated. No internet connection — nothing can be translated until it is back.",
                      UserMessages.ReadOnceNoneTranslated(4, offline));
         Assert.Equal("Read 4 line(s) — none could be translated.",
                      UserMessages.ReadOnceNoneTranslated(4, null));
@@ -323,15 +323,26 @@ public class UserMessagesTests : GatesTestBase
                      UserMessages.ReadOncePaused("30 s"));
         Assert.Equal("Nothing was read — all engines are paused. Try again shortly.",
                      UserMessages.ReadOncePaused(null));
-        Assert.Equal("Could not read the screen: no internet connection — nothing can be translated until it is back", UserMessages.ReadFailed(offline));
+        Assert.Equal("Could not read the screen: no internet connection — nothing can be translated until it is back.",
+                     UserMessages.ReadFailed(offline));
+        Assert.Equal("Read cancelled.", UserMessages.ReadCancelledStatus());
+        Assert.Equal("not translated — read cancelled", UserMessages.ReadCancelledRow());
     }
 
-    /// <summary>The deck's sentence, lower-cased at the join (§3.3) — and ONLY at the join: the rest
-    /// of the sentence is untouched, so "Your API key was refused — check it in About" keeps the
-    /// capital A of About and the pass-through of an unmapped provider message keeps its shape.
-    /// A read-once status is the first place in this app that renders a deck sentence mid-line.</summary>
+    /// <summary>
+    /// <b>The two joins, and the review that split them (E5.S4).</b> §3.3 writes "{reason} is the
+    /// §3.1 sentence, lower-cased at the join" — true of the join it was written for, which glues
+    /// the sentence on after a COLON and must not restart it in upper case. The other three
+    /// read-once statuses join after a FULL STOP, where the same rule produced "…2 could not be. no
+    /// internet connection", and a sentence that opens in lower case after a stop reads as a typo
+    /// rather than as §1's "one sentence answering the three questions". The deck's own capital
+    /// stands there, and the line is terminated instead.
+    ///
+    /// <para>Either way only the first character is ever in play: "Your API key was refused — check
+    /// it in About" keeps the capital A of About.</para>
+    /// </summary>
     [Fact]
-    public void The_reason_is_the_decks_own_sentence_lower_cased_only_at_the_join()
+    public void The_reason_is_lower_cased_after_a_colon_and_left_alone_after_a_full_stop()
     {
         Assert.Equal("your API key was refused — check it in About, or clear it",
                      UserMessages.LowerAtJoin(UserMessages.AuthFailed));
@@ -342,9 +353,52 @@ public class UserMessagesTests : GatesTestBase
             var joined = UserMessages.LowerAtJoin(s);
             Assert.Equal(s.Length, joined.Length);
             Assert.Equal(s[1..], joined[1..]);                       // only the first character moved
-            Assert.Contains(joined, UserMessages.ReadOnceNoneTranslated(2, new TranslationException(
-                Enum.GetValues<TranslationErrorKind>().First(k => UserMessages.Sentence(k) == s), "raw")));
+
+            var ex = new TranslationException(
+                Enum.GetValues<TranslationErrorKind>().First(k => UserMessages.Sentence(k) == s), "raw");
+
+            // After the colon: lower-cased, and terminated because the line is shown alone.
+            Assert.Equal($"Could not read the screen: {joined}.", UserMessages.ReadFailed(ex));
+            // After the full stop: the deck's own sentence, verbatim and terminated.
+            Assert.Equal($"Read 2 line(s) — none could be translated. {s}.",
+                         UserMessages.ReadOnceNoneTranslated(2, ex));
         }
+    }
+
+    /// <summary>
+    /// The colon join lower-cases a sentence, not an acronym. §4.4's <c>Unknown</c> arm and the
+    /// untyped-exception arm both pass a message through that this app did not write, and the
+    /// framework's start with things like "GDI+" — "Could not read the screen: gDI+ …" is the
+    /// developer-speak the join was supposed to remove, spelled worse. A second capital is the
+    /// cheapest signal that the first one is not sentence case; every deck sentence is.
+    /// </summary>
+    [Fact]
+    public void The_join_lower_cases_a_sentence_and_leaves_an_acronym_alone()
+    {
+        Assert.Equal("no internet connection — nothing can be translated until it is back",
+                     UserMessages.LowerAtJoin(UserMessages.Network));
+        Assert.Equal("GDI+ capture failed", UserMessages.LowerAtJoin("GDI+ capture failed"));
+        Assert.Equal("DNS lookup failed", UserMessages.LowerAtJoin("DNS lookup failed"));
+        Assert.Equal("a", UserMessages.LowerAtJoin("A"));
+        Assert.Equal("1 thing", UserMessages.LowerAtJoin("1 thing"));
+
+        Assert.Equal("Could not read the screen: GDI+ capture failed.",
+                     UserMessages.ReadFailed(new InvalidOperationException("GDI+ capture failed")));
+    }
+
+    /// <summary>The <c>Unknown</c> pass-through is the one reason clause that can already carry its
+    /// own full stop, and the join may not double it — "…try again later.." is the shape the deck's
+    /// no-terminal-stop rule exists to prevent, arriving from the one arm that rule does not
+    /// govern.</summary>
+    [Fact]
+    public void A_reason_that_is_already_terminated_is_not_given_a_second_stop()
+    {
+        var passthrough = new TranslationException(TranslationErrorKind.Unknown,
+            "Translation service error (HTTP 418). Please try again later.");
+
+        Assert.EndsWith("Please try again later.", UserMessages.ReadOnceNoneTranslated(2, passthrough));
+        Assert.DoesNotContain("..", UserMessages.ReadOnceNoneTranslated(2, passthrough));
+        Assert.DoesNotContain("..", UserMessages.ReadFailed(passthrough));
     }
 
     /// <summary>H11 — each sentence exists exactly once. Two Kinds sharing a string is how the

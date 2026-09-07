@@ -57,7 +57,10 @@ public class ReadOnceStatusTests
     private static TranslationException Offline() =>
         new(TranslationErrorKind.Network, "raw provider text (HTTP 000) — not for the user");
 
-    private const string OfflineReason = "no internet connection — nothing can be translated until it is back";
+    // The deck's Network sentence as a read-once status JOINS it: after the full stop that ends the
+    // counts, so it keeps its own capital and the line is terminated (E5.S4 review — §3.3's
+    // "lower-cased at the join" belongs to the colon join of ReadFailed, not to this one).
+    private const string OfflineReason = "No internet connection — nothing can be translated until it is back.";
 
     // =============================================================================================
     //  TP-ONCE-01/02/03 — the three status shapes (§3.3)
@@ -84,7 +87,7 @@ public class ReadOnceStatusTests
     }
 
     /// <summary>TP-ONCE-03 — nothing came back. This is the sentence the false "Done" used to cover,
-    /// and the reason is the deck's own, lower-cased at the join (§3.3).</summary>
+    /// and the reason is the deck's own sentence, verbatim after the stop (§3.3, E5.S4 review).</summary>
     [Fact]
     public void TP_ONCE_03_a_total_failure_names_the_reason_and_never_says_Done()
     {
@@ -97,9 +100,10 @@ public class ReadOnceStatusTests
     /// <summary>
     /// <b>The rule itself, swept rather than sampled.</b> Every combination a read can produce, with
     /// and without a failure behind it: "Done" appears if and only if every line has a translation
-    /// AND nothing threw. The `error is null` half is not theoretical — one source group can answer
-    /// while the other throws (<c>TranslateBodiesAsync</c> makes two calls), so a full count with a
-    /// live exception is reachable and may not be sold as a success.
+    /// AND nothing threw. The `error is null` half guards a shape today's caller cannot quite
+    /// produce — <c>TranslateBodiesAsync</c> awaits its two source groups in sequence, so the first
+    /// throw aborts the batch and the count comes back 0 — and is swept anyway, because a batch that
+    /// tolerates a partial failure is E5.S3's subject and the guard has to be in place before it is.
     /// </summary>
     [Fact]
     public void Done_appears_if_and_only_if_every_line_has_a_translation()
@@ -241,6 +245,11 @@ public class ReadOnceStatusTests
 
         var body = BracedBlock(ocr, branch);
         Assert.Contains("SetScreenStatus(UserMessages.ReadOncePaused(", body, StringComparison.Ordinal);
+        // The `return;` itself, which nothing pinned (review): without it every assertion in this
+        // case stays green while the read falls straight through to the capture, the rows and the
+        // requests AC 3 forbids — the forbidden-identifier scan below only reads THIS block, and a
+        // fall-through spends all four of them in the block after it.
+        Assert.Contains("return;", body, StringComparison.Ordinal);
 
         foreach (var forbidden in new[]
                  {
@@ -328,16 +337,25 @@ public class ReadOnceStatusTests
     /// filter is on the token's actual state, so an <c>HttpClient</c> timeout (an OCE whose token is
     /// NOT cancelled) falls through to be classified as the failure it is rather than masquerading
     /// as a user cancel — the trap that cost this project three releases.
+    ///
+    /// <para><b>Both</b> branches render, which the review changed (E5.S4). The story shipped a
+    /// person's Stop rendering nothing at all, on §2.1's "Cancelled is not a state" — true of the
+    /// eight-state model and of the feed rows, and not true of the status line, which would have
+    /// been left reading "Reading…" over a read that had stopped. A stale "Reading…" is the same lie
+    /// as "Done" over an empty result, told the other way round; §1's first principle (one message
+    /// per state) and fourth (honest status only) decide it.</para>
     /// </summary>
     [Fact]
-    public void TP_ONCE_05_a_budget_expiry_is_a_failure_and_a_persons_stop_renders_nothing()
+    public void TP_ONCE_05_a_budget_expiry_is_a_failure_and_a_persons_stop_says_so()
     {
         var ocr = Code(File.ReadAllText(RepoFile("MainWindow.Ocr.cs")));
 
         Assert.Contains("catch (OperationCanceledException) when (cts.IsCancellationRequested)",
                         ocr, StringComparison.Ordinal);
-        Assert.Contains("if (!_readOnceStopped) SetScreenStatus(ReadOnceSummary.Status(lines, 0, BudgetExpired()));",
-                        ocr, StringComparison.Ordinal);
+        // The flag chooses between the two sentences — it no longer chooses whether to speak.
+        Assert.Contains("SetScreenStatus(_readOnceStopped", ocr, StringComparison.Ordinal);
+        Assert.Contains("? UserMessages.ReadCancelledStatus()", ocr, StringComparison.Ordinal);
+        Assert.Contains(": ReadOnceSummary.Status(lines, 0, BudgetExpired()));", ocr, StringComparison.Ordinal);
         // The filtered catch must come BEFORE the generic one, or every cancel would render
         // "Could not read the screen: …" and a Stop would look like a crash. Searched from the
         // method's own offset: `catch (Exception ex)` appears earlier in the file, in the OCR-pack
@@ -349,13 +367,75 @@ public class ReadOnceStatusTests
 
         // …and the inner method rethrows OUR cancel instead of classifying it: the Kind a mapper
         // would answer with on a cancelled token is the one nothing in this app may construct.
-        Assert.Contains("catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }",
-                        ocr, StringComparison.Ordinal);
+        var inner = BracedBlock(ocr, ocr.IndexOf(
+            "catch (OperationCanceledException) when (ct.IsCancellationRequested)", StringComparison.Ordinal));
+        Assert.Contains("throw;", inner, StringComparison.Ordinal);
+        // And it does NOT leave its rows on "…" (E5.S4 review). Nothing is coming for them, and a
+        // row that stays pending for ever is the amplifier this whole story exists to remove.
+        Assert.Contains("UserMessages.ReadCancelledRow()", inner, StringComparison.Ordinal);
 
         // The sentence a budget expiry produces, composed here rather than run: it is a timeout, and
         // it reads as one.
-        Assert.Equal("Read 4 line(s) — none could be translated. the translation service took too long to answer — try again shortly",
+        Assert.Equal("Read 4 line(s) — none could be translated. The translation service took too long to answer — try again shortly.",
                      ReadOnceSummary.Status(4, 0, new TranslationException(TranslationErrorKind.Timeout, "budget")));
+    }
+
+    /// <summary>
+    /// <b>The flag has to be right, or I3 is only half-kept.</b> The budget cancels the same token
+    /// from a timer thread, so a press landing between the budget firing and the read's continuation
+    /// reaching its catch would relabel a 30 s timeout as a person's Stop — and the player would
+    /// never learn the app gave up. Only a cancel that had something left to cancel claims it.
+    /// </summary>
+    [Fact]
+    public void A_press_after_the_budget_already_fired_does_not_relabel_the_timeout()
+    {
+        var ocr = Code(File.ReadAllText(RepoFile("MainWindow.Ocr.cs")));
+        var cancel = BracedBlock(ocr, ocr.IndexOf("private void CancelReadOnce()", StringComparison.Ordinal));
+
+        Assert.Contains("if (!cts.IsCancellationRequested) _readOnceStopped = true;", cancel, StringComparison.Ordinal);
+        // …and it is still the flag, never the exception type, that tells the two apart.
+        Assert.DoesNotContain("TaskCanceledException", ocr, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <b>The capture and the OCR take no token of their own</b> — <c>ScreenCapture</c> is
+    /// synchronous GDI and <c>OcrService.ReadLinesAsync</c> has no <c>ct</c> parameter — so a Stop or
+    /// a budget expiry arriving during them is observed nowhere unless the read looks. It must look
+    /// BEFORE the two things that would otherwise happen for a read already over: diagnosing an
+    /// empty result ("Try a tighter box"), and creating the rows AC 3 exists to prevent.
+    /// </summary>
+    [Fact]
+    public void A_cancel_during_the_capture_or_the_ocr_is_observed_before_any_row_is_created()
+    {
+        var ocr = Code(File.ReadAllText(RepoFile("MainWindow.Ocr.cs")));
+
+        int look = ocr.IndexOf("cts.Token.ThrowIfCancellationRequested();", StringComparison.Ordinal);
+        int empty = ocr.IndexOf("if (sentences.Count == 0)", StringComparison.Ordinal);
+        int translate = ocr.IndexOf("await TranslateSentencesInto(", StringComparison.Ordinal);
+
+        Assert.True(look > 0, "a cancel arriving during the untokened capture/OCR must be observed after them");
+        Assert.True(look < empty, "…before the empty-result diagnosis, which is not true of a cancelled read");
+        Assert.True(look < translate, "…and before anything that creates a row (AC 3)");
+    }
+
+    /// <summary>
+    /// The two sentences a cancel produces, and the one property that keeps the row half honest: a
+    /// cancelled row carries I4's "(" marker, so nothing downstream — the cache, the counter behind
+    /// "Done", E5.S3's retry pass — can mistake it for a translation. It is the same guard the feed
+    /// row of a failure gets, for a row that is finished rather than failed.
+    /// </summary>
+    [Fact]
+    public void A_cancelled_read_says_so_and_its_rows_are_not_left_pending()
+    {
+        Assert.Equal("Read cancelled.", UserMessages.ReadCancelledStatus());
+
+        var row = $"({UserMessages.ReadCancelledRow()})";
+        Assert.False(ReadOnceSummary.IsTranslation(row));
+        Assert.False(UserMessages.ReadCancelledRow().StartsWith('('), "the call site adds the marker (I4)");
+        Assert.True(row.Length <= 110, $"a feed row is {row.Length} chars, over the 110 the feed can carry");
+        // Not "…": the read that owned these rows is over and nothing will fill them, which is the
+        // pending-for-ever state that makes a player press the button again (A7).
+        Assert.NotEqual("…", row);
     }
 
     // =============================================================================================

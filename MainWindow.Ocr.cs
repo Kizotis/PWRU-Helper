@@ -235,12 +235,18 @@ public partial class MainWindow
         var pause = _readChain.PauseNow();
         if (pause.AllPaused)
         {
+            // The tab switch is here for the same reason the normal read does it four lines below:
+            // ScreenReadStatus lives on the Translator tab (MainWindow.xaml:308), so a Ctrl+Alt+R
+            // fired from the Screen OCR tab would otherwise write the one sentence this branch
+            // exists to say onto a page nobody is looking at — a read that appears to do nothing at
+            // all, which is the very state AC 3 is trying to explain (review). It is not a cost the
+            // branch is forbidden to spend: it creates no row, greys no button and takes no capture.
+            MainTabs.SelectedIndex = TabTranslator;
             SetScreenStatus(UserMessages.ReadOncePaused(
                 CountdownText(LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now))));
             return;
         }
 
-        _readingOnce = true;
         MainTabs.SelectedIndex = TabTranslator;   // results show on the Translator page
         SetReadOnceEnabled(false);
         LiveButton.IsEnabled = false;        // don't let live start mid-read (shared OCR engine)
@@ -261,6 +267,12 @@ public partial class MainWindow
             TimeSpan.FromSeconds(TranslationPolicy.ReadOnceBudgetSeconds));
 
         int lines = 0;                    // what the status says it READ, set once OCR has answered
+        // LAST, and immediately above the try (review): the flag is only cleared in the finally, so
+        // every statement standing between the two is a statement that can leave both read-once
+        // buttons and LiveButton greyed until restart. The setup above cannot throw today — they are
+        // property sets and a CancellationTokenSource over a compile-time constant — and this
+        // ordering is what keeps that true of whatever gets added there next.
+        _readingOnce = true;
         try
         {
             using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
@@ -268,6 +280,13 @@ public partial class MainWindow
             var sentences = TextMatching.SplitChatMessages(await _ocr.ReadLinesAsync(forOcr ?? bmp))
                 .Select(TextMatching.StripNoise)
                 .Where(l => l.Length > 0).ToList();
+            // The capture and the OCR take no token of their own (ScreenCapture is synchronous GDI;
+            // OcrService.ReadLinesAsync has no ct parameter), so a Stop or a budget expiry landing
+            // DURING them is only observed here — and it has to be observed here, before the two
+            // things below that would otherwise happen for a read that is already over: telling the
+            // player "No text detected there. Try a tighter box" (a diagnosis of a read nobody
+            // finished) and, worse, creating the rows AC 3 exists to prevent (review).
+            cts.Token.ThrowIfCancellationRequested();
             if (sentences.Count == 0)
             {
                 SetScreenStatus(IsOcrReady()
@@ -291,12 +310,20 @@ public partial class MainWindow
         // arrives with the token untouched and is classified as the Timeout it is further down.
         //
         // The two are told apart by the FLAG and not by the exception, because they cannot be told
-        // apart by the exception: a person's Stop renders nothing at all (§2.1 — "Cancelled" is not
-        // a state, and the feed keeps what it has), while the 30 s budget is a failure and gets
-        // §3.3's failure sentence like any other.
+        // apart by the exception: the 30 s budget is a failure and gets §3.3's failure sentence like
+        // any other, while a person's Stop gets a sentence that says so.
+        //
+        // BOTH branches say something, and the review is why (E5.S4). The story shipped the stop
+        // rendering NOTHING, on §2.1's "Cancelled is not a state" — true of the eight-state model
+        // and of the feed rows, and not true of the status line, which would have been left reading
+        // "Reading…" over a read that had stopped. §1's principles win: one message per state (1)
+        // and honest status only (4). A stale "Reading…" is the same lie as "Done" over an empty
+        // result, told the other way round.
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
-            if (!_readOnceStopped) SetScreenStatus(ReadOnceSummary.Status(lines, 0, BudgetExpired()));
+            SetScreenStatus(_readOnceStopped
+                ? UserMessages.ReadCancelledStatus()
+                : ReadOnceSummary.Status(lines, 0, BudgetExpired()));
         }
         catch (Exception ex)
         {
@@ -307,10 +334,11 @@ public partial class MainWindow
             SetReadOnceEnabled(true);
             LiveButton.IsEnabled = true;
             _readingOnce = false;
-            // Dispose OURS, and clear the field only if it is still ours: a second press has
-            // already cancelled, disposed and cleared it, and may even have started the next read.
-            cts.Dispose();
+            // Clear the field only if it is still ours — a second press has already cancelled and
+            // cleared it, and may even have started the next read — and only THEN dispose, so the
+            // field is never left pointing at a disposed source for even one statement.
             if (ReferenceEquals(_readOnceCts, cts)) _readOnceCts = null;
+            cts.Dispose();
         }
     }
 
@@ -321,7 +349,12 @@ public partial class MainWindow
     private void CancelReadOnce()
     {
         if (_readOnceCts is not { } cts) return;
-        _readOnceStopped = true;
+        // Only claim the cancel if there was still one to make. The budget cancels the SAME token,
+        // and it does it on a timer thread — so a press landing in the gap between the budget firing
+        // and the read's continuation reaching its catch would otherwise relabel a 30 s timeout as
+        // "Read cancelled." and the player would never be told the app gave up (I3: the flag is the
+        // only thing that distinguishes the two, so the flag has to be right). Review, E5.S4.
+        if (!cts.IsCancellationRequested) _readOnceStopped = true;
         _readOnceCts = null;    // cleared BEFORE the cancel, so nothing re-entered can cancel it twice
         cts.Cancel();
         // NOT disposed here: the read that owns it is still inside its await and holds the token.
@@ -390,9 +423,22 @@ public partial class MainWindow
         // I3, and FIRST for the same reason the chain puts it first: our token really is cancelled,
         // so this is the player's Stop or the 30 s budget — never an HttpClient timeout, which
         // arrives as a TaskCanceledException with the token NOT cancelled and falls to the catch
-        // below to be classified as the Timeout it is. The rows keep their "…": the read was
-        // abandoned rather than answered, and the caller owns what (if anything) is said about it.
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        // below to be classified as the Timeout it is.
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // The rows may NOT be left on "…" (E5.S4 review). Nothing is coming for them — the read
+            // that owned them is over — and a row that stays pending for ever is precisely what
+            // makes a player press the button again, which is amplifier A7 and the reason this
+            // story exists. They get the same "(" marker every other non-translation gets (I4), so
+            // nothing downstream mistakes one for a result.
+            //
+            // E5.S3: a row carrying UserMessages.ReadCancelledRow() is FINISHED, not failed. The
+            // player refused this read; re-sending it would spend the request they just declined,
+            // so the retry pass must skip these — that is what tells them apart from the
+            // "({Friendly(ex)})" rows of the catch below, which ARE retry candidates.
+            foreach (var it in items) it.TranslationBody = $"({UserMessages.ReadCancelledRow()})";
+            throw;   // the caller owns the status; it knows whether a person or the budget did this
+        }
         catch (Exception ex)
         {
             foreach (var it in items) it.TranslationBody = $"({Friendly(ex)})";
