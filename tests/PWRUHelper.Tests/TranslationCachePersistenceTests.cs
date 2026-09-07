@@ -302,6 +302,36 @@ public class TranslationCachePersistenceTests
         Assert.Equal(0, store.Count);
     }
 
+    [Fact]
+    public void A_file_this_process_could_not_read_is_never_rewritten_from_an_empty_map()
+    {
+        // ProviderGates' `_keepFile` rule (:260), and the one read failure that is not the file's
+        // fault: an AV or a sync agent holding it open for the 50 ms of the first miss. Rewriting
+        // from an empty map there would cost the user the 2000 entries they earned to save the one
+        // this session has — and re-earning them is exactly the rate-limit pressure this whole
+        // cache exists to avoid.
+        using var cache = new TempCache();
+        cache.Write(FileJson(("ru|en|привет", "hello")));
+        var before = cache.Read();
+
+        var store = new TranslationCacheStore(persistent: true);
+
+        using (File.Open(cache.Path, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            Assert.False(store.TryGet("miss", out _));   // the miss that tries to load, and cannot
+            Assert.Equal(0, store.Count);
+        }
+
+        store.Store("ru|en|пока", "bye");
+        store.SaveNow();
+
+        Assert.Equal(before, cache.Read());
+
+        // Non-vacuous: a file this build merely cannot USE is a different thing and IS replaced —
+        // see A_future_version_is_a_forward_guard_and_not_a_migration. The rewrite is the repair
+        // there; here it is the loss.
+    }
+
     // ---- TP-CACHE-02: I4 on disk, on the way out AND on the way in -----------------------------
 
     [Fact]
@@ -537,9 +567,43 @@ public class TranslationCachePersistenceTests
         }
         finally
         {
-            // The singleton outlives this case; nothing queued here may outlive it too.
-            shared.CancelPendingSave();
+            // The singleton would otherwise outlive this case with a pending save AND a path
+            // pinned to the temp directory the using below is about to delete — E4.S4 is the story
+            // that would discover that the hard way.
+            TranslationChains.ResetCacheForTests();
         }
+
+        Assert.NotSame(shared, TranslationChains.Cache);
+        TranslationChains.ResetCacheForTests();
+    }
+
+    [Fact]
+    public void TranslationChains_Cache_is_the_only_persistent_store_production_builds()
+    {
+        // The architect's E4.S2 ruling on the `persistent: false` default: it is accepted precisely
+        // BECAUSE one instance opts in, and a second one pointed at the same file would spend the
+        // session overwriting the first one's entries. A default is exactly the kind of guard a
+        // copied constructor line silently loses, so it is pinned as an exact-equality scan —
+        // TP-START-02's shape.
+        var root = RepoRoot();
+
+        var builders = ProductionSources(root)
+            .Where(f => Code(File.ReadAllText(f))
+                .Contains("new TranslationCacheStore(", StringComparison.Ordinal))
+            .Select(Path.GetFileName)
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToArray();
+
+        // CachingTranslator's is the private, NON-persistent one of the three legacy decorators.
+        Assert.Equal(new[] { "CachingTranslator.cs", "TranslationChains.cs" }, builders);
+
+        var optIns = ProductionSources(root)
+            .SelectMany(f => Code(File.ReadAllText(f)).Split('\n')
+                .Where(l => l.Contains("persistent: true", StringComparison.Ordinal))
+                .Select(_ => Path.GetFileName(f)))
+            .ToArray();
+
+        Assert.Equal(new[] { "TranslationChains.cs" }, optIns);
     }
 
     // ---- I10 / I11 as scans ---------------------------------------------------------------------

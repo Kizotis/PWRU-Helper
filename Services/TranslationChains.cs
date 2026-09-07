@@ -78,6 +78,27 @@ internal static class TranslationChains
     internal static void FlushCache() => Volatile.Read(ref _cache)?.SaveNow();
 
     /// <summary>
+    /// Drops the process-wide store so the next <see cref="Cache"/> builds a fresh one. For the
+    /// suite only, and it is not optional there: a store pins its path on first use, so a case that
+    /// let this instance resolve a <c>TempCache</c> file would leave every later case — E4.S4's
+    /// included — writing into a directory that no longer exists, with this session's entries still
+    /// in the map. Cancels the pending save first, which is IS-4's rule and
+    /// <c>ProviderGates.ResetForTests</c>'s order.
+    ///
+    /// <para>It deliberately does <b>not</b> touch <c>TranslationCacheStore.PathOverride</c>: that
+    /// belongs to <c>TempCache</c> / <c>TestCacheRedirect</c>, and nulling a path override from a
+    /// reset is precisely how this repo once pointed a test at a developer's own file.</para>
+    /// </summary>
+    internal static void ResetCacheForTests()
+    {
+        lock (CacheGate)
+        {
+            _cache?.CancelPendingSave();
+            _cache = null;
+        }
+    }
+
+    /// <summary>
     /// The READ chain — OCR read-once and the LIVE feed (<c>MainWindow.Live.cs</c>,
     /// <c>MainWindow.Ocr.cs</c>). Free tiers only, in §8.1's order.
     ///

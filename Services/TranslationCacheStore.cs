@@ -99,15 +99,31 @@ internal sealed class TranslationCacheStore
     /// <summary>Serialises the FILE, not the map. Separate from <see cref="_gate"/> because a full
     /// cache is ≈300 KB and holding the map's lock across that write would stall every translation
     /// for the length of a disk write — the one place this store may not copy
-    /// <c>ProviderGates</c>, whose file is a few hundred bytes. The snapshot is taken under
-    /// <see cref="_gate"/> and written under this one; nothing ever takes <see cref="_gate"/> while
-    /// holding it, so the pair cannot deadlock.</summary>
+    /// <c>ProviderGates</c>, whose file is a few hundred bytes.
+    ///
+    /// <para><b>The lock order is that there is none: the two are never nested.</b>
+    /// <see cref="SaveNow"/> takes <see cref="_gate"/>, snapshots, <b>releases it</b>, and only then
+    /// takes this one; nothing anywhere takes <see cref="_gate"/> while holding this. Neither lock
+    /// is ever held while the other is acquired, in either direction, so the pair cannot deadlock —
+    /// not the debounce timer against a <see cref="SaveNow"/> from the close path, and not a load
+    /// against a write. Keep it that way: the moment one of them is taken inside the other, the
+    /// order becomes a rule somebody has to remember.</para></summary>
     private readonly object _io = new();
 
     private string? _path;
     private bool _loaded;
+    private bool _keepFile;      // the file is there and this process could not read it
     private bool _savePending;
     private System.Threading.Timer? _saveTimer;
+
+    /// <summary>The snapshot counter, under <see cref="_gate"/>, and the newest snapshot a write has
+    /// committed to, under <see cref="_io"/>. Two <see cref="SaveNow"/> calls really can be in
+    /// flight at once — the debounce timer and <c>OnClosing</c>'s flush, with a <see cref="Store"/>
+    /// between them — and because <see cref="_gate"/> is released before <see cref="_io"/> is taken,
+    /// the OLDER snapshot could otherwise reach the disk second and silently drop what the newer one
+    /// carried. Numbering the snapshots is what makes the two locks safe to keep un-nested.</summary>
+    private long _snapshotSeq;
+    private long _writtenSeq;
 
     /// <summary>Capacity defaults to §8.2's 2000; the legacy <see cref="CachingTranslator"/>
     /// constructor still passes its own 500 (<see cref="TranslationPolicy.CacheCapacityToday"/>), so
@@ -207,23 +223,42 @@ internal sealed class TranslationCacheStore
     /// test uses instead of waiting five real seconds (CI-3).
     ///
     /// <para>Nothing pending means nothing to do — a session of pure cache hits closes without
-    /// touching the disk. Best-effort: the write swallows its own I/O failures.</para>
+    /// touching the disk. Best-effort: the write swallows its own I/O failures, and this swallows
+    /// anything else, because it runs on <c>OnClosing</c> ABOVE the settings save and outside its
+    /// try — <c>ProviderGates.Flush</c>'s outer catch exists for exactly that reason and this is
+    /// the same path.</para>
     /// </summary>
     internal void SaveNow()
     {
-        string path;
-        List<Entry> snapshot;
-
-        lock (_gate)
+        try
         {
-            _saveTimer?.Change(Timeout.Infinite, Timeout.Infinite);
-            if (!_savePending) return;
-            _savePending = false;
-            path = ResolvePath();
-            snapshot = new List<Entry>(_order);   // MRU-first, which IS the file order
-        }
+            string path;
+            long seq;
+            List<Entry> snapshot;
 
-        WriteFile(path, snapshot);
+            lock (_gate)
+            {
+                _saveTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+                if (!_savePending) return;
+                _savePending = false;
+
+                // The file is not ours to replace: it is there and this process could not read it
+                // (see ReadFile). Writing from a map that holds only this session's handful would
+                // erase what the user has earned — ProviderGates' `_keepFile` rule (:260),
+                // and not persisting this session is the cheaper failure by far.
+                if (_keepFile) return;
+
+                seq = ++_snapshotSeq;
+                path = ResolvePath();
+                snapshot = new List<Entry>(_order);   // MRU-first, which IS the file order
+            }
+
+            WriteFile(seq, path, snapshot);
+        }
+        catch
+        {
+            // Persistence must never be able to fail a translation or a window close.
+        }
     }
 
     /// <summary>
@@ -322,10 +357,19 @@ internal sealed class TranslationCacheStore
     /// without a <c>k</c> or a <c>v</c> — every one of them costs that entry or the whole file, and
     /// none of them throws (AC 4). Broad by design: a cache is a convenience and may never be the
     /// reason the app fails to translate.
+    ///
+    /// <para><b>One of those failures is not the file's fault, and that one is kept.</b> A file this
+    /// process could not OPEN — an AV or a sync agent holding it for the 50 ms of the first miss —
+    /// latches <see cref="_keepFile"/> and this session simply does not persist, mirroring
+    /// <c>ProviderGates</c> (<c>:260</c>). Every other failure IS ours to replace, because there the
+    /// rewrite is the repair: a corrupt, truncated or future-versioned file is one whose content
+    /// this build can do nothing with, and what it holds is a translation, not a standing pause.</para>
     /// </summary>
     private List<Entry> ReadFile(string path)
     {
         var entries = new List<Entry>();
+        string text;
+
         try
         {
             // FileInfo rather than File.Exists so the size is known before anything is read: a
@@ -333,7 +377,20 @@ internal sealed class TranslationCacheStore
             var info = new FileInfo(path);
             if (!info.Exists || info.Length > MaxBytes) return entries;
 
-            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            text = File.ReadAllText(path);
+        }
+        catch (Exception)
+        {
+            // Could not read a file that is there — a sharing violation, a permission change, a
+            // disk error. NOT a reason to overwrite it from an empty map: that would cost the user
+            // the 2000 entries they earned to save the handful this session will.
+            _keepFile = true;
+            return entries;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Object) return entries;
 
@@ -377,9 +434,9 @@ internal sealed class TranslationCacheStore
         }
         catch (Exception)
         {
-            // Truncated JSON, a sharing violation from an AV or a sync agent, invalid UTF-16 from a
-            // hand edit — all the same answer: no cache this session, and nothing surfaces to the
-            // user. A partially enumerated array is dropped whole rather than half-kept.
+            // Truncated JSON, a number where an object belongs, a hand edit that lost a brace — all
+            // the same answer: no cache this session, and nothing surfaces to the user. A partially
+            // enumerated array is dropped whole rather than half-kept.
             entries.Clear();
         }
 
@@ -394,10 +451,17 @@ internal sealed class TranslationCacheStore
     /// there is none — <c>Replace</c> throws without one), all inside one <c>try/catch</c> so a
     /// read-only disk costs nothing.
     /// </summary>
-    private void WriteFile(string path, List<Entry> entries)
+    private void WriteFile(long seq, string path, List<Entry> entries)
     {
         lock (_io)
         {
+            // Only a NEWER snapshot may write. Two SaveNow calls can queue here — the debounce
+            // timer and OnClosing's flush — and _gate is released before this lock is taken, so
+            // without this the older of the two could land second and drop the store that happened
+            // between them. See _snapshotSeq.
+            if (seq <= _writtenSeq) return;
+            _writtenSeq = seq;
+
             try
             {
                 var rows = new List<Row>(entries.Count);
