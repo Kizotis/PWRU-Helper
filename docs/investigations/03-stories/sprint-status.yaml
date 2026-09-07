@@ -52,11 +52,33 @@
 #    Phase-4 go (ground rule 2, docs/investigations/README.md). Each story file says so in its
 #    status line: "ready-for-dev (Phase 4 - owner's go required)".
 # 3. FIVE ITEMS ARE NOT AGENT WORK and will never move past 'backlog' by an agent:
-#    e8-s5, e9-s1, e9-s2, e9-s3, e9-s4, e9-s7, e9-s8, e9-s12 are owner tasks.
-# 4. NINE ITEMS ARE SPIKES with a measurable exit criterion and a go/no-go:
+#    e8-s7, e9-s1, e9-s2, e9-s3, e9-s4, e9-s7, e9-s8, e9-s12 are owner tasks.
+# 4. TEN ITEMS ARE SPIKES with a measurable exit criterion and a go/no-go:
 #    e2-s7 (U9), e3-s1 (U1), e3-s2 (U2), e3-s9 (U3), e4-s3 (U8), e6-s1 (U4), e6-s6 (U5),
-#    e8-s1 (U7), e8-s4 (U6). e3-s1/e3-s2/e3-s9 additionally require the owner's explicit go
+#    e8-s1 (U6 dev-box half + U7 first look), e8-s6 (U7 decision), e8-s7 (U6 slow-machine half).
+#    e3-s1/e3-s2/e3-s9 additionally require the owner's explicit go
 #    for the requests they send, and must not run from the dev box (Phase-1 incident).
+# 8. EPIC 8 WAS RE-CUT INTO SEVEN STORIES (2026-09-07, Amelia CS). epics.md § Epic 8 lists five;
+#    Release C splits the provider work into its separable pieces and pulls the measurement to the
+#    front. NO AC IS LOST — the mapping is in E8.S1's Dev Notes and repeated in each file:
+#      e8-s1 <- E8.S4 (U6) dev-box half + E8.S1 (U7) first look   [pulled to the front]
+#      e8-s2 <- E8.S2 minus its A-1(b) and chain-placement ACs    [the provider alone]
+#      e8-s3 <- E8.S3 in full, plus the model store it assumed
+#      e8-s4 <- E8.S2's A-1(b) AC, verbatim                       [a clock-injected lifetime policy]
+#      e8-s5 <- E8.S2's chain placement + arch §8.1/§8.2 + ux S4   [the wiring]
+#      e8-s6 <- E8.S1 (U7) in full                                [the packaging DECISION]
+#      e8-s7 <- E8.S4 (U6) slow-machine half + E8.S5              [campaign + verdict, owner]
+#    Two code comments still name the old numbering and are re-pointed by e8-s5:
+#    Services/TranslationChains.cs:201 and :259 read "[Bergamot - E8.S3]"; the wiring is e8-s5.
+#    THREE FLAGS FOR WINSTON, carried in the story files, none resolved by an agent:
+#      E8-a  RAM ceiling written twice: <=150 MiB (plan-migration go criteria, TP-BRG-02) vs
+#            +127-310 MiB (A-1(c), accepted). Settled in e8-s7, with the field number in hand.
+#      E8-b  Model store root: %AppData% (ux 3.6/4.2, epics AC, verbatim) vs %LocalAppData%
+#            (Winston's Release-C direction). Recommendation LocalAppData; it is a COPY change
+#            and code + ux-mode-degrade.md 3.6/4.2 must move in one commit (e8-s3).
+#      E8-c  RULED in e8-s2: 7.6's "(-prefixed placeholder" is a typed Unavailable throw plus a
+#            gate window - and NOT a second NotSent writer, which
+#            ChainTranslatorTests.NotSent_is_written_in_exactly_one_place would fail.
 # 5. RELEASE COUPLING: epic-2 and epic-3 are separate PRs but ONE release. A sprint that
 #    schedules them into different releases is wrong (owner's decision 2; architecture R7).
 # 6. EPIC 3 IMPLEMENTATION ORDER (2026-09-07, Amelia CS): e3-s3 -> e3-s6 -> e3-s4 -> e3-s8 -> e3-s7.
@@ -170,12 +192,22 @@ development_status:
   epic-7-retrospective: optional
 
   # ---- Release C · increment 7 · prototype branch, merges only on go ------------
-  epic-8: backlog
-  e8-s1-dll-beside-exe-spike-u7: backlog                 # spike; needs e9-s12
-  e8-s2-prototype-bergamot-translator: backlog
-  e8-s3-one-click-offline-install: backlog
-  e8-s4-measure-bergamot-spike-u6: backlog               # spike; needs e9-s12
-  e8-s5-record-go-no-go-decision: backlog                # owner task
+  epic-8: in-progress
+  # RELEASE C ORDER (2026-09-07, Amelia CS): s1 -> s2 -> s3 -> s4 -> s5 -> s6 -> s7.
+  # s1 FIRST and alone: nothing in this epic is worth building before its numbers, and its go/no-go
+  # (init <= 500 ms, <= 15 ms/line, RAM <= 150 MiB active / ~0 at rest, exe growth <= 25 MB or 0)
+  # is the gate the other six hang on. s2 next because s3/s4/s5 all stub against its engine seam.
+  # s3 before s4/s5 because both ask "is the model present?". s5 after s3 for the same reason.
+  # s6 can run in parallel with s3-s5 once s2 exists (it only needs something to publish).
+  # s7 LAST: it is the campaign and the verdict, and it needs all six plus e9-s12's machines.
+  # See deviation note 8 above for the epics.md mapping and the three open flags.
+  e8-s1-bergamot-prototype-harness-spike-u6-u7: blocked-owner  # spike; needs the owner's go for ONE NuGet + a ~22 MB model download on his box (NFR6, ground rule 2). Story file complete.
+  e8-s2-bergamot-translator: blocked-dep                       # hard gate on e8-s1's numbers; L, the largest story of the epic. Lands ruling E8-c.
+  e8-s3-model-store-one-click-install: blocked-dep             # needs e8-s2; carries flag E8-b (%AppData% vs %LocalAppData%) and an owner task (the GitHub mirror release)
+  e8-s4-keep-loaded-while-live: blocked-dep                    # needs e8-s2; A-1(b) as a clock-injected policy, S
+  e8-s5-chains-chip-and-cache: blocked-dep                     # needs e8-s2 + e8-s3; the real work is the "p" field, written EMPTY by every caller today
+  e8-s6-packaging-native-dll: blocked-dep                      # spike (U7) + decision; needs e8-s2 and e9-s12. RECOMMENDATION: download the DLL with the models (ExcludeAssets="native" + NativeLibrary.SetDllImportResolver) - 0 MB exe growth, %TEMP% unchanged, PublishFlagsTests untouched
+  e8-s7-field-measurement-and-go-no-go: blocked-owner          # owner task + spike (U6 slow-machine half); blocked on R-12 (one measured affected machine) and on go-criterion 3, which is HIS judgement on HIS chat lines
   epic-8-retrospective: optional
 
   # ---- Track P · parallel, independent, START NOW -------------------------------
