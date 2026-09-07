@@ -128,6 +128,53 @@ public partial class MainWindow : Window
     /// whole app" means one COUNTDOWN, not one timer in the process.</para></summary>
     private readonly DispatcherTimer _countdownTimer = new() { Interval = TimeSpan.FromSeconds(1) };
 
+    /// <summary>
+    /// <b>E8.S4's one-shot, and it is deliberately NOT a fourth question on the countdown tick.</b>
+    /// Amendment A-1(b) needs a heartbeat with two halves: while something is translating, the
+    /// provider itself asks the policy on every call (<c>BergamotTranslator.UnloadIfIdle</c>'s
+    /// sibling sweep) — free, and it covers the whole LIVE session; what it can never cover is the
+    /// tail, because it never fires after the LAST call. This timer is that tail, armed by
+    /// <see cref="StopLive"/> and by nothing else.
+    ///
+    /// <para><b>Why not <see cref="_countdownTimer"/>.</b> That tick has ONE stop rule — the chip's
+    /// <c>NeedsTick</c> or LIVE's <c>AllPaused</c>, widened once by E7.S3 — and E7.S2's review
+    /// flagged precisely this shape of bug: a consumer that needs the tick to keep running for a
+    /// reason the stop rule does not know about. Adding a third question there would make a 1 Hz
+    /// repaint outlive the state it paints, for a check that has to happen exactly once, ten minutes
+    /// from now. <b>And it is not a poll:</b> it fires once, stops itself, and re-arms only when it
+    /// finds the window has moved under it (a translation happened after it was armed).</para>
+    ///
+    /// <para>The interval is set at every arming, from the policy's own remaining window, so the
+    /// number here is a placeholder that is never used as one.</para></summary>
+    private readonly DispatcherTimer _offlineIdleTimer =
+        new() { Interval = TimeSpan.FromMinutes(TranslationPolicy.IdleUnloadMinutes) };
+
+    /// <summary>A-1(b) as a policy object (E8.S4). It reads "is LIVE running?" through a
+    /// <c>Func&lt;bool&gt;</c> — the same spelling <c>PendingRetryQueue</c> is handed in
+    /// <c>MainWindow.Ocr.cs</c>, so one search finds both — and it is sampled on every question,
+    /// never captured: this field is built in the constructor, long before any LIVE session
+    /// exists.</summary>
+    private readonly BergamotLifetime _offlineLifetime;
+
+    /// <summary>The offline provider, constructed ONCE and owned here. It costs nothing to exist
+    /// (I10: its constructor opens no file, asks the store nothing and builds no engine) and it is
+    /// the instance <b>E8.S5 must hand to the chain builders</b> — a second one built inside
+    /// <c>TranslationChains</c> would be a second 121 MiB nothing here could unload, and the two
+    /// would disagree about what is resident.</summary>
+    private readonly BergamotTranslator _offlineEngine;
+
+    /// <summary>E8.S5 — what the two builders are handed: the one provider above, plus "are the
+    /// files really there?" as a delegate over <see cref="_offlineInstalled"/> so the answer costs
+    /// no disk on the startup path (I10) and follows a Download or a Remove without the builders
+    /// having to be told twice.</summary>
+    private readonly OfflineTier _offlineTier;
+
+    /// <summary>The window is going away. Read by work that comes back from the pool wanting the
+    /// dispatcher: <see cref="OfflineIdleTick"/>'s re-arm is the only one today, and re-arming a
+    /// timer on a closing window is precisely the rooted-handler leak <see cref="OnClosing"/> spends
+    /// three lines undoing.</summary>
+    private bool _closing;
+
     // Tab indices (order must match the TabControl in XAML):
     // Phrasebook(0) · Squad(1) · Translator(2) · Screen OCR(3) · About(4).
     private const int TabTranslator = 2, TabScreenOcr = 3;
@@ -187,9 +234,28 @@ public partial class MainWindow : Window
         // (§8.2, E4.S4) — so a line any of the three translated is free to the other two. That
         // wrapping is the builder's, not this file's: the code-behind names a chain and never a
         // decorator or a store, for the same reason it never names ProviderGates (ruling E3-c).
+        // E8.S4 — the offline provider and the policy that decides when it may go. ABOVE the chains
+        // since E8.S5, because this is the object the builders are handed and there must be exactly
+        // one of it. Nothing here touches the disk: the two locators are METHOD GROUPS the provider
+        // calls on its first translation, and `() => _liveCts != null` is sampled on every question
+        // rather than now — a `false` captured in a constructor would make A-1(b) a silent no-op.
+        _offlineLifetime = new BergamotLifetime(() => _liveCts != null);
+        _offlineEngine = new BergamotTranslator(
+            modelDirectory: _offlineStore.ModelDirectory,
+            nativeDirectory: _offlineStore.NativeDirectory,
+            lifetime: _offlineLifetime);
+        // …and the offline rung's two halves, as one argument. `_offlineInstalled` is seeded from
+        // the setting HERE — in memory, no I/O (I10) — and not left to ApplySettings, which runs
+        // after InitializeComponent and therefore after the chains are built: a builder reading a
+        // still-false field would leave a user who has the engine installed without the tier until
+        // the first Download or Remove of the session. Ruling R-4 is what makes the setting a
+        // faithful proxy in the meantime, and OnWindowLoaded's post-paint probe gives the disk the
+        // last word and rebuilds both chains when the two disagree.
+        _offlineInstalled = _settings.OfflineFallbackEnabled;
+        _offlineTier = new OfflineTier(_offlineEngine, () => _offlineInstalled);
         _writeTranslator = BuildWriteChain();
-        _readTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Background, out _readChain);
-        _readOnceTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Interactive);
+        _readTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Background, out _readChain, _offlineTier);
+        _readOnceTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Interactive, _offlineTier);
         InitializeComponent();                  // fires change handlers — _restoringSettings guards them
         // …and the overlay's line goes back to describing the state when the toast that borrowed it
         // is over (E7.S4's arbitration). One timer for both routes: the toast has one lifetime,
@@ -204,6 +270,9 @@ public partial class MainWindow : Window
         // something tells it a pause has begun, which cannot happen before the first request and so
         // cannot happen before the first paint.
         _countdownTimer.Tick += (_, _) => CountdownTick(_readChain.PauseNow());
+        // …and E8.S4's one-shot, subscribed and NOT started, for the same reason (I10): it is armed
+        // by StopLive and by nothing else, so it cannot run before a LIVE session has ended.
+        _offlineIdleTimer.Tick += (_, _) => OfflineIdleTick();
 
         // E6.S5 — the two "Test key" labels, from the copy deck, once. Not in the XAML (GAP-4) and
         // not in UpdateEngineStatusUi: a refresh landing mid-test would rewrite a label the
@@ -287,6 +356,37 @@ public partial class MainWindow : Window
         // Run the update check once the window is up, so the dialog has an owner and
         // appears in front of our always-on-top window instead of behind it.
         await CheckForUpdatesAsync();
+
+        // ---- AC 7 / I10: the model store, asked AFTER first paint, on a pool thread ------------
+        //
+        // The same shape and the same reason as the gate warm-up below (ruling E6-a). Nothing about
+        // the model store may touch the disk before the window is visible — not a Directory.Exists,
+        // not a file enumeration, not a size sum — so ApplySettings painted the row from the setting
+        // and this is where the disk gets the last word. It matters when the two disagree: a user
+        // who deleted the directory by hand, or a manifest whose files this build cannot verify.
+        //
+        // Guarded and type-name-only in the log (I11): a status warm-up may not fail a launch, and
+        // an exception's Message can carry the path this file is not allowed to write down.
+        try
+        {
+            var installed = await Task.Run(() => _offlineStore.IsInstalled);
+            if (installed != _offlineInstalled)
+            {
+                _offlineInstalled = installed;
+                // E8.S5 — the correction reaches the CHAINS as well as the row. The builders ran in
+                // the constructor over the seeded proxy (ruling R-4), so a user whose files are gone
+                // under a setting that is still true has an offline tier that would fail on every
+                // line of every frame — and one whose setting is true and files are fine keeps the
+                // tier this rebuild would only re-create identically. Through E6.S3's seam, not a
+                // second mechanism, and the shared cache survives it (§8.2, amplifier A5).
+                RebuildChainsForOfflineChange();
+                UpdateOfflineEngineUi();
+            }
+        }
+        catch (Exception ex)
+        {
+            Logging.Warn("the offline engine check did not finish: " + ex.GetType().Name);
+        }
 
         // ---- Ruling E6-a: the gate state, read AFTER first paint, on a pool thread -------------
         //
@@ -378,6 +478,20 @@ public partial class MainWindow : Window
             // (colour-options panel visibility + tolerance label) it would otherwise have produced.
             UpdateOcrFilterUi(s.OcrFilterMode ?? "off");
 
+            // E8.S3 / AC 9, and it is the same rule one line up applied to a control that has no
+            // change handler at all: the offline Download/Remove button is not persisted state, so
+            // nothing here could clobber a saved value — but its label, its row text and the Cancel
+            // button's visibility are still side effects nobody else applies, and I12 says a restore
+            // applies them EXPLICITLY rather than by borrowing _restoringSettings (E6.S3's review
+            // found a real bug doing exactly that).
+            //
+            // The row is painted from the SETTING and never from the disk (AC 7 / I10): nothing
+            // about the model store may be asked before the window is visible, and ruling R-4 makes
+            // OfflineFallbackEnabled a faithful proxy — these two buttons are its only writers. The
+            // disk gets the last word from OnWindowLoaded, on a pool thread, after first paint.
+            _offlineInstalled = s.OfflineFallbackEnabled;
+            UpdateOfflineEngineUi();
+
             ScreenCapture.SetMode(s.CaptureBackend);
             SetCaptureBackendCombo(s.CaptureBackend ?? "gdi");
 
@@ -416,6 +530,12 @@ public partial class MainWindow : Window
     {
         base.OnClosing(e);
 
+        // FIRST, and before anything below can hand work to the pool: everything that comes BACK
+        // from the pool wanting this dispatcher reads it (E8.S5's re-arm), and the answer has to be
+        // "no" from the very start of the teardown rather than from wherever this line happened to
+        // land among the cancels.
+        _closing = true;
+
         // A read-once in flight is ended by closing the window (AC 2, E5.S4). Nothing renders after
         // it — the surfaces are going away — which is exactly what a cancel is supposed to show.
         CancelReadOnce();
@@ -429,6 +549,20 @@ public partial class MainWindow : Window
         // …and the 1 Hz countdown, for a reason of its own: a DispatcherTimer roots its handler,
         // and this one's handler closes over the window that is going away (E7.S2).
         StopCountdown();
+
+        // …and E8.S4's one-shot, for exactly that reason and one more: it is the timer whose whole
+        // subject is memory, so leaving it rooted to a closing window would be the joke telling
+        // itself. Then the engine goes with the window. A native pool held across shutdown is not a
+        // leak the OS cannot clean, but `translator_free` is one line and the symmetry is worth it.
+        //
+        // BOUNDED, and off this thread: Unload waits on the provider's lock for a frame in flight,
+        // and E8.S2's contract says it blocks even though E8.S1 measured the free in milliseconds.
+        // Two seconds is the bound — an order of magnitude past a 40-line batched frame (3.75 ms a
+        // line, measured) and short enough that a wedged native call cannot hold a closing window
+        // open. Past it the process exits and the OS reclaims, which is the honest fallback.
+        DisarmOfflineIdleUnload();
+        try { Task.Run(_offlineEngine.Unload).Wait(TimeSpan.FromSeconds(2)); }
+        catch (Exception) { /* teardown: SafeFree already swallowed anything the engine could say */ }
 
         // Write out any provider pause that is still inside its 1-second debounce, so a block the
         // user is waiting out survives the restart instead of being re-earned on the first request
@@ -679,6 +813,110 @@ public partial class MainWindow : Window
     /// over the window.</summary>
     internal void StopCountdown() => _countdownTimer.Stop();
 
+    // ============================================================
+    //  THE OFFLINE ENGINE'S IDLE UNLOAD (amendment A-1(b), E8.S4)
+    // ============================================================
+
+    /// <summary>Whether the one-shot is waiting. Exposed for the same reason
+    /// <see cref="CountdownRunning"/> is: asserting a flag is how a timer's lifetime is pinned
+    /// without waiting for a real ten minutes (CI-3).</summary>
+    internal bool OfflineIdleUnloadArmed => _offlineIdleTimer.IsEnabled;
+
+    /// <summary>
+    /// LIVE has stopped, so the idle clock is now the only thing keeping 121 MiB on the player's
+    /// machine (AC 4). Armed for the <b>remainder</b> of the policy's window and not for the whole
+    /// of it: a session that spent its last half hour inside a gate window has already served the
+    /// wait, and re-starting the clock here would be this file second-guessing
+    /// <see cref="BergamotLifetime"/>.
+    ///
+    /// <para>It arms whether or not an engine is resident, and that is cheaper than it looks — one
+    /// dispatcher callback per press of ■ Stop, which then finds nothing to do and stops. Asking
+    /// "is anything loaded?" here would put a second copy of the policy's first clause in the
+    /// code-behind, which is the duplication this whole story exists to avoid.</para>
+    ///
+    /// <para>Idempotent: <c>Stop</c> then <c>Start</c>, so four callers (<see cref="StopLive"/> is
+    /// reachable from the button, Resume, the hotkey and the auto-stop) cannot leave two windows
+    /// running.</para></summary>
+    internal void ArmOfflineIdleUnload()
+    {
+        _offlineIdleTimer.Stop();
+        var remaining = _offlineLifetime.RemainingIdle();
+        // A floor rather than zero: an interval of zero fires on every dispatcher pass, and the
+        // point of this timer is that the unload leaves the UI thread, not that it happens sooner.
+        _offlineIdleTimer.Interval = remaining > OfflineIdleFloor ? remaining : OfflineIdleFloor;
+        _offlineIdleTimer.Start();
+    }
+
+    /// <summary>LIVE started again, or the window is closing: there is nothing for the one-shot to
+    /// do. A <c>DispatcherTimer</c> roots its handler and this one's closes over the window, so the
+    /// disarm on close is a leak fix in a story whose entire subject is memory.</summary>
+    internal void DisarmOfflineIdleUnload() => _offlineIdleTimer.Stop();
+
+    /// <summary>The smallest window this timer is ever armed for. Not a policy number — the policy
+    /// is <see cref="TranslationPolicy.IdleUnloadMinutes"/> — but the granularity at which "already
+    /// elapsed" is turned into "on the next dispatcher pass, off this thread".</summary>
+    private static readonly TimeSpan OfflineIdleFloor = TimeSpan.FromMilliseconds(50);
+
+    /// <summary>
+    /// The one-shot fired. Three answers, in order:
+    /// <list type="number">
+    /// <item>LIVE came back while we were waiting — do nothing. <see cref="StopLive"/> arms the next
+    ///       one, and the policy would refuse the unload anyway (A-1(b), AC 1).</item>
+    /// <item>A translation happened after the arming, so the window has moved — <b>re-arm for what
+    ///       is left</b>. This is the story's case 4 ("<c>RecordUse</c> defers the unload") with its
+    ///       tail closed: deferring must not mean forgetting.</item>
+    /// <item>Otherwise the window really has elapsed: unload, <b>off the dispatcher</b>.
+    ///       <c>Unload</c> waits on the provider's lock for a frame in flight, and the contract says
+    ///       it blocks even though E8.S1 measured it in milliseconds — so it goes to the pool, and
+    ///       the decision is re-asked there under that lock (<c>UnloadIfIdle</c>) rather than
+    ///       trusted from here.</item>
+    /// </list>
+    ///
+    /// <para><b>Internal so answer 2 can be asked without waiting ten real minutes</b> (CI-3, the
+    /// shape <see cref="CountdownTick"/> already uses): the re-arm is the half that turns "defer"
+    /// into "defer and remember", and a source scan cannot tell those apart.</para>
+    ///
+    /// <para><b>The gap E8.S4 recorded, closed here.</b> Answer 3 hands the decision to the pool,
+    /// where it is asked again under the provider's lock — and if a translation lands in the
+    /// microseconds between the question here and the answer there, <c>UnloadIfIdle</c> declines. It
+    /// used to decline into silence: the engine then waited for the next call into the provider (the
+    /// (a) sweep) or for <see cref="OnClosing"/>, which is answer 2's bug one level down — deferring
+    /// must not mean forgetting. So the provider hands back <b>the idle it decided on, computed
+    /// under its own lock</b>, and this re-arms from that answer.
+    ///
+    /// <para>The hop is <c>Dispatcher.BeginInvoke</c> and nothing is marshalled from inside the
+    /// lock: the provider answers, the lock is released, and only then does the continuation ask for
+    /// this thread. <see cref="_closing"/> is what E8.S4 was right to be afraid of — re-arming a
+    /// rooted timer on a window that is going away, in a story whose whole subject is memory — and
+    /// the <c>try</c> covers the narrower race that flag cannot: a dispatcher that finished shutting
+    /// down between the check and the post.</para>
+    ///
+    /// <para>Only a <b>positive</b> remainder re-arms. A decline with nothing left to wait for means
+    /// the policy said no for a reason a timer cannot fix (no engine is resident, or there is no
+    /// policy at all), and re-arming on it would be a 50 ms loop for the rest of the session.</para>
+    /// </summary>
+    internal void OfflineIdleTick()
+    {
+        _offlineIdleTimer.Stop();           // one-shot: it never runs twice off one arming
+        if (_liveCts != null) return;
+        if (_offlineLifetime.RemainingIdle() > TimeSpan.Zero) { ArmOfflineIdleUnload(); return; }
+
+        var engine = _offlineEngine;
+        _ = Task.Run(() =>
+        {
+            if (engine.UnloadIfIdle(out var remaining) || remaining <= TimeSpan.Zero) return;
+            try
+            {
+                Dispatcher.BeginInvoke(() => { if (!_closing) ArmOfflineIdleUnload(); });
+            }
+            catch (Exception)
+            {
+                // The dispatcher is gone. There is nothing left to arm a timer for, and a teardown
+                // may not be failed by the thing that was tidying up after it.
+            }
+        });
+    }
+
     /// <summary>One tick, with the pause it is about.
     ///
     /// <para><b>The tick is what stops the timer</b> (AC 1). "Is anything still paused?" is
@@ -856,8 +1094,10 @@ public partial class MainWindow : Window
                 "TextMutedBrush", HasClock: t is not null);
         }
 
-        // S4 — the offline engine answered. E8 has not shipped, so this is unreachable today; the
-        // mapping is total over ProviderIds.All all the same, and a synthetic outcome proves it.
+        // S4 — the offline engine answered. Reachable since E8.S5 put the rung last in both chains,
+        // so this arm is now a state a player really lands in rather than a synthetic outcome; the
+        // name is ProviderNames' SHORT form, which for this one provider is not the display name
+        // (§3.0 rule 3: "Offline engine is the name; Offline is the chip").
         if (string.Equals(serving, ProviderIds.Bergamot, StringComparison.Ordinal))
             return new EngineChip(ChipServingGlyph, UserMessages.EngineChipServing(serving), "TealBrush");
 
@@ -1002,7 +1242,11 @@ public partial class MainWindow : Window
         // once the whole attempt has already failed. Its evidence is LastOutcome.Skipped being
         // non-empty behind a tier that ANSWERED (EngineStatus.FellBack, ruling E3-b), so the app
         // reports a fallback rather than promising one.
-        var notice = StateNotice(status, chip, _chipWasDegraded);
+        // E8.S3 / AC 2 rides the SAME "once per switch" machinery, which is the whole reason the
+        // nudge is safe: it is a status-line sentence chosen by a pure function, so it can never
+        // become a dialog, a toast or a per-row annotation. _offlineInstalled is the last known
+        // answer (post-paint, never read here — I10).
+        var notice = StateNotice(status, chip, _chipWasDegraded, _offlineInstalled, _liveCts != null);
 
         // "Once per switch" as a comparison and not a flag: the same sentence is not re-announced
         // while the state it describes lasts (principle 1 — a state is announced once and left
@@ -1028,10 +1272,53 @@ public partial class MainWindow : Window
     /// down it is <see cref="FallbackNotice"/>'s evidence-backed line, and a healthy chip with
     /// nothing behind it says nothing at all — which is also what clears the caller's memory so the
     /// NEXT switch speaks.</para></summary>
-    internal static string? StateNotice(EngineStatus status, EngineChip chip, bool wasDegraded)
-        => chip.IsHealthy
-            ? wasDegraded ? UserMessages.BackOn(status.LastAnswered) : null
-            : FallbackNotice(status);
+    /// <param name="offlineInstalled"><b>E8.S3 / AC 2.</b> The all-paused state is the one place a
+    /// background failure may say anything at all, and what it may say is a <b>nudge</b> — never a
+    /// dialog, because a <c>MessageBox</c> over a fullscreen game opened by a LIVE loop the player
+    /// forgot was running is the single worst thing this app could do (principle 3, NFR12). It rides
+    /// this method's existing "once per switch" comparison, so the sentence appears when the state
+    /// is ENTERED and not once per row or per message ("a toast for something that happens 40 times
+    /// an evening is a punishment", §2.2). It is suppressed once the engine is installed: pointing
+    /// at About to add something that is already there is worse than saying nothing.
+    ///
+    /// <para>It sits behind <see cref="FallbackNotice"/> rather than in front of it, and the order
+    /// is the meaning: a state where a lower tier really answered has something to explain, and the
+    /// nudge is what the app says when there is nothing left to explain — everything is paused, and
+    /// the only thing the player can do about it is on the About tab.</para></param>
+    /// <param name="liveIsRunning"><b>E8.S5 / §2.2's table.</b> S4 is the one state whose sentence
+    /// differs by surface — the Translator tab reads a result the player just asked for, the LIVE
+    /// line is glanced at mid-fight — so the choice is made here, where the state is, and not by the
+    /// writer downstream. Every other arm returns one sentence for both surfaces, which is why this
+    /// is a parameter rather than a second method.</param>
+    internal static string? StateNotice(EngineStatus status, EngineChip chip, bool wasDegraded,
+                                        bool offlineInstalled = false, bool liveIsRunning = false)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+        if (chip.IsHealthy) return wasDegraded ? UserMessages.BackOn(status.LastAnswered) : null;
+
+        return FallbackNotice(status)
+            ?? OfflineNotice(status, liveIsRunning)
+            ?? (status.AllReadTiersPaused && !offlineInstalled
+                    ? UserMessages.AllPausedOfflineNudge()
+                    : null);
+    }
+
+    /// <summary>
+    /// <b>§2.1's S4 as a sentence</b> (E8.S5): the offline engine is the one answering, so say so.
+    ///
+    /// <para><b>Behind <see cref="FallbackNotice"/> and not in front of it</b>, and the order is the
+    /// meaning — the same rule <see cref="ChipFor"/>'s arms follow. When the offline rung answered
+    /// because a rung above it is inside a window, §3.5's evidence-backed line
+    /// ("Translated by Offline engine — Google is paused.") is the better sentence: it names what
+    /// happened AND why, and it is the line the player needs to understand that the chain is
+    /// degraded. This one is what is left when there is no pause to name — a rung that failed
+    /// without earning a window, or a chain whose only tier is this one — and then "why" is not a
+    /// question the app can honestly answer, so it reports the state instead.</para>
+    /// </summary>
+    private static string? OfflineNotice(EngineStatus status, bool liveIsRunning)
+        => string.Equals(status.LastAnswered, ProviderIds.Bergamot, StringComparison.Ordinal)
+            ? (liveIsRunning ? UserMessages.LiveUsingOfflineEngine() : UserMessages.TranslatedOnYourPc())
+            : null;
 
     /// <summary>
     /// <b>§3.5's "fallback active" line, and deviation D2's evidence</b> (amendment A4, E7.S4). It
@@ -1135,9 +1422,9 @@ public partial class MainWindow : Window
             EngineReasonLine(status, ReferenceEquals(MainTabs.SelectedItem, AboutTab)) ?? "");
 
         SetIfChanged(EngineChainWriteText,
-            UserMessages.EngineChainLine(TranslationChains.WriteTierIds(_settings)));
+            UserMessages.EngineChainLine(TranslationChains.WriteTierIds(_settings, _offlineTier)));
         SetIfChanged(EngineChainReadText,
-            UserMessages.EngineChainLine(TranslationChains.ReadTierIds(_settings)));
+            UserMessages.EngineChainLine(TranslationChains.ReadTierIds(_settings, _offlineTier)));
     }
 
     /// <summary>Where §3.5's one-time notice goes, which is <b>the surface that owns the state</b>.

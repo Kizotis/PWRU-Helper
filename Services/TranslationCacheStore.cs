@@ -176,7 +176,15 @@ internal sealed class TranslationCacheStore
     /// <para><paramref name="offlineEnabled"/> is AC 6's drop rule as a <b>parameter</b>, not a
     /// setting: <c>OfflineFallbackEnabled</c> arrives in E6.S3 (ruling R-7) and the Bergamot tier in
     /// E8, so in A.2 it is structurally false and every <c>"p":"bergamot"</c> entry is dropped on
-    /// load. E8 passes <c>settings.OfflineFallbackEnabled</c> here and nothing else changes.</para>
+    /// load. <b>E8.S5 passes <c>settings.OfflineFallbackEnabled</c> here</b> — from
+    /// <c>TranslationChains.CacheFor</c>, called by both builders — and nothing else changed.
+    ///
+    /// <para>It is a <b>load-time</b> decision and the code does not pretend otherwise: the file is
+    /// read once, lazily, on the first miss, so only the FIRST construction of the process store
+    /// sees a flag at all. A Download later in the session does not retroactively un-drop the rows
+    /// this process already refused to read, and a Remove later in the session does not evict the
+    /// <c>bergamot</c> entries already in the map — those go on being served until the next launch,
+    /// which is where this parameter drops them.</para>
     ///
     /// <para>One constructor, and it has to stay one:
     /// <c>TranslationCacheStoreTests.The_capacity_comes_from_the_policy_and_not_from_a_second_literal</c>
@@ -216,13 +224,16 @@ internal sealed class TranslationCacheStore
     /// <summary>Stores or overwrites, promotes the entry to most-recently-used, evicts the tail once
     /// the capacity is exceeded, and schedules a debounced write (AC 2).
     ///
-    /// <para><paramref name="providerId"/> is the <c>"p"</c> of §8.2's schema and is <c>""</c> for
-    /// everything A.2 writes: the store is handed a key and a value and does not know which tier
-    /// answered, and <see cref="CachingTranslator"/> does not know either — the chain does.
-    /// E7.S3 already has to read <c>ChainTranslator.LastOutcome.ProviderId</c> for the status chip
-    /// and is where a real id could reach this parameter. The field is written from day one because
-    /// retrofitting one into a file people already have is how a version bump gets earned for
-    /// nothing, and because the Bergamot drop rule (AC 6) reads it.</para>
+    /// <para><paramref name="providerId"/> is the <c>"p"</c> of §8.2's schema. The store is handed a
+    /// key and a value and does not know which tier answered, and <see cref="CachingTranslator"/>
+    /// does not know either — the chain does. <b>Since E8.S5 it is really written</b>: the builder
+    /// that holds the chain hands the decorator a <c>Func&lt;string?&gt;</c> over
+    /// <c>ChainTranslator.LastOutcome.ProviderId</c>, read ONCE per store site, so every tier's id
+    /// lands here and not only Bergamot's. It stays <c>""</c> for a decorator built over something
+    /// that is not a chain — the honest answer rather than a guess, because an invented id would
+    /// poison the drop rule in the one direction nobody can notice. The field was written from day
+    /// one because retrofitting one into a file people already have is how a version bump gets
+    /// earned for nothing, and because the Bergamot drop rule (AC 6) reads it.</para>
     ///
     /// <para>It deliberately does NOT load first: a store is not a question, and letting it load
     /// would put the file on the path of the very first translation instead of on its first miss.

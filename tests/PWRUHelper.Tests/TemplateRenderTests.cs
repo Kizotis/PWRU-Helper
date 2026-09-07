@@ -882,6 +882,11 @@ public class TemplateRenderTests
                 Assert.Contains(window.DeepLTestButton, buttons);
                 Assert.Contains(window.AzureTestButton, buttons);
                 Assert.Contains(window.ClearCacheButton, buttons);
+                // E8.S3's Download/Remove button. Named for the same reason the others are: this
+                // region grew a WrapPanel and a row whose longest sentence is AC 3's failure line,
+                // and E6.S5's clipped Test button is the failure class both are shaped against. Its
+                // Cancel twin is Collapsed at rest and is correctly not in this list.
+                Assert.Contains(window.OfflineEngineButton, buttons);
 
                 Assert.True(scroller.ScrollableHeight > 0,
                     $"the About region does not scroll at {what}, so anything below the fold would "

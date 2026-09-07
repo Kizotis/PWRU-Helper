@@ -120,7 +120,7 @@ The four surfaces, with the code that owns them today:
 | **S1** Healthy | `● Google` teal | unchanged (`Translated · 1 block`) | `🔴 Live — watching…` (unchanged) | translation | chip hidden, status unchanged | `● Google (free) · DeepL for what you write` |
 | **S2** Fallback | `● Edge · backup` gold | one-time line: `Translated by Edge — Google is paused.` | same, plus the same one-time line | translation (no marker) | chip prefix on the status line | per-provider list, see §4 |
 | **S3** Paused-until | `○ Google paused 0:58` muted | only if it changes what the user gets | `🔴 Live — Google paused (0:58), using Edge.` | translation | `○ Google 0:58` prefix | `○ paused — retries in 0:58` |
-| **S4** Offline active | `● Offline engine` teal | `Translated on your PC (offline engine).` | `🔴 Live — using the offline engine.` | translation | `● Offline` prefix | `● Offline engine — active` |
+| **S4** Offline active | `● Offline` teal | `Translated on your PC (offline engine).` | `🔴 Live — using the offline engine.` | translation | `● Offline` prefix | `● Offline engine — active` |
 | **S5** All paused | `○ All paused 4 min` gold | `All engines are paused — next try in about 4 min. Nothing you need to do.` | `○ Live — paused, next try in about 4 min. It resumes on its own; nothing is lost.` | pending rows stay `…`; given-up rows → `(not translated — the engines did not come back)` **[A5]** | `○ Live paused — back in about 4 min` | `○ All engines paused — retries in about 4 min` |
 | **S6** No network | `⚠ No internet` red | `No internet connection — nothing can be translated until it is back.` | `○ Live — paused, no internet connection. It resumes on its own; nothing is lost.` **[GAP-3: full pause, like S5]** | `…` | `○ Live paused — no internet` | `⚠ No internet connection` |
 | **S7** Key invalid | `⚠ DeepL key refused` red | `Your DeepL key was refused — using the free engines.` | (read path only if the Azure opt-in is on) | translation | `⚠ Key refused` | `✕ DeepL refused this key.` + the fix |
@@ -446,6 +446,15 @@ can add an offline engine in About.`
 
 `MessageBox.Show(this, …)` with an owner, per `project-context.md`. Title: `Add the offline engine?`
 
+> **`%LocalAppData%`, not `%AppData%` — ruling E8-b (Winston, 2026-09-07), landed with E8.S3's code in one
+> commit.** The line below said `%AppData%\PWRUHelper\models` when this deck was written, by analogy with
+> `settings.json`, `provider-state.json`, `translation-cache.json` and the log — all four of which are kilobytes.
+> This directory is 22 MB of native library plus 22–37 MB per model, and a roaming or OneDrive-synced profile
+> copies its contents **at logon**: the exact class of machine-dependent startup cost P1 spent a phase hunting.
+> Machine-local, re-downloadable binary data belongs in Local, and the consent dialog's whole job is to say where
+> the 50 MB went — so the copy moved with the code rather than after it. The **cache** sentence in §4.2 still says
+> `%AppData%\PWRUHelper\` and is still right: that file is kilobytes of the user's own data and roams correctly.
+
 ```
 The offline engine translates on your PC, with no internet at all.
 It is a bit rougher than Google, and it is used only when every online
@@ -453,7 +462,7 @@ engine is unavailable.
 
 Download          about 22 MB for the engine + about 30 MB per language pair
 While translating it uses 130-310 MB of memory, freed when it goes idle
-Stored in         %AppData%\PWRUHelper\models
+Stored in         %LocalAppData%\PWRUHelper\models
 To remove it      About tab → Offline engine → Remove (deletes the files)
 
                              [ Download (about 50 MB) ]   [ Not now ]
@@ -462,6 +471,20 @@ To remove it      About tab → Offline engine → Remove (deletes the files)
 During the download the About row becomes `Downloading the offline engine… {p}%` with a `Cancel` button; on
 completion, `● Offline engine ready — used only when everything else is unavailable.` If the download fails:
 `Download failed — {reason}. Nothing was installed.`
+
+On **Remove**, the row reports what really came back: `Offline engine removed — {n} MB freed from your disk.`
+
+> **The residual case ruling E8-b left owed, landed with E8.S5's code in one commit.** A `Remove` deletes the
+> whole root, and the two causes the app can remove are removed before it tries: the engine is freed **and**
+> closed for good first (E8.S4's ordering + E8.S5's terminal `Close`, so a translation arriving mid-delete cannot
+> map the DLL again). What can still be left is a handle this process does not hold — an antivirus or a
+> sync agent with a file open — and the old row reported that as "removed — 0 MB freed from your disk" over
+> 50 MB that had not moved, which is the one thing principle 1 forbids outright. So:
+>
+> `Could not remove every file — {n} MB left; close the app and try again.`
+>
+> It says what happened, how much is left, and **what the user can do about it** (principle 2 — never a statement
+> with no exit). Closing the app is the honest instruction: it releases the handle, and it costs nothing.
 
 ### 3.7 Key validation feedback (DeepL and Azure)
 

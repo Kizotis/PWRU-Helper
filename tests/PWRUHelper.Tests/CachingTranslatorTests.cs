@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Threading;
 using PWRUHelper.Services;
 using Xunit;
@@ -241,5 +242,105 @@ public class CachingTranslatorTests
 
         Assert.Equal(new[] { "T:раз", "T:два" }, await cache.TranslateLinesAsync(lines, "ru", "en"));
         Assert.Single(inner.BatchRequests);
+    }
+
+    // =============================================================================================
+    //  E8.S5 / T3 — the "p" field, actually written
+    // =============================================================================================
+
+    /// <summary>The producing provider of an entry, read back out of the store. Reflection because
+    /// the map and the entry record are private and stay private: the schema is the store's
+    /// business, and widening it to make a test shorter would put the entry type in reach of the
+    /// app.</summary>
+    private static string ProviderIdOf(TranslationCacheStore store, string key)
+    {
+        var map = (System.Collections.IDictionary)store.GetType()
+            .GetField("_map", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(store)!;
+        Assert.True(map.Contains(key), $"the store has no entry for {key}");
+        var node = map[key]!;
+        var entry = node.GetType().GetProperty("Value")!.GetValue(node)!;
+        return (string)entry.GetType().GetProperty("ProviderId")!.GetValue(entry)!;
+    }
+
+    /// <summary>
+    /// <b>The gap E8.S5 was written to close.</b> <c>TranslationCacheStore.Store</c> has taken a
+    /// provider id since E4.S2 and every caller passed nothing, so every entry on every user's disk
+    /// carries <c>"p": ""</c> — harmless while nothing could equal "bergamot", a silent correctness
+    /// bug the moment the offline tier can answer (§8.2 concern #2: "I turned the offline engine off
+    /// and it is still giving me its answers").
+    ///
+    /// <para><b>And it is not a Bergamot-shaped special case</b>, which is the half worth asserting:
+    /// whatever the delegate names lands in the field. Every tier's id, which is what the schema
+    /// wanted from day one and what makes the drop rule work at all.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(ProviderIds.Bergamot)]
+    [InlineData(ProviderIds.GoogleDict)]
+    [InlineData(ProviderIds.GoogleGtx)]
+    [InlineData(ProviderIds.DeepL)]
+    [InlineData(ProviderIds.Azure)]
+    public async Task Whoever_answered_is_written_into_the_entry(string providerId)
+    {
+        var store = new TranslationCacheStore();
+        var cache = new CachingTranslator(new CountingTranslator(), store, () => providerId);
+
+        await cache.TranslateAsync("привет", "ru", "en");
+
+        Assert.Equal(providerId, ProviderIdOf(store, "ru|en|привет"));
+    }
+
+    /// <summary>Without a delegate the field is written empty rather than guessed — a decorator over
+    /// something that is not a chain has nobody to ask, and inventing an id would poison the drop
+    /// rule in the one direction nobody can notice.</summary>
+    [Fact]
+    public async Task With_no_way_to_ask_the_field_stays_empty()
+    {
+        var store = new TranslationCacheStore();
+        var cache = new CachingTranslator(new CountingTranslator(), store);
+
+        await cache.TranslateAsync("привет", "ru", "en");
+
+        Assert.Equal("", ProviderIdOf(store, "ru|en|привет"));
+    }
+
+    /// <summary>
+    /// <b>One batch, one answering provider, ONE read.</b> The per-line stores all carry the same id
+    /// — asking inside the loop would put forty questions to a <c>Volatile</c> field a second call
+    /// on a pool thread may already have overwritten, and two concurrent calls would then stamp each
+    /// other's provider onto each other's entries. A wrong <c>"p"</c> is invisible until somebody
+    /// presses Remove and keeps getting offline answers.
+    /// </summary>
+    [Fact]
+    public async Task A_batch_asks_once_and_every_line_of_it_carries_that_answer()
+    {
+        var store = new TranslationCacheStore();
+        var asked = 0;
+        var answers = new[] { ProviderIds.GoogleDict, ProviderIds.Bergamot, ProviderIds.DeepL };
+        var cache = new CachingTranslator(new CountingTranslator(), store,
+                                          () => answers[Math.Min(asked++, answers.Length - 1)]);
+
+        await cache.TranslateLinesAsync(new[] { "раз", "два", "три" }, "ru", "en");
+
+        Assert.Equal(1, asked);
+        foreach (var line in new[] { "раз", "два", "три" })
+            Assert.Equal(ProviderIds.GoogleDict, ProviderIdOf(store, "ru|en|" + line));
+    }
+
+    /// <summary>A cached hit stores nothing, so it cannot relabel an entry either: a frame whose
+    /// lines are all hits never asks who answered, because nobody did.</summary>
+    [Fact]
+    public async Task A_frame_of_pure_hits_never_asks_who_answered()
+    {
+        var store = new TranslationCacheStore();
+        var asked = 0;
+        var cache = new CachingTranslator(new CountingTranslator(), store,
+                                          () => { asked++; return ProviderIds.GoogleDict; });
+        var lines = new[] { "раз", "два" };
+
+        await cache.TranslateLinesAsync(lines, "ru", "en");
+        Assert.Equal(1, asked);
+
+        await cache.TranslateLinesAsync(lines, "ru", "en");
+        Assert.Equal(1, asked);
     }
 }

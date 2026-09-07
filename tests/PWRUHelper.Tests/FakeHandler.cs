@@ -30,7 +30,8 @@ internal sealed class FakeHandler : HttpMessageHandler
     }
 
     private sealed record Step(HttpStatusCode Status, string Body, string ContentType, Exception? Throw,
-        IReadOnlyList<KeyValuePair<string, string>>? Headers = null, TimeSpan Delay = default);
+        IReadOnlyList<KeyValuePair<string, string>>? Headers = null, TimeSpan Delay = default,
+        byte[]? Bytes = null, bool HideLength = false);
 
     // Guards both lists: a provider that ever sends two requests at once must still get a
     // deterministic script step and an intact recording.
@@ -90,6 +91,29 @@ internal sealed class FakeHandler : HttpMessageHandler
     }
 
     public FakeHandler RespondJson(string json) => Respond(HttpStatusCode.OK, json);
+
+    /// <summary>Answer with raw bytes (E8.S3): the model store downloads binaries and hashes them,
+    /// so a <see cref="System.Text.StringContent"/> body would be re-encoded on its way out and the
+    /// digest under test would be a digest of something else.</summary>
+    public FakeHandler RespondBytes(byte[] bytes, string contentType = "application/octet-stream")
+    {
+        lock (_gate) _steps.Add(new Step(HttpStatusCode.OK, "", contentType, null, Bytes: bytes));
+        return this;
+    }
+
+    /// <summary>Strip <c>Content-Length</c> from the step just scripted — the "mirror that does not
+    /// report a total size" of E8.S3's AC 4, which cannot be expressed any other way: every content
+    /// type .NET builds from a buffer knows its own length.</summary>
+    public FakeHandler NoContentLength()
+    {
+        lock (_gate)
+        {
+            if (_steps.Count == 0)
+                throw new InvalidOperationException("NoContentLength needs a Respond step in front of it.");
+            _steps[^1] = _steps[^1] with { HideLength = true };
+        }
+        return this;
+    }
 
     /// <summary>Answer with a transport failure (an HttpRequestException, or anything else). A
     /// repeated step rethrows the same instance, so assert on its type and message, not its
@@ -152,12 +176,74 @@ internal sealed class FakeHandler : HttpMessageHandler
 
         call.Status = step.Status;
         call.ResponseBody = step.Body;
-        var response = new HttpResponseMessage(step.Status)
+        var payload = step.Bytes ?? Encoding.UTF8.GetBytes(step.Body);
+        HttpContent content;
+        if (step.HideLength)
         {
-            Content = new StringContent(step.Body, Encoding.UTF8, step.ContentType),
-        };
+            // A mirror answering chunked reports no length at all, and there is no way to take a
+            // computed one back off an HttpContent: ContentLength's setter only clears the cache and
+            // the next read recomputes it from the buffer. A NON-SEEKABLE stream is the only shape
+            // whose length StreamContent genuinely cannot work out — which is also exactly what a
+            // chunked response is.
+            content = new StreamContent(new UnmeasurableStream(payload));
+        }
+        else if (step.Bytes is null)
+        {
+            content = new StringContent(step.Body, Encoding.UTF8, step.ContentType);
+        }
+        else
+        {
+            content = new ByteArrayContent(step.Bytes);
+        }
+        if (step.Bytes is not null || step.HideLength)
+            content.Headers.ContentType =
+                new System.Net.Http.Headers.MediaTypeHeaderValue(step.ContentType.Length == 0
+                    ? "application/octet-stream" : step.ContentType);
+        var response = new HttpResponseMessage(step.Status) { Content = content };
         foreach (var header in step.Headers ?? Enumerable.Empty<KeyValuePair<string, string>>())
             response.Headers.TryAddWithoutValidation(header.Key, header.Value);
         return response;
     }
+}
+
+/// <summary>
+/// A read-only, <b>non-seekable</b> stream over a byte array — the one shape whose length
+/// <c>StreamContent</c> cannot compute, and therefore the only way to script a response that reports
+/// no <c>Content-Length</c> (E8.S3 AC 4: the mirror that does not report a total size). It is also
+/// what a chunked HTTP response actually looks like to the client, which is why the AC's
+/// "degrades to Downloading… rather than inventing a percentage" is testable at all.
+/// </summary>
+internal sealed class UnmeasurableStream : System.IO.Stream
+{
+    private readonly byte[] _bytes;
+    private int _at;
+
+    public UnmeasurableStream(byte[] bytes) => _bytes = bytes;
+
+    public override bool CanRead => true;
+    public override bool CanSeek => false;
+    public override bool CanWrite => false;
+    public override long Length => throw new NotSupportedException();
+
+    public override long Position
+    {
+        get => throw new NotSupportedException();
+        set => throw new NotSupportedException();
+    }
+
+    public override int Read(byte[] buffer, int offset, int count)
+    {
+        // A few bytes at a time, deliberately: a body that arrived in one Read would never exercise
+        // the progress callback the AC is about.
+        var n = Math.Min(Math.Min(count, 64), _bytes.Length - _at);
+        if (n <= 0) return 0;
+        Array.Copy(_bytes, _at, buffer, offset, n);
+        _at += n;
+        return n;
+    }
+
+    public override void Flush() { }
+    public override long Seek(long offset, System.IO.SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) => throw new NotSupportedException();
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 }

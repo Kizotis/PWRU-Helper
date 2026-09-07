@@ -78,6 +78,11 @@ public class HttpSeamGuardTests : GatesTestBase
         // the floor is that a provider dropping OFF the derived list fails here instead of quietly
         // widening the network surface CI is allowed to reach.
         Assert.Contains(typeof(AzureTranslator), providers);
+        // E8.S2's provider is LOCAL — it holds no client, makes no request, and has nothing a test
+        // handler could intercept — so the derivation above correctly leaves it out. Stated rather
+        // than left implicit: the exemption is a property of the type (asserted in the case below),
+        // not a name someone can quietly add a socket to.
+        Assert.DoesNotContain(typeof(BergamotTranslator), providers);
 
         foreach (var t in providers)
         {
@@ -98,6 +103,55 @@ public class HttpSeamGuardTests : GatesTestBase
             if (t.IsPublic)
                 Assert.True(t.GetConstructors().Length > 0,
                     $"{t.Name} is public but has no public constructor left.");
+        }
+    }
+
+    /// <summary>
+    /// The other side of the derivation, and E8.S2 is why it now exists. <see cref="HttpProviders"/>
+    /// enumerates by the CLIENT a provider holds, so a translator that holds none is invisible to
+    /// it — which is right for a decorator and right for a local engine, and would be catastrophic
+    /// for a network provider that reached the wire some other way (a raw socket, a
+    /// <c>WebClient</c>, a static helper). So every <see cref="ITranslator"/> in the app must be
+    /// either an enumerated HTTP provider or one of the few DECLARED non-HTTP ones, and each of
+    /// those has to still be non-HTTP when the assertion runs.
+    ///
+    /// <para>This does not weaken the guard above — it closes the one way past it. A new provider
+    /// fails here until it is either given the handler seam or declared local, which is a decision
+    /// somebody makes rather than a hole nobody notices.</para>
+    /// </summary>
+    [Fact]
+    public void Every_translator_is_either_an_http_provider_or_a_declared_local_one()
+    {
+        // The chain and the cache are decorators: they hold other translators, never a client.
+        // BergamotTranslator is the local engine — no request ever leaves the machine, which is
+        // also why ruling E8-c forbids it the NotSent flag.
+        var declaredNonHttp = new[]
+        {
+            typeof(ChainTranslator), typeof(CachingTranslator), typeof(BergamotTranslator),
+        };
+
+        var all = AppTypes()
+            .Where(t => t.IsClass && !t.IsAbstract && typeof(ITranslator).IsAssignableFrom(t))
+            .ToList();
+        var http = HttpProviders();
+
+        Assert.NotEmpty(all);                                   // a vacuous scan would pass silently
+
+        var unaccounted = all.Where(t => !http.Contains(t) && !declaredNonHttp.Contains(t))
+                             .Select(t => t.Name)
+                             .OrderBy(n => n, StringComparer.Ordinal)
+                             .ToList();
+        Assert.True(unaccounted.Count == 0,
+            "these ITranslators own no HttpClient and are not declared non-HTTP, so IS-10's guard "
+            + "does not see them: " + string.Join(", ", unaccounted));
+
+        // …and "declared local" has to remain TRUE, not just declared: no field of theirs can reach
+        // the network, directly or through the shared core.
+        foreach (var t in declaredNonHttp)
+        {
+            Assert.Contains(t, all);
+            Assert.DoesNotContain(FieldsIncludingBase(t),
+                f => f.FieldType == typeof(HttpClient) || f.FieldType == typeof(HttpProviderCore));
         }
     }
 

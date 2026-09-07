@@ -19,6 +19,19 @@
     <DefineConstants>$(DefineConstants);PWRU_SPIKE</DefineConstants>
   </PropertyGroup>
 
+  <!-- E8.S1 / U6-U7 — the ONE package ruling E8-d authorises, and only for the spike. It is on the
+       TEST project (never on PWRUHelper.csproj: nothing here ships) and it hangs off the SAME
+       PWRU_SPIKE variable as the define above, so a normal `dotnet test` restores exactly what it
+       restored before and downloads nothing. `ExcludeAssets="native"` is the U7 experiment itself:
+       the 21.4 MB `bergamot.dll` is kept OUT of the build output, and BergamotSpike satisfies the
+       binding's [LibraryImport("bergamot")] from a downloaded directory via
+       NativeLibrary.SetDllImportResolver. If that works, shipping this feature costs 0 MB of exe
+       growth and leaves `%TEMP%\.net\PWRUHelper\<id>` at its five WPF files. The version is PINNED:
+       every figure in benchmark-fournisseurs.md §6.2 and §10 was measured against 0.5.1. -->
+  <ItemGroup Condition="'$(PWRU_SPIKE)' == '1'">
+    <PackageReference Include="BergamotTranslatorSharp" Version="0.5.1" ExcludeAssets="native" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
     <PackageReference Include="xunit" Version="2.9.2" />

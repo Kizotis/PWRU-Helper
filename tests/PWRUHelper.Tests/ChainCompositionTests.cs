@@ -606,6 +606,323 @@ public class ChainCompositionTests : GatesTestBase
     }
 
     // =============================================================================================
+    //  E8.S5 — the offline rung: LAST, behind two conditions, over ONE instance
+    // =============================================================================================
+
+    /// <summary>A stand-in for the app's one <c>BergamotTranslator</c>. The composition cases below
+    /// are about WHERE the tier sits and WHETHER it is built, never about what it answers — and a
+    /// real provider here would be a second instance of the one object the app is allowed exactly
+    /// one of (<c>BergamotLifetimeTests.The_app_constructs_exactly_one_offline_provider</c>).</summary>
+    private sealed class StubOffline : ITranslator
+    {
+        public Task<string> TranslateAsync(string text, string source, string target,
+            CancellationToken ct = default) => Task.FromResult("offline:" + text);
+
+        public Task<List<string>> TranslateLinesAsync(IReadOnlyList<string> lines, string source,
+            string target, CancellationToken ct = default)
+            => Task.FromResult(lines.Select(l => "offline:" + l).ToList());
+    }
+
+    private static OfflineTier Offline(ITranslator engine, bool installed)
+        => new(engine, () => installed);
+
+    /// <summary>
+    /// <b>AC 1 / AC 2, asserted on the BUILT CHAIN.</b> Two conditions, and each of them alone is
+    /// not enough: the setting says the user chose the engine, the store says the files are really
+    /// there. E8.S3's review recorded the second one by name — "setting-true-but-files-gone → E8.S5
+    /// gates the tier on the store, not the setting" — because a tier built over a deleted model is
+    /// a tier that fails on every line of every frame.
+    ///
+    /// <para>On the chain and not on a runtime guard, which is E6.S4's shape for Azure and its
+    /// reason: a guard is a line someone can move, a builder that never constructs the provider
+    /// cannot be talked into it.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public void The_offline_tier_needs_the_setting_AND_the_model(bool enabled, bool installed)
+    {
+        var settings = new AppSettings { OfflineFallbackEnabled = enabled };
+        var offline = Offline(new StubOffline(), installed);
+
+        Assert.DoesNotContain(ProviderIds.Bergamot,
+            IdsOf(TranslationChains.BuildRead(settings, RequestPriority.Background, offline)));
+        Assert.DoesNotContain(ProviderIds.Bergamot,
+            IdsOf(TranslationChains.BuildRead(settings, RequestPriority.Interactive, offline)));
+        Assert.DoesNotContain(ProviderIds.Bergamot,
+            IdsOf(TranslationChains.BuildWrite(settings, offline)));
+
+        // …and the About tab's two id lists say exactly what the builders did (the same guarantee
+        // EngineStatusTests sweeps): a tab that named a rung the chain never built would be the lie
+        // the whole increment exists to prevent.
+        Assert.DoesNotContain(ProviderIds.Bergamot, TranslationChains.ReadTierIds(settings, offline));
+        Assert.DoesNotContain(ProviderIds.Bergamot, TranslationChains.WriteTierIds(settings, offline));
+    }
+
+    /// <summary>
+    /// Both conditions met: the rung appears, and it appears <b>last</b> in both chains. Not before
+    /// <c>google-gtx</c> "because 6.5 ms a line is faster than any network call" — that is exactly
+    /// the argument that would put a COMET-0.8497 engine in front of a COMET-0.8785 one.
+    /// </summary>
+    [Fact]
+    public void With_both_conditions_the_offline_tier_is_last_in_both_chains()
+    {
+        var settings = new AppSettings
+        {
+            OfflineFallbackEnabled = true,
+            DeepLApiKey = "abc-123:fx",
+            AzureApiKey = AzureKey,
+            AzureRegion = "westeurope",
+            UseKeyForReading = true,
+        };
+        var offline = Offline(new StubOffline(), installed: true);
+
+        Assert.Equal(new[] { ProviderIds.Azure, ProviderIds.GoogleDict, ProviderIds.GoogleGtx,
+                             ProviderIds.Bergamot },
+                     IdsOf(TranslationChains.BuildRead(settings, RequestPriority.Background, offline)));
+        Assert.Equal(new[] { ProviderIds.DeepL, ProviderIds.Azure, ProviderIds.GoogleDict,
+                             ProviderIds.GoogleGtx, ProviderIds.Bergamot },
+                     IdsOf(TranslationChains.BuildWrite(settings, offline)));
+
+        // The free shape too, which is what most users have.
+        var free = new AppSettings { OfflineFallbackEnabled = true };
+        Assert.Equal(new[] { ProviderIds.GoogleDict, ProviderIds.GoogleGtx, ProviderIds.Bergamot },
+                     IdsOf(TranslationChains.BuildRead(free, RequestPriority.Background, offline)));
+        Assert.Equal(new[] { ProviderIds.GoogleDict, ProviderIds.GoogleGtx, ProviderIds.Bergamot },
+                     IdsOf(TranslationChains.BuildWrite(free, offline)));
+
+        // …and the tab agrees, for both paths.
+        Assert.Equal(IdsOf(TranslationChains.BuildRead(settings, RequestPriority.Background, offline)),
+                     TranslationChains.ReadTierIds(settings, offline));
+        Assert.Equal(IdsOf(TranslationChains.BuildWrite(settings, offline)),
+                     TranslationChains.WriteTierIds(settings, offline));
+    }
+
+    /// <summary>
+    /// <b>ONE instance, wrapped by both chains</b> — E8.S4's review pin, carried into the builders.
+    /// A second <c>BergamotTranslator</c> would be a second 121 MiB nothing here could unload, and
+    /// the two would disagree about what is resident while <c>OnClosing</c> and the one-shot freed
+    /// the wrong one. The tier can be in both chains and that is fine: the provider's own lock
+    /// serialises them, which is the design.
+    /// </summary>
+    [Fact]
+    public void Both_chains_wrap_the_one_offline_instance_the_caller_handed_them()
+    {
+        var settings = new AppSettings { OfflineFallbackEnabled = true };
+        var engine = new StubOffline();
+        var offline = Offline(engine, installed: true);
+
+        var read = TiersOf(TranslationChains.BuildRead(settings, RequestPriority.Background, offline))
+            .Single(t => t.ProviderId == ProviderIds.Bergamot);
+        var once = TiersOf(TranslationChains.BuildRead(settings, RequestPriority.Interactive, offline))
+            .Single(t => t.ProviderId == ProviderIds.Bergamot);
+        var write = TiersOf(TranslationChains.BuildWrite(settings, offline))
+            .Single(t => t.ProviderId == ProviderIds.Bergamot);
+
+        Assert.Same(engine, read.Translator);
+        Assert.Same(engine, once.Translator);
+        Assert.Same(engine, write.Translator);
+
+        // …and one gate, like every other provider (I9).
+        Assert.Same(read.Gate, write.Gate);
+        Assert.Same(read.Gate, ProviderGates.For(ProviderIds.Bergamot));
+    }
+
+    /// <summary>
+    /// <b>AC 3 — the offline rung did not open the read path to DeepL.</b> Adding a tier to
+    /// <c>BuildRead</c> is the moment somebody notices the two builders now look alike and unifies
+    /// them; TP-CHN-14 is what stops it, and this is that sweep run again with the new argument, so
+    /// a unification that only showed up when an offline tier was supplied still fails here.
+    /// </summary>
+    [Fact]
+    public void TP_CHN_14_holds_with_the_offline_tier_supplied_too()
+    {
+        var offline = Offline(new StubOffline(), installed: true);
+
+        foreach (var settings in EveryPermutation())
+            foreach (var priority in new[] { RequestPriority.Background, RequestPriority.Interactive })
+                foreach (var tier in TiersOf(TranslationChains.BuildRead(settings, priority, offline)))
+                {
+                    Assert.NotEqual(ProviderIds.DeepL, tier.ProviderId);
+                    Assert.IsNotType<DeepLTranslator>(tier.Translator);
+                }
+    }
+
+    /// <summary>
+    /// <b>The chain never constructs the provider</b> (E8.S4's pin, one level up from the source
+    /// scan that counts <c>new BergamotTranslator(</c>): a caller with no offline tier gets no
+    /// offline rung, whatever the setting says. That is what makes "the builders receive the
+    /// instance" structural rather than a convention.
+    /// </summary>
+    [Fact]
+    public void A_caller_with_no_offline_engine_never_gets_an_offline_rung()
+    {
+        var settings = new AppSettings { OfflineFallbackEnabled = true };
+
+        Assert.Equal(new[] { ProviderIds.GoogleDict, ProviderIds.GoogleGtx },
+                     IdsOf(TranslationChains.BuildRead(settings)));
+        Assert.Equal(new[] { ProviderIds.GoogleDict, ProviderIds.GoogleGtx },
+                     IdsOf(TranslationChains.BuildWrite(settings)));
+    }
+
+    /// <summary>
+    /// <b>I10 — the predicate does not stat a disk.</b> The builders run in <c>MainWindow</c>'s
+    /// constructor, before first paint, and <c>OfflineModelStore.IsInstalled</c> is NOT cached: it
+    /// walks every manifest file on every call. So the answer arrives as a delegate the code-behind
+    /// answers from memory, and this asserts the builders ask it exactly as often as they need to
+    /// and never more — once per build, per builder.
+    /// </summary>
+    [Fact]
+    public void The_installed_question_is_asked_from_memory_and_once_per_build()
+    {
+        var settings = new AppSettings { OfflineFallbackEnabled = true };
+        var asked = 0;
+        var offline = new OfflineTier(new StubOffline(), () => { asked++; return true; });
+
+        TranslationChains.BuildRead(settings, RequestPriority.Background, offline);
+        Assert.Equal(1, asked);
+
+        TranslationChains.BuildWrite(settings, offline);
+        Assert.Equal(2, asked);
+
+        // …and it is not asked at all when the setting already answers the question: the cheap
+        // half of the predicate is first, so a user who never downloaded the engine pays nothing.
+        asked = 0;
+        TranslationChains.BuildRead(new AppSettings(), RequestPriority.Background, offline);
+        TranslationChains.BuildWrite(new AppSettings(), offline);
+        Assert.Equal(0, asked);
+    }
+
+    /// <summary>
+    /// <b>The builder really wired the delegate</b> (T3), end to end and with no network: the two
+    /// online rungs are inside a gate window, so the chain skips them without a request (E3.S3's
+    /// algorithm) and the offline rung answers — and the entry the shared store keeps carries
+    /// <c>"p":"bergamot"</c>, which is the field §8.2's drop rule matches on.
+    ///
+    /// <para>Before E8.S5 this string was <c>""</c> for every entry the app has ever written, which
+    /// is exactly harmless until the offline tier can answer and then is the bug the concern was
+    /// raised for: offline output cached indistinguishably from Google's, and served for ever after
+    /// the user pressed Remove.</para>
+    /// </summary>
+    [Fact]
+    public async Task An_answer_from_the_offline_rung_is_cached_as_the_offline_rung()
+    {
+        // Both online rungs are paused, so the chain skips them: no request leaves the machine
+        // (IS-10) and the rung under test is the one that answers.
+        ProviderGates.For(ProviderIds.GoogleDict).ReportFailure(TranslationErrorKind.RateLimited);
+        ProviderGates.For(ProviderIds.GoogleGtx).ReportFailure(TranslationErrorKind.RateLimited);
+
+        var settings = new AppSettings { OfflineFallbackEnabled = true };
+        var chain = TranslationChains.BuildRead(settings, RequestPriority.Background,
+                                                Offline(new StubOffline(), installed: true));
+
+        Assert.Equal("offline:привет", await chain.TranslateAsync("привет", "ru", "en"));
+        Assert.Equal(ProviderIds.Bergamot,
+                     ProviderIdOf(TranslationChains.Cache, "ru|en|привет"));
+    }
+
+    /// <summary>The producing provider of an entry, out of the shared store. Reflection for the
+    /// reason <see cref="TiersOf"/> is: the entry record is private and stays private.</summary>
+    private static string ProviderIdOf(TranslationCacheStore store, string key)
+    {
+        var map = (System.Collections.IDictionary)store.GetType()
+            .GetField("_map", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(store)!;
+        Assert.True(map.Contains(key), $"the store has no entry for {key}");
+        var node = map[key]!;
+        var entry = node.GetType().GetProperty("Value")!.GetValue(node)!;
+        return (string)entry.GetType().GetProperty("ProviderId")!.GetValue(entry)!;
+    }
+
+    private static bool OfflineEnabledOf(TranslationCacheStore store) =>
+        (bool)store.GetType()
+            .GetField("_offlineEnabled", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(store)!;
+
+    /// <summary>
+    /// <b>T4 — the drop rule is a LOAD-TIME decision, and the code does not pretend otherwise.</b>
+    /// The store reads its file once, lazily, on the first miss, so the flag has to be supplied at
+    /// construction: a flag arriving afterwards is a flag that did nothing. The builder passes
+    /// <c>settings.OfflineFallbackEnabled</c> at the first construction of the session and the
+    /// session keeps that answer — a Download halfway through does not retroactively un-drop the
+    /// rows this process already refused to load, and it must not pretend to.
+    /// </summary>
+    [Fact]
+    public void The_shared_store_takes_the_drop_rule_from_the_first_build_and_keeps_it()
+    {
+        var off = new AppSettings { OfflineFallbackEnabled = false };
+        var on = new AppSettings { OfflineFallbackEnabled = true };
+
+        TranslationChains.BuildRead(off);
+        Assert.False(OfflineEnabledOf(TranslationChains.Cache));
+
+        // The setting flips mid-session (Download) and both chains are rebuilt — the STORE is not,
+        // which is amplifier A5 working (the session's translations survive) and is why the flag
+        // stays where the load left it.
+        TranslationChains.BuildWrite(on);
+        TranslationChains.BuildRead(on);
+        Assert.False(OfflineEnabledOf(TranslationChains.Cache));
+
+        // Non-vacuity: a session that starts with the engine on gets the other answer.
+        TranslationChains.ResetCacheForTests();
+        TranslationChains.BuildRead(on);
+        Assert.True(OfflineEnabledOf(TranslationChains.Cache));
+    }
+
+    /// <summary>
+    /// <b>And nothing in the app can build the store before a builder does</b> — the review pin for
+    /// the shape the parameterless accessor leaves open. <c>TranslationChains.Cache</c> constructs
+    /// with <c>offlineEnabled: false</c>, which is the SAFE direction (a <c>"p":"bergamot"</c> row
+    /// is dropped rather than served to a session nobody told about the offline engine) but is still
+    /// the wrong answer for a user who has the engine on — and because the load is lazy and
+    /// one-shot, whichever door opens first decides for the whole session.
+    ///
+    /// <para>So the door is pinned rather than trusted: outside <c>Services/</c> nothing names it at
+    /// all (that is <c>TranslationCachePersistenceTests</c>' rule, one level up), and inside
+    /// <c>TranslationChains</c> the only reader of the parameterless property is
+    /// <see cref="TranslationChains.ClearCache"/> — the About tab's button, which cannot run before
+    /// the constructor's first <c>Build…</c> because it needs a window that does not exist until
+    /// after it. <c>FlushCache</c> deliberately uses <c>?.</c> and builds nothing.</para>
+    /// </summary>
+    [Fact]
+    public void Nothing_in_the_app_reaches_the_shared_store_before_a_builder_does()
+    {
+        var root = RepoRoot();
+
+        // Outside Services/TranslationChains.cs: not one reference, so no startup path, no handler
+        // and no future facade can be the thing that decides the drop rule.
+        var outside = ProductionSources(root)
+            .Where(f => !Path.GetFileName(f).Equals("TranslationChains.cs", StringComparison.Ordinal))
+            .SelectMany(f => Code(File.ReadAllText(f)).Split('\n')
+                .Where(l => l.Contains("TranslationChains.Cache", StringComparison.Ordinal))
+                .Select(l => Path.GetFileName(f) + ": " + l.Trim()))
+            .ToList();
+        Assert.Empty(outside);
+
+        // Inside it: the accessor is declared once, in terms of CacheFor…
+        var chains = Code(File.ReadAllText(Path.Combine(root, "Services", "TranslationChains.cs")));
+        Assert.Equal(1, Occurrences(chains,
+            "internal static TranslationCacheStore Cache => CacheFor(offlineEnabled: false);"));
+
+        // …and exactly one line in the class READS it, which is the About tab's Clear-cache button.
+        // A second reader is a second decision about when the process store is built, and it has to
+        // be a deliberate one rather than a convenience.
+        var readers = chains.Split('\n')
+            .Select(l => l.Trim())
+            .Where(l => l.Contains(" Cache.", StringComparison.Ordinal)
+                        || l.Contains("(Cache.", StringComparison.Ordinal)
+                        || l.StartsWith("Cache.", StringComparison.Ordinal))
+            .ToList();
+        Assert.Equal(new[] { "internal static int ClearCache() => Cache.Clear();" }, readers);
+
+        // …and the builders really are what the constructor reaches first: the three Build… calls
+        // sit above InitializeComponent, so the first store of the session is CacheFor's.
+        var main = Code(File.ReadAllText(Path.Combine(root, "MainWindow.xaml.cs")));
+        Assert.True(main.IndexOf("BuildWriteChain();", StringComparison.Ordinal)
+                    < main.IndexOf("InitializeComponent()", StringComparison.Ordinal),
+            "the write chain is built before InitializeComponent, so it owns the store's flag");
+    }
+
+    // =============================================================================================
     //  I9 / I10 — one gate per provider, and nothing read at startup
     // =============================================================================================
 
@@ -925,7 +1242,7 @@ public class ChainCompositionTests : GatesTestBase
         Assert.Contains("private ITranslator _readTranslator;", main, StringComparison.Ordinal);
         Assert.Contains("private ChainTranslator _readChain;", main, StringComparison.Ordinal);
         Assert.Contains(
-            "_readTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Background, out _readChain);",
+            "_readTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Background, out _readChain, _offlineTier);",
             main, StringComparison.Ordinal);
         Assert.True(main.IndexOf("TranslationChains.BuildRead(_settings", StringComparison.Ordinal)
                     < main.IndexOf("InitializeComponent()", StringComparison.Ordinal),
@@ -935,7 +1252,7 @@ public class ChainCompositionTests : GatesTestBase
         // handler builds a new CHAIN, and the store it caches into is TranslationChains' — so a
         // merge that dropped the sharing could not compile past this line without also changing it.
         var translate = Code(File.ReadAllText(Path.Combine(root, "MainWindow.Translate.cs")));
-        Assert.Contains("private ITranslator BuildWriteChain() => TranslationChains.BuildWrite(_settings);",
+        Assert.Contains("private ITranslator BuildWriteChain() => TranslationChains.BuildWrite(_settings, _offlineTier);",
             translate, StringComparison.Ordinal);
 
         // …and the READ chain's rebuild, E6.S3's companion to it. All three references are
@@ -947,8 +1264,8 @@ public class ChainCompositionTests : GatesTestBase
         Assert.Contains("private void RebuildReadChains()", translate, StringComparison.Ordinal);
         foreach (var assignment in new[]
                  {
-                     "_readTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Background, out _readChain);",
-                     "_readOnceTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Interactive);",
+                     "_readTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Background, out _readChain, _offlineTier);",
+                     "_readOnceTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Interactive, _offlineTier);",
                  })
             Assert.Equal(2, Occurrences(both, assignment));
 

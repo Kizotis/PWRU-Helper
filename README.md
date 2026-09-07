@@ -71,13 +71,14 @@ Two files on the [Releases](../../releases) page — **take the installer if you
 - **Never stops.** If a translation engine asks us to slow down, it's paused for a few minutes and the next one takes over on its own. A small coloured dot next to the Translate button tells you which engine is answering.
 - **No line is translated twice.** Repeated chat comes back instantly from a small file on your PC.
 - **Optional keys** (About tab) if you want better wording for what *you* write: **DeepL** or **Azure Translator**. Free stays underneath — if a key runs out, the app falls back on its own.
+- **Optional offline engine.** About tab → **Download the offline engine** (about 50 MB, one time). It translates on your PC with no internet at all, and it only answers when nothing else can. It uses memory only while it is translating, and **Remove** deletes it again.
 
 ---
 
 ## Privacy
 
 - **Screen reading happens on your PC.** No screenshot ever leaves your computer.
-- **Only the text you translate is sent** to a translation service, exactly like using translate.google.com. If a line is private, don't translate it.
+- **Only the text you translate is sent** to a translation service, exactly like using translate.google.com. If a line is private, don't translate it. With the offline engine installed, nothing is sent at all when it is the one answering.
 - **Saved translations stay on your PC** (`%AppData%\PWRUHelper`). About tab → **Clear cache** empties them.
 - **No game memory, no injection, no automation.** It takes a picture of the area you chose and puts text on your clipboard for *you* to paste. Nothing an anti-cheat cares about.
 
@@ -138,7 +139,7 @@ Code signing, winget and hashes: [`packaging/DISTRIBUTION.md`](packaging/DISTRIB
 
 ## License
 
-[MIT](LICENSE) — free to use, modify and share.
+[MIT](LICENSE) — free to use, modify and share. Optional offline engine files are MPL-2.0 (Mozilla) — see [`packaging/`](packaging/NOTICE-offline-engine.md).
 
 <div align="center">
 <sub>Fan-made. Not affiliated with Perfect World or pwonline.ru.</sub>

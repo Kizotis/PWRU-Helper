@@ -250,7 +250,7 @@ public partial class MainWindow
     /// a chain needs gates, and this file may not name <c>ProviderGates</c> (TP-START-02). Since
     /// E4.S4 it needs the shared cache store too, and the same rule applies for the same reason —
     /// the builder returns the chain already decorated, so this file names neither.</para></summary>
-    private ITranslator BuildWriteChain() => TranslationChains.BuildWrite(_settings);
+    private ITranslator BuildWriteChain() => TranslationChains.BuildWrite(_settings, _offlineTier);
 
     private void DeepLSaveKey_Click(object sender, RoutedEventArgs e)
     {
@@ -288,8 +288,8 @@ public partial class MainWindow
     /// on the read side too.</para></summary>
     private void RebuildReadChains()
     {
-        _readTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Background, out _readChain);
-        _readOnceTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Interactive);
+        _readTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Background, out _readChain, _offlineTier);
+        _readOnceTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Interactive, _offlineTier);
     }
 
     /// <summary>
@@ -727,9 +727,16 @@ public partial class MainWindow
         EnginesPausesText.Text = UserMessages.AboutEnginesPauses();
         FirstLaunchExpectationText.Text = UserMessages.FirstLaunchExpectation();
         KeysIntroText.Text = UserMessages.AboutKeysIntro();
-        OfflineEngineText.Text = UserMessages.AboutOfflineNotInstalled();
+        // The offline block's row and button are NOT set here any more (E8.S3): they have two states
+        // and a transient third, so they belong to UpdateOfflineEngineUi, which ApplySettings calls
+        // explicitly a few lines later (I12). A Content attribute or a one-shot assignment here
+        // would be a second spelling of a label that changes.
         CachePrivacyText.Text = UserMessages.CachePrivacyLine();
         ClearCacheButton.Content = UserMessages.ClearCacheLabel();
+        // …and the offline block's ONE label that does not change: Cancel is Cancel whether it is
+        // visible or not, so it belongs with the static copy rather than in UpdateOfflineEngineUi,
+        // which would rewrite it on every restore for no reason.
+        OfflineCancelButton.Content = UserMessages.OfflineCancelLabel();
     }
 
     /// <summary>

@@ -434,8 +434,14 @@ public class PausedStateTests
         Assert.Contains("_overlay?.EndToast();", main, StringComparison.Ordinal);
         Assert.Equal(1, Occurrences(main, "_overlay?.EndToast()"));
 
-        // Two timers in the main window and one in the overlay, and this story added none of them.
-        Assert.Equal(2, Occurrences(main, "new() { Interval ="));
+        // The main window's timers, counted exactly so a fourth has to be a decision. THIS story
+        // added none of them: the toast timer and the 1 Hz countdown are E7's, and the third is
+        // E8.S4's one-shot idle unload — armed by StopLive, fired once, stopped by its own handler,
+        // and deliberately NOT a third question on the countdown's stop rule (which is the bug
+        // E7.S2's review flagged). §2.4's "one DispatcherTimer for the whole app" is about one
+        // COUNTDOWN, as `_countdownTimer`'s own remark says, not one timer in the process.
+        Assert.Equal(3, Occurrences(main, "new() { Interval ="));
+        Assert.Equal(1, Occurrences(main, "private readonly DispatcherTimer _offlineIdleTimer ="));
         Assert.Equal(1, Occurrences(Code(File.ReadAllText(RepoFile("CompactOverlay.xaml.cs"))),
                                     "DispatcherTimer"));
     }
@@ -512,8 +518,16 @@ public class PausedStateTests
         Assert.Contains("if (notice is not null && !string.Equals(notice, _lastStateNotice, StringComparison.Ordinal))",
                         body, StringComparison.Ordinal);
         Assert.Contains("_lastStateNotice = notice;", body, StringComparison.Ordinal);
-        Assert.Contains("var notice = StateNotice(status, chip, _chipWasDegraded);", body,
-                        StringComparison.Ordinal);
+        // E8.S3 added AC 2's nudge as a fourth argument, and it rides this same comparison — which
+        // is the whole reason the nudge is safe: it is a sentence a pure function chooses, so it can
+        // never become a dialog or a per-row annotation, and "once, when the state is entered" is
+        // the memory below rather than a new mechanism.
+        // …and E8.S5 added a fifth: which SURFACE is going to render it. S4 is the one state whose
+        // sentence differs between the Translator tab and the LIVE status line (§2.2's table), and
+        // the choice is made where the state is rather than by the writer downstream.
+        Assert.Contains(
+            "var notice = StateNotice(status, chip, _chipWasDegraded, _offlineInstalled, _liveCts != null);",
+            body, StringComparison.Ordinal);
     }
 
     /// <summary>

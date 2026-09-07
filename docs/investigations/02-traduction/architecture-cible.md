@@ -154,7 +154,8 @@ flowchart TB
 | `GoogleGtxTranslator` | `Services/GoogleGtxTranslator.cs` | Today's `TranslationService`, renamed, demoted to a late tier, typed errors. | Being the default. |
 | `AzureTranslator` | `Services/AzureTranslator.cs` | Azure AI Translator F0/S1 over raw `HttpClient`. | — |
 | `DeepLTranslator` | `Services/DeepLTranslator.cs` | Unchanged behaviour; error construction goes through `Kind`. | Ever being reachable from the read path (I8). |
-| `BergamotTranslator` | `Services/BergamotTranslator.cs` | **Prototype only.** Lazy model load, idle unload, synchronous native call on `Task.Run`. | Shipping before the measured go/no-go (§7.6). |
+| `BergamotTranslator` | `Services/BergamotTranslator.cs` | **Prototype only.** Lazy model load, idle unload, synchronous native call on `Task.Run`. **Landed E8.S2** (prototype branch): the provider alone — `Load()`/`Unload()`/`IsLoaded` are the capability, the store is E8.S3, the chain placement is E8.S5. The *policy* landed **E8.S4** as `Services/BergamotLifetime.cs` (A-1(b), see §7.6 constraint 2): the provider calls it, owns no timer and decides nothing. | Shipping before the measured go/no-go (§7.6). Calling `ProviderGate.TryEnter` (a local engine takes no admission token) or writing `NotSent` (ruling E8-c). |
+| `IBergamotEngine` | `Services/BergamotEngine.cs` | **Landed E8.S2.** The three C exports as an interface — `translator_initialize` (the factory), `translator_translate`, `translator_free` — with `BergamotEngine` wrapping `BlockingService` and a fake standing in for it in every automated case of epic E8 (CI-8: no model download, no native DLL in CI). | Widening it: it is a P/Invoke surface, not an abstraction layer. |
 | `TextChunker` | `Services/TextChunker.cs` | `ChunkText` / `HardSplit`, moved out of `TranslationService` because two providers need them. | — |
 
 ---
@@ -714,16 +715,60 @@ Architectural constraints, all load-bearing:
 2. **Lazy load on first fallback use, unload after `IdleUnloadMinutes` (10, [ASSUMED]).** One model is ~85 % of the
    app's entire current working set; a RU↔FR pivot needs two models resident, ≈ 250–310 MiB. Never at startup
    (I10), never always-on.
+   > **Superseded by A-1(b), landed E8.S4.** The unload half as written above is wrong for a LIVE session: a loop
+   > whose every online tier is inside a 30-minute gate window has no offline translation for half an hour, and
+   > "unload after ten idle minutes" would free the model in the middle of it and pay the init again on resume.
+   > The rule is now: **loaded on first fallback use; kept loaded for the whole LIVE session however long the gap;
+   > unloaded only after LIVE stops AND `IdleUnloadMinutes` elapses.** The plain idle-unload above still governs
+   > when LIVE is not running, which is the Translator tab's case. The policy is `Services/BergamotLifetime.cs` —
+   > `Func<bool> liveIsRunning`, an injected clock, one predicate — and it is consulted from two places: the
+   > provider itself, on every call (free, and it covers the session), and **one one-shot `DispatcherTimer` armed
+   > by `StopLive`** (the tail, which no call can reach because it happens after the last one). E7's 1 Hz countdown
+   > stop rule was deliberately **not** widened for it. The lazy-load half is unchanged and I10 still binds:
+   > nothing here loads anything, ever — this policy can only unload.
 3. **`BlockingService.Translate` is synchronous** → always `Task.Run`, never the UI thread.
-4. **Ship the native DLL beside the exe, not inside the single-file bundle.** Bundling re-arms
-   `IncludeNativeLibrariesForSelfExtract` extraction to `%TEMP%\.net\…` on first run — the exact mechanism
-   implicated in P1. This conflicts directly with the portable build's "one file" promise and with
-   `PublishFlagsTests.cs:62-70`, which enforces flag parity across the three build paths.
+4. **Download the native DLL with the models; ship it neither inside the single-file bundle nor beside the exe.**
+   Bundling re-arms `IncludeNativeLibrariesForSelfExtract` extraction to `%TEMP%\.net\…` on first run — the exact
+   mechanism implicated in P1 — and a second file beside the exe breaks the portable build's "one file" promise
+   and needs the flag handled differently per build path, which `PublishFlagsTests.cs:62-70` refuses.
+   > **Decision E8.S6 (2026-09-07), settled by construction.** This clause originally read *"ship the native DLL
+   > beside the exe"*, which is layout **B** — the one layout that breaks the non-negotiable promise. What ships is
+   > layout **C**: `<PackageReference … ExcludeAssets="native" />` keeps the 22,460,928 B asset out of every build
+   > output, `OfflineModelStore` downloads it with the models into `%LocalAppData%\PWRUHelper\models\`, and
+   > `BergamotEngine`'s `NativeLibrary.SetDllImportResolver` loads it from there after re-checking its SHA-256.
+   > Cost: **9,728 B** of managed binding in the exe. `%TEMP%\.net\PWRUHelper\<id>` stays at **5 files,
+   > 8,214,968 B** — the P1 mechanism is **not** re-armed. **No build file changed and `PublishFlagsTests` is
+   > untouched**, so CI-7's "only with a measurement behind it" carve-out is unspent. Layouts A and B were not
+   > built: each loses by construction, and a layout excluded by a hard constraint does not become admissible by
+   > measuring well. Table and reasoning: `03-stories/spikes/U6-U7-bergamot.md` §9. MPL-2.0 (constraint 8, NFR10)
+   > is discharged where the bytes are — `packaging/LICENSE-MPL-2.0.txt` and `packaging/NOTICE-offline-engine.md`
+   > ship as assets of the `offline-engine-v1` release; the owner's procedure is
+   > `packaging/offline-engine-release.md`.
 5. **Model download needs an allowlist entry.** `UpdateService` trusts only `github.com` / `githubusercontent.com`;
    keep that allowlist and mirror the models on a GitHub release rather than widening it.
 6. **Explicit consent before the first download** (~30 MB per direction) and a RAM-budget check.
 7. Two failure modes only — *model not downloaded* and *init failed* — both returning a `(`-prefixed placeholder so
    nothing is cached (I4). It cannot time out, so I3 does not apply to this leg.
+   > **Ruling E8-c (landed in E8.S2).** This clause was written before E1 landed the typed errors and E3 landed
+   > the chain. Read literally it would have this provider *return* a placeholder, which nothing in the app does
+   > any more. What it protects is **I4 — nothing failed is ever cached** — so both failure modes **throw**
+   > `TranslationException(Unavailable, …, providerId: bergamot)` and additionally **report to the provider's
+   > gate**, which opens a soft window `ChainTranslator` skips the tier for. That is *stronger* than the
+   > placeholder: `CachingTranslator` is never handed a value at all. **Every** failure reports, not only the
+   > two that happen before the engine is up: a loaded-but-broken engine with no breaker is re-asked on every
+   > LIVE tick, and the gate window is this provider's only "the engine is broken" cache (there is deliberately
+   > no `_initFailed` bool). Its pair is `ReportSuccess` on the success path, without which §5.3's soft strike
+   > count is cumulative-for-ever instead of consecutive. A failure that says the engine is *gone*
+   > (`Unavailable`) also drops the handle, so the tier can recover inside the session.
+   > **What this does not buy, and E8.S5 must know it:** a provider forbidden `TryEnter` (T3) never takes a
+   > half-open probe, and only a probe's success closes a gate — so once `bergamot` has reported a failure its
+   > `GateState` reads `Open` for the rest of the process even after the window elapses and the tier is being
+   > called again. The chain is correct (it skips only while `BlockedUntil > now`); E7's **chip** is what would
+   > read "paused" for a working tier. Neither mode sets `NotSent` —
+   > `HttpProviderCore` stays its only writer (ruling E3-b), because the flag means "no request left the machine",
+   > which is a statement about a request a local engine never makes. The I3 half is unchanged and is now written
+   > in the code: no `HttpClient`, no timeout, so no OCE with a live token — and the `when (ct.IsCancellationRequested)`
+   > filter is written anyway, because a bare catch is wrong even where it would be harmless.
 8. **MPL-2.0 enters the licence tree** (DLL, models, wrapper) and belongs in the About tab. File-level copyleft is
    compatible with shipping alongside an MIT app; it is still a second licence, and the owner has chosen SignPath
    Foundation, which requires the app itself to stay OSI-licensed (MIT).
@@ -1185,8 +1230,8 @@ a very different support cost.
 | **U3** | Does `client=dict-chrome-ex` survive the app's *real* sustained load — hours, not 20 requests, on ≥ 2 networks? (`benchmark…` OQ-1) | how much the endpoint switch is actually worth | Instrumented soak on a branch, ~2 req/s for ≥ 2 h. The gate makes a failure survivable rather than fatal, which is the point. |
 | **U4** | Is Azure F0's 2 M chars/month genuinely **permanent**? (`benchmark…` OQ-4) | the settings copy — we must not promise "free forever" | Check the portal on a real F0 resource. |
 | **U5** | Do existing DeepL `:fx` keys still work after the July 2026 plan change? (`benchmark…` OQ-3) | what the DeepL settings row tells current users | One user with an old key, or a DeepL support ticket. |
-| **U6** | Bergamot RAM and latency on the **slow** P1 machines, not one dev laptop (`benchmark…` OQ-8b) | the Bergamot go/no-go | Same harness, run during the P1 measurement campaign. |
-| **U7** | Does shipping `bergamot.dll` beside the exe actually avoid the `%TEMP%` self-extraction? (`benchmark…` OQ-8c) | whether the offline path costs a P1 regression | Publish both ways, compare cold start. |
+| **U6** | Bergamot RAM and latency — **dev-box half SETTLED 2026-09-07** (E8.S1, `03-stories/spikes/U6-U7-bergamot.md`); the **slow** P1 machines remain open (`benchmark…` OQ-8b) | the Bergamot go/no-go | **GO on the dev box: init 82.5 ms · 8.34 ms/line (3.75 HTML-batched) · 120–266 lines/s · +121.0 MiB working set while active · +6.0 MiB after `Dispose`, i.e. the native pool IS returned** — so A-1(b)'s "unloaded after LIVE stops" is implementable. **Two findings the gate never asked for:** the process **commits +367 MiB** (`PrivateMemorySize64`) against 121 MiB resident, and it is as untunable as RSS (`workspace: 8` ⇒ +368.5 MiB); and §10's slang table **does not reproduce** against the shipping `Data/slang.json` — only 4 of 46 entries carry a `full` form, so 12 of 20 lines are identical before and after `Expand`. Open half: the same harness on the P1 machines, reading the **private-bytes** column too — E8.S7. |
+| **U7** | ~~Does shipping `bergamot.dll` beside the exe actually avoid the `%TEMP%` self-extraction?~~ — **SETTLED 2026-09-07** (E8.S1, same spike) | whether the offline path costs a P1 regression | **Yes, and it costs nothing.** The package referenced with `ExcludeAssets="native"` still builds and still runs; `bergamot.dll` is resolved from a plain downloaded directory by `NativeLibrary.SetDllImportResolver`. Measured in the same run: the DLL is **not** in the build output, the portable exe is **187,631,934 B — unchanged, 0 B of growth**, and `%TEMP%\.net\PWRUHelper\<id>` is still **5 WPF native DLLs, 8,214,968 B**. §7.6 constraint 4 is answered: the P1 self-extraction mechanism is **not** re-armed. The bundled layout was deliberately not published; the A/B cold-start pair, if wanted, is **E8.S6**, which owns the decision. **CLOSED by E8.S6 (2026-09-07): layout C ships and the A/B pair was not built** — A re-arms the P1 mechanism by design and B breaks the non-negotiable "one file" promise by design, so neither is admissible whatever it would have measured. Cost of C: **9,728 B** of managed binding in the exe against **22,460,928 B** avoided; `%TEMP%` unchanged; no build file touched and `PublishFlagsTests` unchanged, so CI-7's carve-out is unspent. Cold start is identical to today's by construction (same bytes ±0.005 %) and E8.S7's field run re-confirms it on the owner's machine. Table: `03-stories/spikes/U6-U7-bergamot.md` §9; §7.6 constraint 4 rewritten to match. |
 | **U8** | ~~The cost of loading a 2000-entry cache file, measured against G6~~ — **SETTLED 2026-09-07** (E4.S3, `03-stories/spikes/U8-cache-load.md`) | the cache capacity | **981 KB, 17.8 ms, ≈1 MB of heap, warm, on the first miss's own thread ⇒ capacity 2000 stands and is now `[MEASURED]`.** The spike also found the file 3.3× the estimate (Cyrillic `\uXXXX` escaping) and raised `MaxBytes` 1 MB → 4 MB; **E4.S5 then fixed the escaping** (non-escaping encoder ⇒ **277 B/entry, 541 KB, 9.7 ms**, U8 §8) and left the bound at 4 MB. Open half: the cold, Defender-only personal machine — owner's hand-off, does not gate A.2. |
 | **U9** | Are the §5.6 windows right? 60 s / ×2 / 30 min cap / 10 min clean reset are all **[ASSUMED]**, calibrated to a REPORTED range | nothing — they ship, instrumented | Field logs from increment 1, then tuned. This is deliberate: instrument first, tune after. |
 
@@ -1249,7 +1294,7 @@ blaming the key. A test never clears a gate — ruling E2-i gives that to a key 
 | `EdgeTranslator` | `Services/EdgeTranslator.cs` | `edge.microsoft.com/translate/translatetext`, keyless — the independent vendor. |
 | `GoogleGtxTranslator` | `Services/GoogleGtxTranslator.cs` | The old `TranslationService`, renamed and demoted to the last free tier. **Landed E3.S6.** |
 | `AzureTranslator` | `Services/AzureTranslator.cs` | Azure AI Translator over raw `HttpClient`, native array batching. |
-| `BergamotTranslator` | `Services/BergamotTranslator.cs` | **Prototype only.** Offline terminal fallback; per amendment A-1 (§7.6): one-click install, loaded on first fallback use and kept loaded while LIVE runs, unloaded after LIVE stops + idle timeout. |
+| `BergamotTranslator` | `Services/BergamotTranslator.cs` | **Landed E8.S2/S4/S5, shipped v0.15.2.** Optional offline terminal fallback, last in both chains behind `OfflineTierIsAvailable` (setting **and** the store's installed answer); per amendment A-1 (§7.6): one-click install, loaded on first fallback use and kept loaded while LIVE runs, unloaded after LIVE stops + idle timeout. |
 | `TextChunker` | `Services/TextChunker.cs` | `ChunkText` / `HardSplit`, moved out of the renamed provider because two providers need them. **Landed E3.S6**, verbatim; the byte budget stays `TranslationPolicy.MaxQueryBytes`, passed in. |
 | `ChainTranslator.LastOutcome` | `Services/ChainTranslator.cs` (nested record) | _Added by ruling R-3._ Immutable `{ProviderId, Skipped: [(ProviderId, Reason)], RetryAt?, Kind?}` set after every call; the code-behind reads it to name the answering provider and the skip reason (UX states S2/S3). `ITranslator` unchanged (I1). |
 | `ProviderGate.Snapshot()` | `Services/ProviderGate.cs` | _Added by rulings OQ-c / R-2._ Immutable `{State, BlockedUntil, Strikes, LastKind}`; the UI polls it at 1 Hz from the countdown timer. No events leave `Services/`. |

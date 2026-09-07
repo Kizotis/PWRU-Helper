@@ -1308,6 +1308,102 @@ public class ProviderGateTests
                      tryEnter.GetParameters().Select(p => p.ParameterType));
     }
 
+    // ---- ruling E8-e: a LOCAL provider closes its own gate ------------------------------------
+
+    /// <summary>
+    /// <b>The bug the ruling names.</b> A local engine never calls <see cref="ProviderGate.TryEnter"/>
+    /// — there is no endpoint to be polite to — so nothing ever hands it a probe token, so nothing
+    /// could ever close its gate: after one failure the state read <c>Open</c> for the rest of the
+    /// process (it outlives its window on purpose, ruling E3-a) and E7's chip said "paused" about an
+    /// engine answering every line. The first success after the window closes it.
+    /// </summary>
+    [Fact]
+    public void E8_e_A_local_success_after_the_window_closes_the_gate()
+    {
+        var (gate, clock) = NewGate();
+        gate.ReportFailure(TranslationErrorKind.Unavailable);
+
+        var blocked = gate.Snapshot().BlockedUntil;
+        Assert.NotNull(blocked);
+        Assert.Equal(GateState.Open, gate.Snapshot().State);
+
+        // Inside the window nothing changes: the chain skips the tier there, so a success can only
+        // come from a caller that went round it, and that is not evidence the window was wrong.
+        gate.ReportSuccess(selfHealing: true);
+        Assert.Equal(blocked, gate.Snapshot().BlockedUntil);
+        Assert.Equal(GateState.Open, gate.Snapshot().State);
+
+        // The window elapses. The state still reads Open — that is E3-a, and it is what the chip
+        // would render as "paused" for ever.
+        clock.Advance(Base + TimeSpan.FromSeconds(1));
+        Assert.Equal(GateState.Open, gate.Snapshot().State);
+
+        gate.ReportSuccess(selfHealing: true);
+
+        Assert.Equal(GateState.Closed, gate.Snapshot().State);
+        Assert.Null(gate.Snapshot().BlockedUntil);
+        Assert.Equal(0, gate.Snapshot().Strikes);
+    }
+
+    /// <summary>
+    /// <b>And the HTTP gates are untouched</b>, which is the other half of the ruling: the flag is
+    /// <c>false</c> by default and no HTTP provider passes it, so for a remote endpoint only the
+    /// probe's own report may end a window (E2-h). Same sequence as the case above, without the
+    /// flag: the gate stays Open and still hands out a probe.
+    /// </summary>
+    [Fact]
+    public void E8_e_An_ordinary_success_after_the_window_still_leaves_the_probe_to_close_it()
+    {
+        var (gate, clock) = NewGate();
+        gate.ReportFailure(TranslationErrorKind.RateLimited);
+        clock.Advance(Base + TimeSpan.FromSeconds(1));
+
+        gate.ReportSuccess();                                   // an HTTP 200: no token, no flag
+
+        Assert.Equal(GateState.Open, gate.Snapshot().State);
+        Assert.NotNull(gate.Snapshot().BlockedUntil);
+
+        // …and the ordinary way out is still the probe, exactly as E2-h leaves it.
+        var probe = TakeProbe(gate, clock);
+        gate.ReportSuccess(probe);
+        Assert.Equal(GateState.Closed, gate.Snapshot().State);
+    }
+
+    /// <summary>An outstanding probe still owns the latch: a self-healing report may not resolve
+    /// somebody else's half-open window. It cannot happen with one local provider on one gate, and
+    /// it is asserted anyway — the flag is a parameter, and a parameter reaches whoever passes
+    /// it.</summary>
+    [Fact]
+    public void E8_e_A_self_healing_success_never_steals_an_outstanding_probe()
+    {
+        var (gate, clock) = NewGate();
+        gate.ReportFailure(TranslationErrorKind.RateLimited);
+        var probe = TakeProbe(gate, clock);
+
+        gate.ReportSuccess(selfHealing: true);
+
+        Assert.Equal(GateState.HalfOpen, gate.Snapshot().State);
+        Assert.NotNull(gate.Snapshot().BlockedUntil);
+
+        gate.ReportSuccess(probe);
+        Assert.Equal(GateState.Closed, gate.Snapshot().State);
+    }
+
+    /// <summary>The <c>AuthFailed</c> sentinel is <see cref="DateTimeOffset.MaxValue"/> and never
+    /// elapses, so no success of any kind can wash it out — its exit is re-saving the key (E2-a).
+    /// A local engine cannot earn one, and the guard is written rather than assumed.</summary>
+    [Fact]
+    public void E8_e_The_AuthFailed_sentinel_is_not_something_a_success_can_heal()
+    {
+        var (gate, clock) = NewGate();
+        gate.ReportFailure(TranslationErrorKind.AuthFailed);
+
+        clock.AdvanceMinutes(TranslationPolicy.OpenCapMinutes * 10);
+        gate.ReportSuccess(selfHealing: true);
+
+        Assert.Equal(DateTimeOffset.MaxValue, gate.Snapshot().BlockedUntil);
+    }
+
     // ---- ruling E2-h: the probe carries an identity -------------------------------------------
 
     [Fact]
