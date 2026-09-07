@@ -24,9 +24,10 @@ namespace PWRUHelper.Services;
 /// numbers with its token bucket (E2.S3), and the two retry numbers with <c>HttpProviderCore</c>
 /// (E2.S5), which is also where the two "…Today" retry constants stopped describing today and were
 /// retired, and <c>PerLineCap</c> arrived with E3.S8's shared per-line loop. <c>CacheCapacity</c>
-/// arrived with E4.S1's <c>TranslationCacheStore</c>, whose default it is. The rest (the LIVE
-/// numbers, the cache's save debounce …) still arrive with the code that reads them — E4.S2 for the
-/// cache file, E5 for LIVE — because an unused constant is a constant nobody grades.
+/// arrived with E4.S1's <c>TranslationCacheStore</c>, whose default it is, and
+/// <c>CacheSaveDebounceMs</c> with E4.S2's cache file. The rest (the LIVE numbers …) still arrive
+/// with the code that reads them — E5 for LIVE — because an unused constant is a constant nobody
+/// grades.
 /// Source: <c>docs/investigations/02-traduction/architecture-cible.md</c> §5.6 (the target table),
 /// §4.3 (the HTML markers).
 /// </summary>
@@ -56,6 +57,19 @@ internal static class TranslationPolicy
     // settles it is U8 (E4.S3) measuring the load cost of a full file against G6's startup budget,
     // and the memory it costs once loaded.
     public const int CacheCapacity = 2000;
+
+    /// <summary>How long <see cref="TranslationCacheStore"/> waits after a store before it writes
+    /// <c>translation-cache.json</c>, coalescing every store inside the window into one write
+    /// (§8.2). Five seconds and not one: a LIVE tick stores several entries a second, and the file
+    /// is two orders of magnitude larger than <c>provider-state.json</c> — whose 1 s window
+    /// (<c>ProviderGates.SaveDebounceMs</c>) covers a handful of bytes on a rare transition, not
+    /// 300 KB on a hot path. The window is fixed from the FIRST pending store rather than restarted
+    /// by each one, so a busy minute cannot postpone the write for ever; a close inside the window
+    /// is covered by <c>SaveNow()</c> on the <c>OnClosing</c> path.</summary>
+    // [ASSUMED] architecture-cible.md §8.2 ("save debounced ~5 s, plus one on exit"); never
+    // measured. What would settle it is U8 (E4.S3) timing a full 2000-entry write against the
+    // storage a real user has, and field reports of the app being closed mid-window.
+    public const int CacheSaveDebounceMs = 5000;
 
     /// <summary>The text travels in a GET query string, so it is chunked to stay well under
     /// typical URL limits.</summary>

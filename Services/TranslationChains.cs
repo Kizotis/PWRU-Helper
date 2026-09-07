@@ -35,9 +35,48 @@ namespace PWRUHelper.Services;
 /// <para><b>I2</b>: no WPF type, no dispatcher, no <c>MessageBox</c> — it reads
 /// <see cref="AppSettings"/> and constructs providers, which is what lets the I8 test assert on a
 /// <b>built chain</b> without a window.</para>
+///
+/// <para><b>It also owns the shared cache</b> (E4.S2), for the same reason it owns the tier lists:
+/// so the code-behind names a chain and never a store. <see cref="FlushCache"/> is the one line
+/// <c>MainWindow.OnClosing</c> adds, beside <c>ProviderGates.Flush()</c>.</para>
 /// </summary>
 internal static class TranslationChains
 {
+    private static readonly object CacheGate = new();
+    private static TranslationCacheStore? _cache;
+
+    /// <summary>
+    /// The one persistent <see cref="TranslationCacheStore"/> of the process — §8.2's "one shared
+    /// cache behind the read chain, the read-once chain and the write chain" (decision F).
+    ///
+    /// <para><b>Nothing passes it to a decorator yet, and that is deliberate.</b> E4.S4 is the
+    /// one-line flip: the three <c>new CachingTranslator(…)</c> call sites gain this argument and
+    /// the three private 500-entry stores go away. Until then the three private stores stay
+    /// non-persistent (<c>TranslationCacheStore</c>'s <c>persistent</c> parameter defaults to
+    /// false), because three of them pointed at one file would spend a session overwriting each
+    /// other — so A.2 behaves exactly as it did, and <see cref="FlushCache"/> below has nothing to
+    /// write until the flip.</para>
+    ///
+    /// <para>Built on demand rather than in a static field: a persistent store is still I/O-free
+    /// until its first miss (I10), but constructing one at type-load would put the decision on
+    /// whatever path happened to touch this class first.</para>
+    /// </summary>
+    internal static TranslationCacheStore Cache
+    {
+        get { lock (CacheGate) return _cache ??= new TranslationCacheStore(persistent: true); }
+    }
+
+    /// <summary>
+    /// Write the cache if a store has anything pending — <c>MainWindow.OnClosing</c>'s one line, so
+    /// the last five seconds of a session are not lost to the debounce window (AC 2). It is a
+    /// facade on purpose: the code-behind names a chain, not a store, exactly as it names this
+    /// class instead of <c>ProviderGates</c> for the tier lists.
+    ///
+    /// <para><c>?.</c> and not <see cref="Cache"/>: closing an app that never translated must not
+    /// be the thing that builds a cache.</para>
+    /// </summary>
+    internal static void FlushCache() => Volatile.Read(ref _cache)?.SaveNow();
+
     /// <summary>
     /// The READ chain — OCR read-once and the LIVE feed (<c>MainWindow.Live.cs</c>,
     /// <c>MainWindow.Ocr.cs</c>). Free tiers only, in §8.1's order.

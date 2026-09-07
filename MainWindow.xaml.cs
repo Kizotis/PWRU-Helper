@@ -267,6 +267,16 @@ public partial class MainWindow : Window
         // neither save may be skipped because the other threw.
         ProviderGates.Flush();
 
+        // …and the translation cache that is still inside its 5-second debounce, so a session's
+        // last few translations survive the restart instead of being re-earned (E4.S2,
+        // architecture §8.2). Same shape and same reasoning as the line above it: one bounded
+        // synchronous write, outside the settings try/catch because neither save may be skipped
+        // because the other threw; no control, no binding, so _restoringSettings is not engaged.
+        // The facade, not the store: TranslationChains already owns the composition the code-behind
+        // is not allowed to name (ruling E3-c), and it owns the shared cache for the same reason.
+        // Until E4.S4 hands that store to the three decorators this call has nothing to write.
+        TranslationChains.FlushCache();
+
         try
         {
             var s = _settings;

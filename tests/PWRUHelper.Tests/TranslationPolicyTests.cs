@@ -84,8 +84,9 @@ public class TranslationPolicyTests
     [Fact]
     public void The_numbers_are_the_ones_the_code_uses_today()
     {
-        // The numbers the code really runs on. The remaining §5.6 targets (the LIVE ones, the cache's
-        // save debounce …) are deliberately absent until the code that reads them exists.
+        // The numbers the code really runs on. The remaining §5.6 targets (the LIVE ones) are
+        // deliberately absent until the code that reads them exists; the cache's save debounce
+        // stopped being one of them with E4.S2's file.
         Assert.Equal(12, TranslationPolicy.RequestTimeoutSeconds);
         // E2.S5 replaced MaxAttemptsToday = 3 / RetrySpacingBaseMs = 300 with §5.6's targets, in
         // the same commit that changed the loop — E1.S1 said it would. The literals are the point
@@ -94,6 +95,9 @@ public class TranslationPolicyTests
         Assert.Equal(2, TranslationPolicy.MaxAttempts);
         Assert.Equal(500, TranslationPolicy.BackoffBaseMs);
         Assert.Equal(500, TranslationPolicy.CacheCapacityToday);
+        // E4.S2's debounce window. Five seconds and not the gate file's one: this file is two
+        // orders of magnitude larger and a LIVE tick stores several entries a second.
+        Assert.Equal(5000, TranslationPolicy.CacheSaveDebounceMs);
         // E4.S1 split the two: 2000 is the shared TranslationCacheStore's capacity, 500 stays the
         // default of the CachingTranslator constructor that has no store (asserted by reflection
         // below). Listed here because this number is behaviour a user can feel — it decides how much
