@@ -63,8 +63,10 @@ public class AzureTranslatorTests : GatesTestBase
         Assert.Contains("\"error\"", Fixture("azure-error-auth.json"));
         Assert.Contains("quota", Fixture("azure-error-quota.json"));
 
-        // IS-9's budget (CI-6) is 64 KB for the whole folder; the Azure additions are a rounding
-        // error against it, and this is the assert that keeps them one.
+        // CI-6's 64 KB budget is over the WHOLE folder and is asserted once, in
+        // ProviderErrorMapperTests (`The_fixtures_ship…`). This is the narrower guard that keeps
+        // the Azure share of it a rounding error, so a fixture pasted from a live capture fails
+        // here — next to the shapes it belongs with — rather than only when the folder budget goes.
         var bytes = Directory.EnumerateFiles(FixtureDir(), "azure-*.json").Sum(f => new FileInfo(f).Length);
         Assert.InRange(bytes, 1, 4096);
     }
@@ -127,7 +129,10 @@ public class AzureTranslatorTests : GatesTestBase
         var call = Assert.Single(fake.Calls);
         Assert.Equal("?api-version=3.0&to=en", call.Uri.Query);
         Assert.DoesNotContain("from=", call.Uri.Query, StringComparison.Ordinal);
-        Assert.All(outp, t => Assert.DoesNotContain("ru", t, StringComparison.Ordinal));
+        // "Read past" only means something if there was something to read past: the fixture really
+        // carries a detection, and what comes back is exactly the `text` values — no language, no
+        // score, nothing the caller did not ask for (I7).
+        Assert.Contains("""{"language":"ru","score":1.0}""", Fixture("azure-auto.json"));
     }
 
     /// <summary>The two code mappers, at the unit level: plain ISO codes, never DeepL's
@@ -248,6 +253,38 @@ public class AzureTranslatorTests : GatesTestBase
         Assert.Equal(requests, fake.Requests);   // only a 5xx is worth a second attempt (§5.6)
     }
 
+    /// <summary>
+    /// The status §7.5's table does <b>not</b> name, pinned because this provider can now produce
+    /// one: the batch split sends a single text longer than
+    /// <see cref="TranslationPolicy.AzureMaxCharsPerRequest"/> <b>alone</b> rather than cutting it,
+    /// and Azure answers a request over its limits with a 400.
+    ///
+    /// <para>§4.2 has no row for a 400, so row 13 answers — <c>Unknown</c>, "never a guess" — and
+    /// that is the right answer rather than a gap: it is deliberately <b>not</b> a
+    /// <c>BadResponse</c>, which means "a 200 whose body is not our shape" and spends one of the
+    /// three strikes §5.3 counts before it opens the gate. It is not retried (§5.6 retries only
+    /// <c>Unavailable</c> and <c>Timeout</c>), and because <c>UserMessages.Sentence(Unknown)</c> is
+    /// §4.4's deliberate pass-through, what the player reads is this provider's OWN account of the
+    /// status — never the vendor's <c>message</c>, which is the half of §7.5 that is a rule.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_400_is_the_row_the_table_does_not_name()
+    {
+        const string vendorMessage = "The target language is not valid.";
+        var fake = new FakeHandler().Respond(HttpStatusCode.BadRequest,
+            "{\"error\":{\"code\":400036,\"message\":\"" + vendorMessage + "\"}}");
+
+        var ex = await Assert.ThrowsAsync<TranslationException>(
+            () => Azure(fake).TranslateAsync("привет", "ru", "en"));
+
+        Assert.Equal(TranslationErrorKind.Unknown, ex.Kind);
+        Assert.Equal(ProviderIds.Azure, ex.ProviderId);
+        Assert.Equal(1, fake.Requests);                      // a 400 is not worth a second attempt
+        Assert.Contains("400", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(vendorMessage, ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(vendorMessage, MainWindow.Friendly(ex), StringComparison.Ordinal);
+    }
+
     /// <summary>§5.5 / ruling E2-f — the server's own <c>Retry-After</c> is honoured by the core,
     /// so this provider needs no handling of its own; the pin is here so a second one is never
     /// added.</summary>
@@ -283,6 +320,53 @@ public class AzureTranslatorTests : GatesTestBase
         Assert.Equal(TranslationErrorKind.AuthFailed, snapshot!.LastKind);
         Assert.Null(ProviderGates.Snapshot(ProviderIds.DeepL));
         Assert.Null(ProviderGates.Snapshot(ProviderIds.GoogleGtx));
+    }
+
+    /// <summary>
+    /// I3, from the outside, on a provider whose class doc makes a point of not owning an OCE
+    /// catch. An <see cref="HttpClient"/> timeout arrives as a <c>TaskCanceledException</c> whose
+    /// token is <b>not</b> cancelled; read as a cancel it disables the fallback and leaves a zombie
+    /// LIVE indicator, which cost this project three releases. The filter lives in
+    /// <see cref="HttpProviderCore"/> and this is what proves the new provider inherits it rather
+    /// than merely not breaking it — and it is the only case that reaches <c>TransportMessage</c>.
+    /// </summary>
+    [Fact]
+    public async Task A_timeout_is_a_Timeout_and_never_a_cancel()
+    {
+        var fake = new FakeHandler().TimesOut();
+
+        var ex = await Assert.ThrowsAsync<TranslationException>(
+            () => Azure(fake).TranslateAsync("привет", "ru", "en"));
+
+        Assert.Equal(TranslationErrorKind.Timeout, ex.Kind);
+        Assert.Equal(ProviderIds.Azure, ex.ProviderId);
+        Assert.Equal(2, fake.Requests);   // unlike a 4xx, a timeout IS worth a second attempt (§5.6)
+        Assert.Contains("Azure", ex.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// §5.4's own sentence — <i>on Open nothing leaves the machine</i> — for the new provider, and
+    /// the only case that reaches <c>PausedMessage</c>. A 429 opens <c>azure</c>'s gate; the next
+    /// instance is refused with <c>NotSent</c> (ruling E3-b) before a socket is touched, which is
+    /// what lets <see cref="ChainTranslator"/> count it as a SKIP rather than as this tier's own
+    /// failure — the distinction E6.S4 depends on when Azure enters the read chain.
+    /// </summary>
+    [Fact]
+    public async Task An_open_gate_refuses_the_next_call_without_sending_anything()
+    {
+        var first = new FakeHandler().Respond(HttpStatusCode.TooManyRequests,
+            Fixture("azure-error-rate.json"));
+        await Assert.ThrowsAsync<TranslationException>(
+            () => Azure(first).TranslateAsync("привет", "ru", "en"));
+
+        var second = new FakeHandler().RespondJson(Fixture("azure-batch.json"));
+        var ex = await Assert.ThrowsAsync<TranslationException>(
+            () => Azure(second).TranslateAsync("привет", "ru", "en"));
+
+        Assert.True(ex.NotSent, "an open gate must refuse before anything is sent");
+        Assert.Equal(0, second.Requests);
+        Assert.Equal(TranslationErrorKind.RateLimited, ex.Kind);
+        Assert.Contains("Azure", ex.Message, StringComparison.Ordinal);
     }
 
     // =============================================================================================
@@ -346,6 +430,67 @@ public class AzureTranslatorTests : GatesTestBase
         finally
         {
             Logging.DirectoryOverride = previous;
+            // The suppression counter is process-static: leaving it where this case left it would
+            // silently thin the next class's lines.
+            RequestLog.ResetSuppression();
+            try { Directory.Delete(dir, recursive: true); } catch { /* the case already made its point */ }
+        }
+    }
+
+    /// <summary>
+    /// TP-PRV-09's <b>other</b> body shape — and the one Azure actually sends. A JSON error
+    /// envelope reaches <b>no field</b> of the §10.1 line: <see cref="RequestLog.BodyHead"/> takes
+    /// markup only, because the provider's own answer carries the user's text and a proxy that
+    /// relabelled it would otherwise walk that text into a report pasted to Discord (I11).
+    ///
+    /// <para>That is also the whole of this story's accepted deviation from AC 3: the envelope's
+    /// own <c>code</c> (401000, 403000, 429001 in the fixtures) cannot be logged without a provider
+    /// that reads a body FOR the log, which is exactly what E1.S5 centralised away. <c>status=401</c>
+    /// is what travels. This case pins both halves of what actually holds — the status is there, and
+    /// neither the vendor's <c>message</c> nor the key is, on the shape where the key is adversarially
+    /// placed with no parameter name in front of it.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_json_error_envelope_reaches_no_field_of_the_log_line()
+    {
+        const string key = "KIZOTIS-AZURE-KEY-2222-3333";
+        const string vendorMessage = "The operation is not allowed because the subscription has exceeded its free quota.";
+        var previous = Logging.DirectoryOverride;
+        var dir = Directory.CreateTempSubdirectory("pwru-azure-json-").FullName;
+        try
+        {
+            Logging.DirectoryOverride = dir;
+            RequestLog.ResetSuppression();
+
+            var envelope = "{\"error\":{\"code\":403000,\"message\":\"" + vendorMessage
+                         + " Credential " + key + " was refused.\"}}";
+            var fake = new FakeHandler().Respond(HttpStatusCode.Forbidden, envelope);
+
+            var ex = await Assert.ThrowsAsync<TranslationException>(
+                () => new AzureTranslator(key, Region, fake).TranslateAsync("привет", "ru", "zx"));
+
+            // The envelope really was read — it is what the quota split classifies on (§4.2 row 6).
+            Assert.Equal(TranslationErrorKind.QuotaExhausted, ex.Kind);
+            Assert.Equal(key, Assert.Single(fake.Calls).Headers["Ocp-Apim-Subscription-Key"]);
+
+            var line = Assert.Single(LinesFor(dir, "ru->zx"));
+            Assert.Contains("status=403", line, StringComparison.Ordinal);
+            // …and none of it travelled: no `body=` at all for a JSON body, so no code, no message.
+            Assert.DoesNotContain("body=", line, StringComparison.Ordinal);
+            Assert.DoesNotContain("403000", line, StringComparison.Ordinal);
+
+            var file = File.ReadAllText(Path.Combine(dir, "log.txt"));
+            Assert.DoesNotContain(key, file, StringComparison.Ordinal);
+            Assert.DoesNotContain(vendorMessage, file, StringComparison.Ordinal);
+            Assert.DoesNotContain(vendorMessage, ex.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(key, MainWindow.Friendly(ex), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Logging.DirectoryOverride = previous;
+            // The suppression counter is process-static: leaving it where this case left it would
+            // silently thin the next class's lines.
+            RequestLog.ResetSuppression();
             try { Directory.Delete(dir, recursive: true); } catch { /* the case already made its point */ }
         }
     }
@@ -370,8 +515,36 @@ public class AzureTranslatorTests : GatesTestBase
             () => new AzureTranslator(key, region, fake).TranslateAsync("привет", "ru", "en"));
 
         Assert.Equal(TranslationErrorKind.AuthFailed, ex.Kind);
+        Assert.Equal(ProviderIds.Azure, ex.ProviderId);
         Assert.Equal(0, fake.Requests);
         Assert.Null(ProviderGates.Snapshot(ProviderIds.Azure));   // and no gate strike either
+    }
+
+    /// <summary>
+    /// The half-entered credential <c>Trim</c> cannot reach: a control character pasted INSIDE the
+    /// key or the region. It has to be refused here because it is refused nowhere else —
+    /// <c>TryAddWithoutValidation</c> is deliberately the only thing that looks at these two values
+    /// — and a header the transport cannot serialise throws something that is neither
+    /// <c>HttpRequestException</c>, <c>IOException</c> nor <c>OperationCanceledException</c>: it
+    /// escapes both of the core's filters, is reported to the gate as <c>Unknown</c> and reaches the
+    /// player as a framework message that can quote the header it choked on.
+    /// </summary>
+    [Theory]
+    [InlineData("azure-key\r\n0000", Region)]
+    [InlineData("azure-key	0000", Region)]
+    [InlineData(Key, "west\neurope")]
+    public async Task A_credential_with_a_control_character_costs_no_request(string key, string region)
+    {
+        var fake = new FakeHandler().RespondJson(Fixture("azure-batch.json"));
+
+        var ex = await Assert.ThrowsAsync<TranslationException>(
+            () => new AzureTranslator(key, region, fake).TranslateAsync("привет", "ru", "en"));
+
+        Assert.Equal(TranslationErrorKind.AuthFailed, ex.Kind);
+        Assert.Equal(0, fake.Requests);
+        Assert.Null(ProviderGates.Snapshot(ProviderIds.Azure));
+        // The sentence is the log's account and names no value (I11).
+        Assert.DoesNotContain(key, ex.Message, StringComparison.Ordinal);
     }
 
     // =============================================================================================
@@ -401,9 +574,23 @@ public class AzureTranslatorTests : GatesTestBase
         Assert.All(byChars, b => Assert.Single(b));
 
         // A single text over the cap travels alone rather than being cut: silently cutting a line
-        // is the failure I5 is about, seen from the other side.
+        // is the failure I5 is about, seen from the other side. (Azure answers such a request with
+        // a 400 — see A_400_is_the_row_the_table_does_not_name for what that becomes.)
         var huge = new string('y', TranslationPolicy.AzureMaxCharsPerRequest + 10);
         Assert.Equal(huge, Assert.Single(Assert.Single(AzureTranslator.Batches(new[] { huge }))));
+
+        // …and it is still one group when the over-cap text has neighbours: the split closes the
+        // group BEFORE adding, so the oversized element opens a group of its own instead of an
+        // empty one being pushed in front of it.
+        Assert.Equal(new[] { 1, 1, 1 },
+            AzureTranslator.Batches(new[] { "a", huge, "b" }).Select(b => b.Count).ToArray());
+
+        // No group is ever empty and no input is ever dropped — including the degenerate list a
+        // caller can build out of blank OCR lines, which costs zero characters and must still be
+        // one POST rather than none.
+        Assert.Empty(AzureTranslator.Batches(Array.Empty<string>()));
+        Assert.All(AzureTranslator.Batches(new[] { "", "", "" }), b => Assert.NotEmpty(b));
+        Assert.Equal(3, AzureTranslator.Batches(new[] { "", "", "" }).Sum(b => b.Count));
     }
 
     /// <summary>…and the split really is one POST per group, concatenated in order.</summary>

@@ -303,6 +303,11 @@ public class RequestLogTests : GatesTestBase
     [InlineData("<p>Rejected: api_key KIZOTIS-DEEPL-KEY-0000-1111</p>", "Rejected:")]
     [InlineData("<p>Bad token=KIZOTIS-DEEPL-KEY-0000-1111</p>", "Bad")]
     [InlineData("<p>Use Bearer KIZOTIS-DEEPL-KEY-0000-1111 instead</p>", "Use")]
+    // E6.S2's shape: Azure names its credential header with a COLON, so none of the markers above
+    // sees it. The header name is the marker, which gives the second keyed provider the same two
+    // layers DeepL has (this cut, and its own ProviderOptions.Secret scrub).
+    [InlineData("<p>Rejected: Ocp-Apim-Subscription-Key KIZOTIS-DEEPL-KEY-0000-1111</p>", "Rejected:")]
+    [InlineData("<p>Bad ocp-apim-subscription-key: KIZOTIS-DEEPL-KEY-0000-1111</p>", "Bad")]
     // The guard the cut must not trip on: prose, not a parameter.
     [InlineData("<p>The monkey= sign is not a key</p>", "The monkey= sign is not a key")]
     public void I11_an_api_key_echoed_by_an_error_page_is_cut_at_the_parameter_name(

@@ -120,7 +120,7 @@ public class AzureTranslator : ITranslator
         // and a blank that reached the caller as a success would be cached as one.
         if (outp.Count != 1)
             throw new TranslationException(TranslationErrorKind.BadResponse,
-                "Azure returned an unexpected response.");
+                "Azure returned an unexpected response.", null, ProviderId);
         return outp[0];
     }
 
@@ -145,7 +145,7 @@ public class AzureTranslator : ITranslator
             // bypassed the fallback AND cached raw Russian source as if it were a translation.)
             if (part.Count != batch.Count)
                 throw new TranslationException(TranslationErrorKind.BadResponse,
-                    "Azure returned an unexpected response.");
+                    "Azure returned an unexpected response.", null, ProviderId);
 
             outp.AddRange(part);
         }
@@ -195,10 +195,38 @@ public class AzureTranslator : ITranslator
         // a guaranteed 401 (§12), and a real 401 costs a gate strike and blocks the provider for a
         // mistake the UI can prevent (E6.S3 prevents it at the Save button) — so it is refused here,
         // where it spends nothing.
+        //
+        // Both of these — and every other throw in this file — name the provider, because these
+        // are the ones the core never sees: they are raised above `SendAsync` (or, for the parser,
+        // rethrown by it unchanged), so nothing downstream can fill the id in. `NotSent` is NOT
+        // set: ruling E3-b gives that flag one writer, `HttpProviderCore.Paused`, and a chain that
+        // read a misconfigured key as "skipped" would keep the player from ever being told the
+        // credential is half-entered. E6.S3 is what keeps this unreachable, by adding the tier only
+        // when both halves are present.
         if (string.IsNullOrEmpty(_key))
-            throw new TranslationException(TranslationErrorKind.AuthFailed, "No Azure API key set.");
+            throw new TranslationException(TranslationErrorKind.AuthFailed, "No Azure API key set.",
+                null, ProviderId);
         if (string.IsNullOrEmpty(_region))
-            throw new TranslationException(TranslationErrorKind.AuthFailed, "No Azure region set.");
+            throw new TranslationException(TranslationErrorKind.AuthFailed, "No Azure region set.",
+                null, ProviderId);
+
+        // …and the third half-entered credential, which `Trim` cannot reach: a value pasted from a
+        // portal with a control character INSIDE it. `TryAddWithoutValidation` is the point below —
+        // it is what keeps the framework's parser out of an opaque vendor value — so nothing else
+        // between here and the socket looks at these two strings. A header value may not carry a
+        // control character, so this one is refused where the refusal is a typed AuthFailed the
+        // chain can fall through, rather than whatever the transport makes of it: that would be
+        // neither HttpRequestException, IOException nor OperationCanceledException, so it would
+        // escape BOTH of the core's filters, be reported as Unknown and reach the player raw.
+        // Neither an Azure key (hex) nor a region (`westeurope`) can legitimately contain one.
+        if (HasControlChar(_key))
+            throw new TranslationException(TranslationErrorKind.AuthFailed,
+                "The Azure API key contains characters that cannot be sent — re-paste it in About.",
+                null, ProviderId);
+        if (HasControlChar(_region))
+            throw new TranslationException(TranslationErrorKind.AuthFailed,
+                "The Azure region contains characters that cannot be sent — re-paste it in About.",
+                null, ProviderId);
 
         var uri = BuildUri(source, target);
         var body = BuildBody(texts);
@@ -226,6 +254,16 @@ public class AzureTranslator : ITranslator
         // line's `bytes=` and `lines=` are counted from, and nothing keeps the text itself.
         return _core.SendAsync(uri, Build, Parse, source, target,
             string.Join("\n", texts), _priority, ct);
+    }
+
+    /// <summary>Anything an HTTP header value may not carry. Control characters only — a
+    /// credential is an opaque vendor string and this is not the place to have an opinion about
+    /// its alphabet; CR and LF are the two that matter and <see cref="string.Trim()"/> only reaches
+    /// them at the ends.</summary>
+    internal static bool HasControlChar(string s)
+    {
+        foreach (var c in s) if (char.IsControl(c)) return true;
+        return false;
     }
 
     /// <summary>`?api-version=3.0&amp;from={src}&amp;to={tgt}`, with <c>from</c> omitted for

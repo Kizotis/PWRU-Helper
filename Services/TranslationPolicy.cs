@@ -1,4 +1,4 @@
-﻿namespace PWRUHelper.Services;
+namespace PWRUHelper.Services;
 
 /// <summary>
 /// Every tunable number of the translation path, in one place, each with the evidence behind it.
