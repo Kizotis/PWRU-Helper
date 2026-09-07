@@ -142,7 +142,7 @@ development_status:
   # over s3's rebuild seam; s5 last because its DeepL /usage probe is also E6.S6's own method.
   e6-s1-verify-azure-f0-spike-u4: blocked-owner          # spike (U4); needs an Azure account (non-prepaid card) — blocks COPY only, not s2-s5
   e6-s2-azure-translator: done                           # order 1 — Services/ only; fixtures from the documented §7.5 shapes, so U4 does not gate it
-  e6-s3-azure-key-and-region-settings: ready-for-dev     # order 2 — RISKIEST of release B; lands the read-chain rebuild seam and widens TP-START-02's allow-list deliberately
+  e6-s3-azure-key-and-region-settings: review            # order 2 — RISKIEST of release B; landed the read-chain rebuild seam. TP-START-02's allow-list was NOT widened: the gate call is routed through TranslationChains.OnKeySaved
   e6-s4-use-key-for-reading-opt-in: ready-for-dev        # order 3 — ChainCompositionTests.EveryPermutation() must gain the Azure key+opt-in PAIR (it varies one property at a time)
   e6-s5-test-a-key-without-spending-quota: ready-for-dev # order 4 — OQ-d/OQ-f open, defaults recommended in the story; Azure /languages cannot validate a key
   e6-s6-deepl-fx-keys-still-work-spike-u5: blocked-owner # spike (U5); needs an already-issued :fx key or a DeepL support answer — trivial once e6-s5 ships

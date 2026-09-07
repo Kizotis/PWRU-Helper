@@ -213,7 +213,18 @@ internal static class TranslationChains
         var key = (settings.DeepLApiKey ?? "").Trim();
         if (key.Length > 0)
             tiers.Add((ProviderIds.DeepL, new DeepLTranslator(key)));
-        // [Azure — E6.S3: only if AzureApiKey is set.]
+
+        // Azure goes between the two: after DeepL, before the free engines (§8.1's write path, and
+        // ux flow (c).6 says it out loud — "the order is DeepL, then Azure, then the free
+        // engines"). BOTH halves or no tier at all, which is E6.S2's review finding and not
+        // tidiness: the provider's own guard throws AuthFailed WITHOUT NotSent (ruling E3-b gives
+        // that flag one writer), so a tier built from half a credential is counted by the chain as
+        // a tier that tried and failed, and its sentence outranks every skipped tier — the player
+        // would be told their key was refused by a request that was never worth sending.
+        var azureKey = (settings.AzureApiKey ?? "").Trim();
+        var azureRegion = (settings.AzureRegion ?? "").Trim();
+        if (IsSendableAzureCredential(azureKey, azureRegion))
+            tiers.Add((ProviderIds.Azure, new AzureTranslator(azureKey, azureRegion)));
 
         tiers.Add((ProviderIds.GoogleDict, new GoogleDictTranslator()));
         // [Edge — E3.S5 / ruling E3-d: absent from A.1, see BuildRead.]
@@ -222,5 +233,65 @@ internal static class TranslationChains
         // [Bergamot — E8.S3: only if OfflineFallbackEnabled and the model is present.]
 
         return new CachingTranslator(ChainTranslator.Of(tiers.ToArray()), Cache);
+    }
+
+    // =============================================================================================
+    //  What a key save does — E6.S3
+    // =============================================================================================
+
+    /// <summary>
+    /// The half of a key save that is not a rebuild: the provider's ACCOUNT-scoped block is lifted,
+    /// so a corrected key takes effect on the very next translation instead of waiting out an
+    /// <c>AuthFailed</c> window the user cannot see. Ruling <b>E2-a</b> is why it has to exist —
+    /// "no state may lock the user out without a way back" — and ruling <b>E2-i</b> is its exact
+    /// bound: <c>AuthFailed</c> and <c>QuotaExhausted</c> are the user's key, a <c>RateLimited</c>
+    /// or <c>Blocked</c> window is the provider counting requests from this IP and no key can move
+    /// it. <see cref="ProviderGate.ClearAuthBlock"/> enforces that; this method only routes to it.
+    ///
+    /// <para><b>Why it is a line of this class rather than of the code-behind.</b>
+    /// <c>ProviderStateStoreTests.No_startup_path_mentions_ProviderGates</c> (TP-START-02) asserts,
+    /// as an exact-equality assert on a ONE-element array, that <c>ProviderGates.Flush();</c> is the
+    /// only reference to the registry outside <c>Services/</c> in the whole app. The key save is a
+    /// second thing the registry must hear about — and the answer is the same as it was for the
+    /// tier lists and for the cache (ruling E3-c): the code-behind names this class, this class
+    /// names the registry, and the allow-list stays one line long. The story that added this call
+    /// was expected to widen that list instead; routing it here is strictly the smaller change,
+    /// because the next reference from outside still has to be a decision.</para>
+    /// </summary>
+    internal static void OnKeySaved(string providerId) => ProviderGates.ClearAuthBlock(providerId);
+
+    /// <summary>
+    /// Is this pair one <see cref="BuildWrite"/> would actually build a tier from? One predicate,
+    /// so the builder and the About tab's Save button cannot drift: the UI must refuse exactly what
+    /// the chain would refuse, or a player sees "saved" over a credential that silently adds no
+    /// engine. Both halves present, and neither carrying anything an HTTP header may not.
+    /// </summary>
+    private static bool IsSendableAzureCredential(string key, string region) =>
+        key.Length > 0 && region.Length > 0
+        && !AzureTranslator.HasControlChar(key) && !AzureTranslator.HasControlChar(region);
+
+    /// <summary>
+    /// What is wrong with an Azure credential the user is trying to save, as the sentence to show —
+    /// or <c>null</c> when there is nothing wrong with it (E6.S3 AC 5). The copy is
+    /// <see cref="UserMessages"/>' (ruling GAP-4); the RULE is this class's, because it is the same
+    /// rule <see cref="IsSendableAzureCredential"/> applies to the chain.
+    ///
+    /// <para><b>Both halves empty is not a problem</b> — it is clearing the key, and it has to stay
+    /// allowed: a user who pastes a key by mistake needs a way back out. Exactly one half empty is
+    /// the case worth a sentence, because the provider would take it, spend a request and earn an
+    /// <c>AuthFailed</c> gate whose cause nothing on screen explains.</para>
+    ///
+    /// <para>Both arguments are expected already trimmed — the caller has to trim to decide what to
+    /// persist anyway, and a validator that quietly trims a different string from the one that gets
+    /// saved is the kind of near-miss this whole story exists to avoid.</para>
+    /// </summary>
+    internal static string? AzureCredentialProblem(string key, string region)
+    {
+        if (AzureTranslator.HasControlChar(key) || AzureTranslator.HasControlChar(region))
+            return UserMessages.AzureCredentialUnsendable();
+        if (key.Length == 0 && region.Length == 0) return null;   // clearing, not an error
+        if (region.Length == 0) return UserMessages.AzureNeedsARegion();
+        if (key.Length == 0) return UserMessages.AzureNeedsAKey();
+        return null;
     }
 }

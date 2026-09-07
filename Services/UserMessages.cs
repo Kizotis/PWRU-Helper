@@ -274,6 +274,45 @@ internal static class UserMessages
     public static string ReadFailed(Exception error)
         => Terminated($"Could not read the screen: {LowerAtJoin(For(error))}");
 
+    // ---- the About tab's key boxes (ux-mode-degrade.md §3.7, ruling GAP-4) ---------------------
+    //
+    // METHODS for the same reason as everything above them, and it is not a style choice: the
+    // house-rule tests read every public CONST of this type as a row of the Sentence(kind) table
+    // and assert that set equals what the lookup can return. None of these is a row — they are the
+    // About tab's own copy — so a const here would fail five tests at once. (E6.S3.)
+
+    /// <summary>The half-entered credential the Save button refuses (E6.S3 AC 5). It names the
+    /// missing FIELD and never the value: I11 applies to a status line as much as to a log.</summary>
+    public static string AzureNeedsARegion()
+        => "Azure also needs the region your resource is in — pick or type it, then Save";
+
+    /// <summary>The other half of the pair, for a region typed with no key behind it.</summary>
+    public static string AzureNeedsAKey()
+        => "Azure also needs your key — paste it above, then Save";
+
+    /// <summary>A key or region pasted with a control character inside it (a line break picked up
+    /// from the portal). Trim only reaches the ends, an HTTP header may carry neither, and the
+    /// provider would refuse it as a failed TRANSLATION — so the Save button refuses it as a bad
+    /// FIELD, which is the thing the player can actually act on.</summary>
+    public static string AzureCredentialUnsendable()
+        => "That key or region contains characters that cannot be sent — re-paste it";
+
+    /// <summary>§3.7's "cleared" row, and the About tab's resting state. It names Google alone:
+    /// Edge is not in the chain (ruling E3-d), and §1's fourth principle is honest status.</summary>
+    public static string AzureNoKeyStatus()
+        => "○ No Azure key — using the free engines (Google)";
+
+    /// <summary>Configured, and precise about the half that is easy to get wrong: what a key buys
+    /// is what the user WRITES. Reading the screen is E6.S4's opt-in and is not implied here.</summary>
+    public static string AzureKeySetStatus(string region)
+        => $"● Azure key set ({region}) — used for what you write. Screen reading stays on the free engines";
+
+    /// <summary>ux flow (c).1, on the toast.</summary>
+    public static string AzureKeySavedToast() => "Azure key saved — used when you write";
+
+    /// <summary>…and the same event the other way round: both halves emptied is not an error.</summary>
+    public static string AzureKeyClearedToast() => "Azure key cleared — using the free engines";
+
     /// <summary>§3.3's join rule, and it applies to <b>one</b> of the two joins in this file.
     /// A deck sentence continues the clause it is glued to after a COLON — "Could not read the
     /// screen: no internet connection …" — and there it must not restart in upper case.

@@ -33,6 +33,33 @@ public class AppSettings
     // settings file like every other preference.
     public string DeepLApiKey { get; set; } = "";
 
+    // Optional Azure Translator credentials (architecture §12, ruling R-7 owns both names). They are
+    // a PAIR: the region travels in a header of every request, so a key without one is a guaranteed
+    // 401 — TranslationChains.BuildWrite adds the Azure tier only when neither is empty, and the
+    // About tab refuses the half-entered pair at the Save button. Empty = no Azure, which is the
+    // default and the only state a fresh install can be in.
+    public string AzureApiKey { get; set; } = "";
+    public string AzureRegion { get; set; } = "";
+
+    // Opt-in: use the key for READING the screen too (the LIVE loop and read-once), not just for
+    // what the user writes. FALSE by default and it must stay false (R9 / ruling R-15) — a metered
+    // key behind an unmetered loop is the money consequence I8 keeps DeepL away from, and Azure is
+    // allowed there only because the user asked for it. E6.S4 owns the check box and the read tier.
+    // Written as a bare bool like SquadUppercase above: `= false` is the same value, spelled twice.
+    public bool UseKeyForReading { get; set; }
+
+    // Whether the offline engine may answer when everything else is paused. FALSE by default, and
+    // there is deliberately NO check box: ruling R-4 makes the About tab's Download / Remove actions
+    // (E8.S3) its only writers. It lands here so the chain builders have something to read before
+    // E8 exists, and so E8 does not have to touch this type.
+    public bool OfflineFallbackEnabled { get; set; }
+
+    // Diagnostic hatch for the six provider-gate numbers (E2.S7): a JSON object of GatePolicy
+    // fields. null — the default — means "nothing said", i.e. the graded table. No UI: whatever
+    // reaches it was typed by hand, which is why Sanitize deliberately leaves it alone and
+    // GatePolicy.Parse owns the whole rule ("unparseable ⇒ defaults, silently, never a throw").
+    public string? ProviderGateOverrides { get; set; }
+
     // Optional pre-OCR background filter (helps read chat over a busy 3D scene).
     // "contrast" (default — brightness boost, any colour) · "off" · "color" (keep one chat colour).
     public string OcrFilterMode { get; set; } = "contrast";
@@ -155,6 +182,14 @@ public static class SettingsService
         if (s.SettingsVersion < 3 && s.LiveSpeedPercent == PreviousLiveSpeedDefault)
             s.LiveSpeedPercent = new AppSettings().LiveSpeedPercent;
 
+        // No v4, and that is a decision rather than an omission — the one place a future reader
+        // would otherwise assume a mistake. E6 added five settings (AzureApiKey, AzureRegion,
+        // UseKeyForReading, OfflineFallbackEnabled, ProviderGateOverrides) and NONE of them needs a
+        // step: every one is NEW, so an old file that has no such key deserialises it to its
+        // initializer — which is exactly the value a migration would have written. A step is owed
+        // only when a DEFAULT CHANGES for somebody who already has a file (the three above), and a
+        // version bump for new fields would run a no-op against every user's settings once, for
+        // nothing. (architecture §12, ruling OQ-e; asserted by AzureSettingsTests' TP-SET-02.)
         s.SettingsVersion = CurrentSettingsVersion;
         return true;
     }
@@ -173,12 +208,32 @@ public static class SettingsService
         s.TranslatorTo ??= "ru";
         s.MyLanguage ??= "en";
         s.DeepLApiKey ??= "";
+        // The Azure pair. The key is opaque, so it is only null-guarded and trimmed; the region is
+        // a lower-case vendor slug ("westeurope"), so it is lower-cased here — ToLowerInvariant and
+        // not ToLower, like the line below it, because a Turkish locale turns "I" into "ı" and a
+        // region is not the user's language. A value carrying a CONTROL character is emptied rather
+        // than kept: both travel in an HTTP header, which may not carry one, so a hand-edited file
+        // holding one describes a credential that can only ever throw. The Save button refuses the
+        // same value (E6.S2's review), and an empty field is the state the UI can explain.
+        s.AzureApiKey = SanitizeCredential(s.AzureApiKey);
+        s.AzureRegion = SanitizeCredential(s.AzureRegion).ToLowerInvariant();
+        // ProviderGateOverrides is deliberately NOT sanitised: null is its valid default, and
+        // GatePolicy.Parse owns "unparseable ⇒ defaults" for every other value.
         s.OcrFilterMode = s.OcrFilterMode is "contrast" or "color" ? s.OcrFilterMode : "off";
         s.OcrKeepColorHex ??= "#FFFFFF";
         s.OcrColorTolerance = Math.Clamp(s.OcrColorTolerance, 0, 441);
         s.CaptureBackend = s.CaptureBackend == "wgc" ? "wgc" : "gdi";
         if (s.LastLiveRegion is { Length: not 4 }) s.LastLiveRegion = null;
         return s;
+    }
+
+    /// <summary>A credential as the app is willing to hold it: never null, trimmed, and empty if it
+    /// carries anything an HTTP header may not (<see cref="AzureTranslator.HasControlChar"/> — the
+    /// one spelling of that rule, next to the provider that would have had to send it).</summary>
+    private static string SanitizeCredential(string? value)
+    {
+        var v = (value ?? "").Trim();
+        return AzureTranslator.HasControlChar(v) ? "" : v;
     }
 
     public static void Save(AppSettings settings)

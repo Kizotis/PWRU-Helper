@@ -56,9 +56,16 @@ public partial class MainWindow : Window
     // ALL THREE ARE ASSIGNED IN THE CONSTRUCTOR BODY, not here: field initializers run in
     // declaration order, and _settings (:65) is initialised AFTER these lines. A chain needs the
     // settings, so an initializer here would read a null. See the ctor.
+    //
+    // NONE OF THE THREE IS readonly SINCE E6.S3, and the read pair lost it for a reason worth
+    // stating: a key save has to rebuild the READ chain too, because the key may already be opted
+    // into reading from a previous session (AppSettings.UseKeyForReading). RebuildReadChains()
+    // (Translate.cs) is the only writer, and it reassigns _readTranslator, _readOnceTranslator and
+    // _readChain TOGETHER — see _readChain's own comment for why forgetting one of the three would
+    // not show up as a failing behaviour test.
     private ITranslator _writeTranslator;
-    private readonly ITranslator _readTranslator;
-    private readonly ITranslator _readOnceTranslator;
+    private ITranslator _readTranslator;
+    private ITranslator _readOnceTranslator;
 
     // The CHAIN inside _readTranslator — the same object, one decorator down. It is a field because
     // the LIVE loop has to ask a question a translator cannot answer: "is every rung of you inside a
@@ -71,7 +78,13 @@ public partial class MainWindow : Window
     // the code-behind names a chain, never ProviderGates.
     //
     // E7.S3 reads ChainTranslator.LastOutcome from this same field.
-    private readonly ChainTranslator _readChain;
+    //
+    // It is reassigned — with the two read translators, in the same method — whenever a key save
+    // rebuilds the read chain (E6.S3). A rebuild that replaced _readTranslator and left this
+    // pointing at the old chain would still WORK, because both resolve the same process-global
+    // gates (I9), which is exactly why it would go unnoticed: the pause check would be answering
+    // for a chain nothing translates through any more. All three, or none.
+    private ChainTranslator _readChain;
 
     // What the Translator tab is currently showing. Its output is a RichTextBox (so the 78-character
     // chat blocks can be tinted), and a FlowDocument's text can't be read back cleanly — so the
@@ -239,7 +252,17 @@ public partial class MainWindow : Window
             }
 
             DeepLKeyBox.Password = s.DeepLApiKey ?? "";
-            UpdateDeepLStatus();
+            AzureKeyBox.Password = s.AzureApiKey ?? "";
+            // SelectTag silently does nothing when no item matches — and with IsEditable="True"
+            // that is the NORMAL case, not an edge one: any region outside the nine seeded ones is
+            // free text and has no ComboBoxItem to select. Without the .Text fallback the box comes
+            // back blank on every launch while settings.json still holds "norwayeast".
+            SelectTag(AzureRegionCombo, s.AzureRegion ?? "");
+            if (AzureRegionCombo.SelectedItem == null) AzureRegionCombo.Text = s.AzureRegion ?? "";
+            // The change handlers are suppressed for this whole method, so the UI side-effects they
+            // would have produced are applied EXPLICITLY — the same rule as UpdateOcrFilterUi
+            // below, applied to the key boxes (I12). UpdateDeepLStatus is now one line inside it.
+            UpdateEngineStatusUi();
 
             OcrColorHexBox.Text = s.OcrKeepColorHex ?? "#FFFFFF";
             OcrToleranceSlider.Value = Math.Clamp(s.OcrColorTolerance, 0, 441);

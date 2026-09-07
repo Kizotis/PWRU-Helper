@@ -625,6 +625,39 @@
                         <TextBlock x:Name="DeepLStatus" Margin="0,6,0,0" FontSize="12"
                                    Foreground="{StaticResource TextMutedBrush}"/>
 
+                        <!-- optional Azure Translator key (E6). Mirrors the DeepL row above it on
+                             purpose: E7.S7 restructures this whole region into one "Translation
+                             engines" block, so anything decorative added here is work thrown away.
+                             The region combo is IsEditable (UX-DR16): the nine below are the ones
+                             people actually pick, and anything else can be typed. -->
+                        <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextMutedBrush}" Margin="0,14,0,6">
+                            <Run Text="Or paste a free "/><Hyperlink
+                                    NavigateUri="https://azure.microsoft.com/products/ai-services/ai-translator"
+                                    RequestNavigate="OpenLink"
+                                    Foreground="{StaticResource TealBrush}">Azure Translator key</Hyperlink><Run
+                                    Text=" — Azure needs BOTH the key and the region your resource was created in (both are on its Keys and Endpoint page). A key without its region cannot work, so the app asks for the pair. Like the DeepL key, it is stored only on your PC and is used only for what YOU write."/>
+                        </TextBlock>
+                        <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                            <PasswordBox x:Name="AzureKeyBox" Width="300" VerticalContentAlignment="Center"/>
+                            <ComboBox x:Name="AzureRegionCombo" IsEditable="True" Width="160" Margin="8,0,0,0"
+                                      ToolTip="The region your Azure Translator resource is in — pick one or type it."
+                                      SelectionChanged="AzureRegionCombo_Changed">
+                                <ComboBoxItem Content="global" Tag="global"/>
+                                <ComboBoxItem Content="westeurope" Tag="westeurope"/>
+                                <ComboBoxItem Content="francecentral" Tag="francecentral"/>
+                                <ComboBoxItem Content="northeurope" Tag="northeurope"/>
+                                <ComboBoxItem Content="eastus" Tag="eastus"/>
+                                <ComboBoxItem Content="eastus2" Tag="eastus2"/>
+                                <ComboBoxItem Content="westus2" Tag="westus2"/>
+                                <ComboBoxItem Content="uksouth" Tag="uksouth"/>
+                                <ComboBoxItem Content="swedencentral" Tag="swedencentral"/>
+                            </ComboBox>
+                            <Button Content="Save" Style="{StaticResource GhostButton}" Padding="12,4"
+                                    Margin="8,0,0,0" Click="AzureSaveKey_Click"/>
+                        </StackPanel>
+                        <TextBlock x:Name="AzureStatus" Margin="0,6,0,0" FontSize="12"
+                                   Foreground="{StaticResource TextMutedBrush}"/>
+
                         <!-- troubleshooting -->
                         <TextBlock Text="Something went wrong?" FontSize="15" FontWeight="Bold"
                                    Foreground="{StaticResource GoldBrush}" Margin="0,18,0,6"/>

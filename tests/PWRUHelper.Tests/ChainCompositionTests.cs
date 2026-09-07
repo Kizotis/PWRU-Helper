@@ -234,6 +234,118 @@ public class ChainCompositionTests : GatesTestBase
     }
 
     // =============================================================================================
+    //  E6.S3 — Azure on the WRITE chain, and the key save that resets its gate
+    // =============================================================================================
+
+    private const string AzureKey = "0123456789abcdef0123456789abcdef";
+
+    /// <summary>
+    /// §8.1's write path with both keys configured, and <c>ux</c> flow (c).6 says the order out
+    /// loud: "DeepL, then Azure, then the free engines". All four key combinations, because the
+    /// order is the whole assertion — a reordering is a silent change of vendor for every line the
+    /// user writes, and nothing else in the app would notice.
+    ///
+    /// <para><c>BuildRead</c> is deliberately not asserted here: Azure reaches it only behind
+    /// <c>UseKeyForReading</c>, which is E6.S4's. TP-CHN-14's sweep already covers the new settings
+    /// from the I8 side.</para>
+    /// </summary>
+    [Fact]
+    public void The_write_chain_gains_the_azure_tier_after_DeepL_and_before_the_free_engines()
+    {
+        Assert.Equal(new[] { ProviderIds.GoogleDict, ProviderIds.GoogleGtx },
+                     IdsOf(TranslationChains.BuildWrite(new AppSettings())));
+
+        Assert.Equal(new[] { ProviderIds.DeepL, ProviderIds.GoogleDict, ProviderIds.GoogleGtx },
+                     IdsOf(TranslationChains.BuildWrite(new AppSettings { DeepLApiKey = "abc-123:fx" })));
+
+        Assert.Equal(new[] { ProviderIds.Azure, ProviderIds.GoogleDict, ProviderIds.GoogleGtx },
+                     IdsOf(TranslationChains.BuildWrite(
+                         new AppSettings { AzureApiKey = AzureKey, AzureRegion = "westeurope" })));
+
+        Assert.Equal(new[] { ProviderIds.DeepL, ProviderIds.Azure,
+                             ProviderIds.GoogleDict, ProviderIds.GoogleGtx },
+                     IdsOf(TranslationChains.BuildWrite(new AppSettings
+                     {
+                         DeepLApiKey = "abc-123:fx",
+                         AzureApiKey = AzureKey,
+                         AzureRegion = " WestEurope ",   // trimmed here as it is at the Save button
+                     })));
+    }
+
+    /// <summary>
+    /// <b>Half of a credential adds no tier at all</b>, and this is E6.S2's review finding rather
+    /// than tidiness: the provider's own guard throws <c>AuthFailed</c> <b>without</b>
+    /// <c>NotSent</c> (ruling E3-b gives that flag one writer), so a tier built from half a
+    /// credential is counted by <see cref="ChainTranslator"/> as a tier that tried and failed — and
+    /// its sentence outranks every skipped tier. The player would be told their key was refused by
+    /// a request that was never worth sending.
+    /// </summary>
+    [Theory]
+    [InlineData(AzureKey, "")]
+    [InlineData("", "westeurope")]
+    [InlineData("   ", "westeurope")]
+    [InlineData(AzureKey, "   ")]
+    [InlineData("abc\u0007def", "westeurope")]      // unsendable: a header may carry no control char
+    [InlineData(AzureKey, "west\u0001europe")]
+    public void A_half_entered_azure_credential_adds_no_tier(string key, string region)
+    {
+        var ids = IdsOf(TranslationChains.BuildWrite(
+            new AppSettings { AzureApiKey = key, AzureRegion = region }));
+
+        Assert.DoesNotContain(ProviderIds.Azure, ids);
+        Assert.Equal(new[] { ProviderIds.GoogleDict, ProviderIds.GoogleGtx }, ids);
+    }
+
+    /// <summary>
+    /// TP-SET-09 / AC 6, at the facade the code-behind actually calls. Ruling <b>E2-a</b> is why it
+    /// exists — "no state may lock the user out without a way back" — and ruling <b>E2-i</b> is its
+    /// exact bound: a new key lifts the ACCOUNT-scoped block (<c>AuthFailed</c>,
+    /// <c>QuotaExhausted</c>) and never the IP-scoped one (<c>RateLimited</c>, <c>Blocked</c>),
+    /// which is about the address this PC dials from and which no key can change.
+    ///
+    /// <para>It is asserted here, in <c>Services/</c>'s own test file, because that is where the
+    /// registry may be named: <c>MainWindow.Translate.cs</c> calls
+    /// <c>TranslationChains.OnKeySaved</c> and TP-START-02's allow-list stays one line long.</para>
+    /// </summary>
+    [Fact]
+    public void TP_SET_09_Saving_a_key_lifts_that_provider_account_scoped_block_and_nothing_else()
+    {
+        var azure = ProviderGates.For(ProviderIds.Azure);
+        var dict = ProviderGates.For(ProviderIds.GoogleDict);
+
+        azure.ReportFailure(TranslationErrorKind.AuthFailed);
+        dict.ReportFailure(TranslationErrorKind.RateLimited);
+
+        Assert.NotNull(azure.Snapshot().BlockedUntil);
+        var otherProvidersWindow = dict.Snapshot().BlockedUntil;
+        Assert.NotNull(otherProvidersWindow);
+
+        TranslationChains.OnKeySaved(ProviderIds.Azure);
+
+        Assert.Null(azure.Snapshot().BlockedUntil);                       // the key's own block: gone
+        Assert.Equal(otherProvidersWindow, dict.Snapshot().BlockedUntil); // another provider: untouched
+    }
+
+    /// <summary>The other half of E2-i, on the SAME provider: a 429 window is the provider counting
+    /// requests from this IP, and pasting a new key does not move it.</summary>
+    [Fact]
+    public void Saving_a_key_does_not_lift_a_rate_limit_on_the_same_provider()
+    {
+        var azure = ProviderGates.For(ProviderIds.Azure);
+        azure.ReportFailure(TranslationErrorKind.RateLimited);
+        var ipWindow = azure.Snapshot().BlockedUntil;
+        Assert.NotNull(ipWindow);
+
+        azure.ReportFailure(TranslationErrorKind.AuthFailed);
+        Assert.Equal(DateTimeOffset.MaxValue, azure.Snapshot().BlockedUntil);
+
+        TranslationChains.OnKeySaved(ProviderIds.Azure);
+
+        Assert.NotNull(azure.Snapshot().BlockedUntil);
+        Assert.NotEqual(DateTimeOffset.MaxValue, azure.Snapshot().BlockedUntil);
+    }
+
+    // =============================================================================================
     //  Priority — the only automated proof that E2.S3's reserve is no longer inert
     // =============================================================================================
 
@@ -485,8 +597,17 @@ public class ChainCompositionTests : GatesTestBase
         // the story sketched, before E4.S4 landed first — precisely so the decorator keeps being
         // built inside Services/ and the scan at the bottom of this case stays green. One call, one
         // object graph: a second BuildRead would build a second chain over the same gates.
-        Assert.Contains("private readonly ITranslator _readTranslator;", main, StringComparison.Ordinal);
-        Assert.Contains("private readonly ChainTranslator _readChain;", main, StringComparison.Ordinal);
+        //
+        // E6.S3 dropped `readonly` from the read pair and from _readChain, DELIBERATELY: a key save
+        // has to rebuild the read chain too (its AC 6 — the key may already be opted into reading
+        // from a previous session), and a readonly field cannot be reassigned. What replaces the
+        // compiler's guarantee is the pair of asserts below the ctor ones: RebuildReadChains() is
+        // the only other writer and it reassigns all THREE together. That is the failure `readonly`
+        // never prevented anyway — reassigning two of the three compiles, runs, and leaves
+        // PauseNow() answering for a chain nothing translates through (I9: same gates, so no
+        // behaviour test can see it).
+        Assert.Contains("private ITranslator _readTranslator;", main, StringComparison.Ordinal);
+        Assert.Contains("private ChainTranslator _readChain;", main, StringComparison.Ordinal);
         Assert.Contains(
             "_readTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Background, out _readChain);",
             main, StringComparison.Ordinal);
@@ -500,6 +621,23 @@ public class ChainCompositionTests : GatesTestBase
         var translate = Code(File.ReadAllText(Path.Combine(root, "MainWindow.Translate.cs")));
         Assert.Contains("private ITranslator BuildWriteChain() => TranslationChains.BuildWrite(_settings);",
             translate, StringComparison.Ordinal);
+
+        // …and the READ chain's rebuild, E6.S3's companion to it. All three references are
+        // reassigned in ONE method, and that method is the only writer besides the constructor —
+        // two occurrences of each assignment across the two files, no more. `out _readChain` on the
+        // same line as `_readTranslator =` is what makes "together" structural rather than
+        // remembered.
+        var both = main + "\n" + translate;
+        Assert.Contains("private void RebuildReadChains()", translate, StringComparison.Ordinal);
+        foreach (var assignment in new[]
+                 {
+                     "_readTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Background, out _readChain);",
+                     "_readOnceTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Interactive);",
+                 })
+            Assert.Equal(2, Occurrences(both, assignment));
+
+        foreach (var field in new[] { "_readTranslator =", "_readOnceTranslator =", "_readChain =" })
+            Assert.Equal(field == "_readChain =" ? 0 : 2, Occurrences(both, field));
 
         // NO source outside Services/ names a decorator — the same rule, and the same reason, as
         // TranslationCachePersistenceTests' "no source outside Services/ names the store" and
@@ -520,6 +658,16 @@ public class ChainCompositionTests : GatesTestBase
         Assert.True(decorators.Count == 0,
             "outside Services/ the code names a chain and never a decorator (ruling E3-c): "
             + string.Join(" | ", decorators));
+    }
+
+    /// <summary>How many times <paramref name="needle"/> appears in <paramref name="haystack"/> —
+    /// the "exactly one other writer" assert above needs a count, not a contains.</summary>
+    private static int Occurrences(string haystack, string needle)
+    {
+        var n = 0;
+        for (var i = haystack.IndexOf(needle, StringComparison.Ordinal); i >= 0;
+             i = haystack.IndexOf(needle, i + needle.Length, StringComparison.Ordinal)) n++;
+        return n;
     }
 
     // ---- the source-scan helpers (the shape ChainTranslatorTests already uses) -------------------

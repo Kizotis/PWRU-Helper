@@ -250,6 +250,109 @@ public partial class MainWindow
             : "DeepL key cleared — using Google");
     }
 
+    /// <summary>Rebuild the three READ references — <b>together</b>, which is the whole point of
+    /// the method existing (E6.S3). A key save has to reach the read chain as well as the write
+    /// one, because <c>UseKeyForReading</c> may already be on from a previous session; and a
+    /// rebuild that reassigned <c>_readTranslator</c> but left <c>_readChain</c> pointing at the
+    /// old chain would still work — same gates (I9) — which is exactly why it would ship unnoticed.
+    ///
+    /// <para>Like <see cref="BuildWriteChain"/> this rebuilds the CHAINS and not the cache: the
+    /// store is <c>TranslationChains</c>' (§8.2), so the session's translations survive a key save
+    /// on the read side too.</para></summary>
+    private void RebuildReadChains()
+    {
+        _readTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Background, out _readChain);
+        _readOnceTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Interactive);
+    }
+
+    /// <summary>
+    /// The region the user picked or typed. <b>The first line is not optional.</b> XAML LOADING
+    /// raises <c>SelectionChanged</c> during <c>InitializeComponent()</c>, long before
+    /// <c>ApplySettings</c> has restored anything, so a handler that writes settings here persists
+    /// an unrestored control — that is the v0.12.3 bug, and <c>SettingsService.Migrate</c>'s v2 step
+    /// exists solely because v1 lost that very race.
+    /// </summary>
+    private void AzureRegionCombo_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_restoringSettings) return;
+        _settings.AzureRegion = ReadAzureRegion();
+        SettingsService.Save(_settings);
+    }
+
+    /// <summary>The region as the app will store it. <c>SelectedTag</c> returns null for typed
+    /// text — there is no <c>ComboBoxItem</c> behind it — so every read of an editable combo is
+    /// the tag OR the text, and the normalisation is the one <c>SettingsService.Sanitize</c>
+    /// applies to the same field.</summary>
+    private string ReadAzureRegion() =>
+        (SelectedTag(AzureRegionCombo) ?? AzureRegionCombo.Text ?? "").Trim().ToLowerInvariant();
+
+    private void AzureSaveKey_Click(object sender, RoutedEventArgs e)
+    {
+        var key = (AzureKeyBox.Password ?? "").Trim();
+        var region = ReadAzureRegion();
+
+        // Validate the PAIR before anything else. A key without a region is a guaranteed 401, and
+        // the provider's guard raises it as a failed TRANSLATION (AuthFailed without NotSent, since
+        // ruling E3-b gives that flag one writer) — so the chain would count a tier that tried and
+        // failed, and the player would be told their key was refused by a request nobody should
+        // have sent. Nothing is persisted, nothing is rebuilt and nothing is sent. Both halves
+        // empty is NOT this case: that is clearing the key, and it falls through.
+        var problem = TranslationChains.AzureCredentialProblem(key, region);
+        if (problem != null)
+        {
+            AzureStatus.Text = problem;
+            return;
+        }
+
+        _settings.AzureApiKey = key;
+        _settings.AzureRegion = region;
+        SettingsService.Save(_settings);
+
+        // A corrected key must take effect NOW, not after the AuthFailed window a wrong one opened
+        // — ruling E2-a: no state may lock the user out without a way back. The registry is not
+        // named here on purpose (TP-START-02): TranslationChains owns the composition and the gates
+        // for the same reason it owns the cache, so this file names a chain builder and never
+        // ProviderGates. E2-i bounds what the reset touches: this key's own block, never a
+        // rate limit, which is about this connection and not about this key.
+        TranslationChains.OnKeySaved(ProviderIds.Azure);
+
+        // BOTH chains. The write one is where an Azure key is used today; the read one because
+        // UseKeyForReading (E6.S4) may already be on from a previous session, and a rebuild the
+        // user cannot see is worth more than a stale chain they can. What is rebuilt is the CHAIN —
+        // the cache store behind it is TranslationChains' and outlives this line (§8.2, E4.S4), so
+        // the session's accumulated translations survive the save (amplifier A5).
+        _writeTranslator = BuildWriteChain();
+        RebuildReadChains();
+
+        UpdateEngineStatusUi();
+        ShowToast(key.Length > 0
+            ? UserMessages.AzureKeySavedToast()
+            : UserMessages.AzureKeyClearedToast());
+    }
+
+    /// <summary>
+    /// The About tab's engine lines, refreshed in one place. Called explicitly from
+    /// <c>ApplySettings</c> (where every change handler is suppressed, so a side effect that is not
+    /// applied by hand does not happen at all — I12) and after each key save.
+    ///
+    /// <para>Deliberately small, with one job: <b>E6.S4</b> adds the read opt-in's side effect and
+    /// <b>E7.S7</b> grows it into §4.2's "In use now" + chain block. One method, so three stories
+    /// extend it instead of fighting over three.</para>
+    /// </summary>
+    private void UpdateEngineStatusUi()
+    {
+        UpdateDeepLStatus();
+
+        var region = (_settings.AzureRegion ?? "").Trim();
+        var hasKey = (_settings.AzureApiKey ?? "").Trim().Length > 0;
+        // Both halves, matching what TranslationChains.BuildWrite actually does with them: a status
+        // line claiming a configured engine over a credential that adds no tier is the lie this
+        // story is here to prevent.
+        AzureStatus.Text = hasKey && region.Length > 0
+            ? UserMessages.AzureKeySetStatus(region)
+            : UserMessages.AzureNoKeyStatus();
+    }
+
     private void UpdateDeepLStatus()
     {
         bool on = (_settings.DeepLApiKey ?? "").Trim().Length > 0;

@@ -52,6 +52,52 @@ public class StartupSettingsTests
         Assert.Equal("contrast", saved.RootElement.GetProperty("OcrFilterMode").GetString());
     }
 
+    // The same file, for the controls E6.S3 adds. The region is deliberately NOT one of the nine
+    // seeded ones: `SelectTag` silently does nothing when no item matches, so a free-text region is
+    // the case a seeded-list-only test would miss — and the one that would come back blank while
+    // the file still held it.
+    private const string AzureSettings = """
+    {
+      "AzureApiKey": "0123456789abcdef0123456789abcdef",
+      "AzureRegion": "norwayeast",
+      "UseKeyForReading": true,
+      "OcrFilterMode": "contrast",
+      "SettingsVersion": 3
+    }
+    """;
+
+    /// <summary>
+    /// TP-SET-05 — the clobber test for E6.S3's controls, and the DoD of that story. Same shape as
+    /// the case above because it is the same bug: a change handler firing during
+    /// <c>InitializeComponent()</c> (the region combo's <c>SelectionChanged</c>) writing the
+    /// not-yet-restored UI back to disk.
+    ///
+    /// <para>Asserting the restored control is the half that already passed while the bug shipped —
+    /// so the file on disk is re-read afterwards and must be untouched, key, region and opt-in
+    /// alike.</para>
+    /// </summary>
+    [Fact]
+    public void Starting_the_app_does_not_overwrite_the_saved_azure_key_and_region()
+    {
+        using var settings = new TempSettings(AzureSettings);
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+
+            Assert.Equal("0123456789abcdef0123456789abcdef", window.AzureKeyBox.Password);
+            Assert.Null(window.AzureRegionCombo.SelectedItem);           // free text: no item matches
+            Assert.Equal("norwayeast", window.AzureRegionCombo.Text);
+        });
+
+        using var saved = JsonDocument.Parse(File.ReadAllText(settings.Path));
+        Assert.Equal("0123456789abcdef0123456789abcdef",
+                     saved.RootElement.GetProperty("AzureApiKey").GetString());
+        Assert.Equal("norwayeast", saved.RootElement.GetProperty("AzureRegion").GetString());
+        Assert.True(saved.RootElement.GetProperty("UseKeyForReading").GetBoolean());
+        Assert.Equal(3, saved.RootElement.GetProperty("SettingsVersion").GetInt32());
+    }
+
     [Fact]
     public void A_user_still_stuck_on_off_is_moved_to_boost_contrast_once()
     {
