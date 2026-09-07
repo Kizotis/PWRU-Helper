@@ -281,6 +281,11 @@ public partial class MainWindow
     private void AzureRegionCombo_Changed(object sender, SelectionChangedEventArgs e)
     {
         if (_restoringSettings) return;
+        // …and the narrow one, for the one gesture that empties this combo in code: ruling E6-e's
+        // clearing inside AzureSaveKey_Click, which persists and rebuilds properly a few lines
+        // later. Second, never first: I12's rule is that the RESTORE guard is the opening line of
+        // every handler, and this is a different question asked by a different writer.
+        if (_suppressAzureRegionHandler) return;
 
         // An editable combo raises this for every item the user arrows past in the open list AND
         // for every keystroke that moves the type-ahead match — so the handler must be free when
@@ -373,18 +378,20 @@ public partial class MainWindow
         if (key.Length == 0)
         {
             region = "";
-            // _restoringSettings for its stated meaning — "a control change that does NOT mean the
-            // user chose this" — and not as a borrowed flag: emptying the combo here raises
-            // SelectionChanged, and letting AzureRegionCombo_Changed run would persist the OLD key
-            // with no region and rebuild both chains, half a gesture before this handler does it
-            // properly. try/finally because the flag may never be left up (I12).
-            _restoringSettings = true;
+            // Emptying the combo raises SelectionChanged, and letting AzureRegionCombo_Changed run
+            // would persist the OLD key with no region and rebuild both chains, half a gesture
+            // before this handler does it properly. Silenced with its OWN flag and not with
+            // _restoringSettings (review, E6.S4): that one means "a restore is in progress", it is
+            // TRUE for the whole of startup, and a save handler raising it would make one flag
+            // answer two questions — see the field's comment in MainWindow.xaml.cs. try/finally
+            // because a suppression flag that can be left up is the bug it was meant to prevent.
+            _suppressAzureRegionHandler = true;
             try
             {
                 AzureRegionCombo.SelectedItem = null;
                 AzureRegionCombo.Text = "";
             }
-            finally { _restoringSettings = false; }
+            finally { _suppressAzureRegionHandler = false; }
         }
 
         _settings.AzureApiKey = key;

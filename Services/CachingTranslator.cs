@@ -51,8 +51,15 @@ public class CachingTranslator : ITranslator
         // ConfigureAwait(false) on both awaits (ruling E6-d): since E4.S4 this decorator is the
         // OUTERMOST await of every translation the app makes, and both call sites are UI-thread
         // methods — without it the continuation, and the store's synchronous work behind it, resume
-        // on the dispatcher. Same obligation as every file HttpProviderCoreTests' scan covers, and
-        // this one is now on that floor.
+        // on the dispatcher. Same obligation as every file the request-path scan covers, and this
+        // one is now on its floor.
+        //
+        // The wording is deliberate and must stay that way: that scan derives its file set from the
+        // raw text of every file in Services/, so naming the core (or its test class) ANYWHERE here
+        // — a comment included — would put this file on the first arm of the derivation and quietly
+        // make the `decorators` arm that exists for it dead code. Review of E6.S4 found exactly that
+        // and the scan now asserts the arm is load-bearing, which is why this comment does not spell
+        // the name out.
         var result = await _inner.TranslateAsync(text, source, target, ct).ConfigureAwait(false);
         if (IsCacheable(text, result)) Store(key, result);
         return result;

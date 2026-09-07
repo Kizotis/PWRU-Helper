@@ -57,7 +57,7 @@ public class ChainCompositionTests : GatesTestBase
     /// behind names neither a decorator nor a store. The <c>IsType</c> is deliberate — it makes
     /// every case in this file assert the wrapping as a side effect, so a builder that quietly
     /// stopped caching would fail here as well as in the case that owns it.</para></summary>
-    private static IReadOnlyList<ChainTier> TiersOf(ITranslator chain)
+    internal static IReadOnlyList<ChainTier> TiersOf(ITranslator chain)
     {
         var inner = InnerOf(chain);
 
@@ -89,7 +89,7 @@ public class ChainCompositionTests : GatesTestBase
         (int)store.GetType()
             .GetField("_capacity", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(store)!;
 
-    private static List<string> IdsOf(ITranslator chain) => TiersOf(chain).Select(t => t.ProviderId).ToList();
+    internal static List<string> IdsOf(ITranslator chain) => TiersOf(chain).Select(t => t.ProviderId).ToList();
 
     /// <summary>A provider's per-instance priority. <c>DeepLTranslator</c> has no such field on
     /// purpose — it is a write-path provider that is always <c>Interactive</c> and by I8 can never
@@ -109,7 +109,7 @@ public class ChainCompositionTests : GatesTestBase
     /// come back here. Only strings and bools are touched — an int setting is a slider position and
     /// no chain reads one.
     /// </summary>
-    private static List<AppSettings> EveryPermutation()
+    internal static List<AppSettings> EveryPermutation()
     {
         var all = new List<AppSettings>
         {

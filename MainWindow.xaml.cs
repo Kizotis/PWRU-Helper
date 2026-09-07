@@ -25,9 +25,9 @@ public partial class MainWindow : Window
     // True while the UI is being built or restored, i.e. whenever a control change does NOT mean
     // "the user chose this". Change handlers (SaveOcrFilterSettings, CaptureBackend_Changed,
     // SquadUppercase_Changed, AzureRegionCombo_Changed, AzureForReading_Changed) fire as a side
-    // effect of setting a slider / combo / tick — and an EDITABLE combo raises SelectionChanged
-    // the same way — and would
-    // then write that transient UI state back to disk — clobbering the very settings we're loading.
+    // effect of setting a slider / combo / tick — and an EDITABLE combo raises SelectionChanged the
+    // same way — and would then write that transient UI state back to disk, clobbering the very
+    // settings we're loading.
     //
     // It starts TRUE and is only cleared at the end of ApplySettings, because XAML LOADING ITSELF
     // fires these handlers: `<Slider Value="70" ValueChanged="OcrTolerance_Changed"/>` raises
@@ -35,6 +35,19 @@ public partial class MainWindow : Window
     // read the still-unselected filter combo (SelectedTag → null → "off") and persisted "off" —
     // which is why a saved "Boost contrast" came back Off on every launch (fixed in v0.13.0).
     private bool _restoringSettings = true;
+
+    // …and the one thing _restoringSettings is deliberately NOT (review, E6.S4). Ruling E6-e makes
+    // an empty Azure key clear the region with it, which means AzureSaveKey_Click empties the region
+    // combo in code — raising SelectionChanged, which AzureRegionCombo_Changed would answer by
+    // persisting the OLD key with no region, half a gesture before the save handler does it
+    // properly. The obvious silencer is _restoringSettings, and it is the wrong one: that flag means
+    // "a RESTORE is in progress, no handler may persist", it starts TRUE for the whole of startup,
+    // and borrowing it inside a SAVE handler makes one flag answer two questions — the next reader
+    // cannot tell which, and a handler that should have run (or one that persists mid-save) is the
+    // exact bug class it was introduced to guard against. This flag is narrow on purpose: ONE
+    // handler, ONE gesture, always raised and lowered in a try/finally around the two lines that
+    // empty the combo.
+    private bool _suppressAzureRegionHandler;
 
     // Three translators on purpose (the chains themselves are TranslationChains', §8.1):
     //   _writeTranslator     — what the USER writes (Translator tab, compact quick reply). The

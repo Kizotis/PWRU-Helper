@@ -181,6 +181,51 @@ public class CachingTranslatorTests
         Assert.Equal(lines, inner.BatchRequests[1]);
     }
 
+    /// <summary>
+    /// <b>The decision E6-d leaves open, pinned rather than discovered</b> (review of E6.S4): a
+    /// batch that is PART cache hit and part miss, where the miss batch comes back mis-counted.
+    /// The hits were already in hand — should they be served, with the misses left as failure
+    /// placeholders, or does the whole call fail?
+    ///
+    /// <para><b>The whole call fails, deliberately.</b> I5's rule is "never pad", and every way to
+    /// return the hits alone is a padding of some shape: a partial list breaks the 1:1 contract this
+    /// method's callers rely on (they zip the answer against the lines they asked for), and filling
+    /// the gaps with anything — placeholders included — is the decorator inventing a translation
+    /// nobody produced. A <c>BadResponse</c> is what the caller can actually act on: the chain's
+    /// next tier gets the whole batch, and it will serve the hits from this same cache for free.
+    /// Nothing is lost by throwing, which is what makes throwing the cheap answer as well as the
+    /// honest one.</para>
+    ///
+    /// <para>And the hits themselves are NOT lost — the throw is a refusal to answer, never an
+    /// eviction: the same lines come straight back out of the store on the next call, and the inner
+    /// translator is asked only for what is still missing.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_batch_of_hits_and_a_miscounted_miss_fails_whole_and_keeps_the_hits()
+    {
+        var inner = new CountingTranslator();
+        var cache = new CachingTranslator(inner);
+
+        await cache.TranslateLinesAsync(new[] { "раз", "два" }, "ru", "en");   // warm two lines
+        inner.Drift = -1;
+
+        var ex = await Assert.ThrowsAsync<TranslationException>(
+            () => cache.TranslateLinesAsync(new[] { "раз", "два", "три" }, "ru", "en"));
+        Assert.Equal(TranslationErrorKind.BadResponse, ex.Kind);
+
+        // The inner translator was asked for the ONE miss and nothing else, so the hits really were
+        // hits and the failure really is the miss batch's.
+        Assert.Equal(new[] { "три" }, inner.BatchRequests[1]);
+
+        // …and the two good entries survived it. A retry (the chain's next tier, or the next LIVE
+        // tick) pays only for the line that was never translated.
+        inner.Drift = 0;
+        Assert.Equal(new[] { "T:раз", "T:два", "T:три" },
+                     await cache.TranslateLinesAsync(new[] { "раз", "два", "три" }, "ru", "en"));
+        Assert.Equal(3, inner.BatchRequests.Count);
+        Assert.Equal(new[] { "три" }, inner.BatchRequests[2]);
+    }
+
     /// <summary>The cache half of the same ruling from the other side: the throw must not become a
     /// way to lose entries that were already good. A batch whose lines are all cached never reaches
     /// the inner translator at all, so a mis-counting inner cannot even be asked.</summary>

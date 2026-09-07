@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using PWRUHelper.Services;
 using Xunit;
 
@@ -194,6 +195,12 @@ public class AzureSettingsTests
     [InlineData("", "westeurope", false)]                    // E6-e: clearing, region and all
     [InlineData("abc\u0007def", "westeurope", true)]         // unsendable key
     [InlineData(RealLookingKey, "west\u0001europe", true)]   // unsendable region
+    // …and the ORDER of the two rules, added at review of E6.S4. An empty key over a region the
+    // user pasted a line break into is still the clearing gesture: refusing it would leave them
+    // unable to REMOVE Azure until they had tidied a field that is about to be blanked anyway — a
+    // refusal with no exit (R-01 in miniature). AzureSaveKey_Click clears the region with the key,
+    // so nothing unsendable is persisted by letting this through.
+    [InlineData("", "westeurope", false)]              // clearing wins over "unsendable"
     public void AC5_Only_a_complete_or_an_empty_pair_is_accepted(string key, string region, bool refused)
     {
         var problem = TranslationChains.AzureCredentialProblem(key, region);
@@ -746,6 +753,134 @@ public class AzureSettingsTests
         Assert.Equal(new[] { "T:пока" }, await chain.TranslateLinesAsync(new[] { "пока" }, "ru", "en"));
         Assert.Equal(1, handler.Requests);          // ZERO new Azure requests — the AC's whole point
         Assert.Equal(2, free.Calls);
+    }
+
+    /// <summary>
+    /// <b>Review of E6.S4, Winston's first focus: one rule, two readers — and they may never
+    /// disagree.</b> <c>TranslationChains.AzureReadsTheScreen</c> is what <c>BuildRead</c> branches
+    /// on AND what the About tab's status line asks, which is only a guarantee if something checks
+    /// that the two answers move together. This sweeps <b>every settings shape</b>
+    /// <c>ChainCompositionTests.EveryPermutation()</c> knows — the same list TP-CHN-14 uses, so E8's
+    /// next setting is covered here the day it is declared — and asserts the equivalence itself:
+    /// the line says "AND for screen reading" <i>if and only if</i> the built chain's FIRST tier is
+    /// Azure.
+    ///
+    /// <para>The failure it prevents is §1's fourth principle in one sentence: a status line that
+    /// claims the user's metered key is reading the screen while the builder never constructed the
+    /// tier (or, worse, the silent direction — the chain spending the key while the line still
+    /// promises the free engines will do the reading). Both priorities, because the read chain is
+    /// built twice.</para>
+    /// </summary>
+    [Fact]
+    public void The_status_line_and_the_read_chain_can_never_disagree()
+    {
+        using var temp = new TempSettings("""{ "SettingsVersion": 3 }""");
+
+        var permutations = ChainCompositionTests.EveryPermutation();
+        Assert.True(permutations.Count > 8, "the permutation sweep found no settings to vary");
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+            var settingsField = typeof(MainWindow)
+                .GetField("_settings", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var refresh = typeof(MainWindow)
+                .GetMethod("UpdateEngineStatusUi", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var original = settingsField.GetValue(window);
+
+            var bothSidesSeen = new HashSet<bool>();
+            try
+            {
+                foreach (var settings in permutations)
+                {
+                    settingsField.SetValue(window, settings);
+                    refresh.Invoke(window, null);
+
+                    var lineSaysAzureReads = window.AzureStatus.Text ==
+                        UserMessages.AzureKeySetForReadingStatus((settings.AzureRegion ?? "").Trim());
+                    bothSidesSeen.Add(lineSaysAzureReads);
+
+                    foreach (var priority in new[] { RequestPriority.Background, RequestPriority.Interactive })
+                        Assert.Equal(lineSaysAzureReads,
+                            ChainCompositionTests.IdsOf(TranslationChains.BuildRead(settings, priority))[0]
+                                == ProviderIds.Azure);
+                }
+            }
+            finally { settingsField.SetValue(window, original); }
+
+            // Non-vacuity: an equivalence both of whose sides were always false would pass over a
+            // predicate that answered "no" to everything.
+            Assert.Equal(2, bothSidesSeen.Count);
+        });
+    }
+
+    /// <summary>
+    /// <b>Review of E6.S4, Winston's second focus: the clearing is silenced by its OWN flag.</b>
+    /// E6-e's gesture empties the region combo in code, which raises <c>SelectionChanged</c>;
+    /// <c>AzureRegionCombo_Changed</c> answering it would persist the OLD key with no region and
+    /// rebuild both chains, half a gesture before the save handler does it properly. The
+    /// implementation first borrowed <c>_restoringSettings</c> for that, and it may not: that flag
+    /// means "a RESTORE is in progress", it is true for the whole of startup, and one flag answering
+    /// two questions is how a handler that <i>should</i> have run stops running — the very bug class
+    /// it guards.
+    ///
+    /// <para>So: the save handler never touches <c>_restoringSettings</c>, and the narrow flag is
+    /// what the region handler bails on — silent while it is up, and persisting normally the moment
+    /// it comes back down (which a <c>finally</c> guarantees even if the clearing throws).</para>
+    /// </summary>
+    [Fact]
+    public void E6e_The_clearing_silences_the_region_handler_with_its_own_flag_and_only_for_itself()
+    {
+        // The structural half: whatever silences the combo inside the save handler, it is not the
+        // restore guard. A scan, because "did not raise a flag" is not observable at runtime.
+        var saveBody = Body(Code(File.ReadAllText(RepoFile("MainWindow.Translate.cs"))),
+                            "private void AzureSaveKey_Click(");
+        Assert.DoesNotContain("_restoringSettings", saveBody, StringComparison.Ordinal);
+        Assert.Contains("finally { _suppressAzureRegionHandler = false; }", saveBody, StringComparison.Ordinal);
+
+        using var temp = new TempSettings($$"""
+        { "AzureApiKey": "{{RealLookingKey}}", "AzureRegion": "westeurope", "SettingsVersion": 3 }
+        """);
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+            var flag = typeof(MainWindow)
+                .GetField("_suppressAzureRegionHandler", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var regionChanged = typeof(MainWindow)
+                .GetMethod("AzureRegionCombo_Changed", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            void RaiseRegionChanged() => regionChanged.Invoke(window, new object?[]
+            {
+                window.AzureRegionCombo,
+                new SelectionChangedEventArgs(Selector.SelectionChangedEvent,
+                                              Array.Empty<object>(), Array.Empty<object>()),
+            });
+
+            // (a) DURING the clearing — the flag is up, so the handler writes nothing, whatever the
+            //     combo now reads.
+            Assert.False((bool)flag.GetValue(window)!, "the flag is only ever up inside the gesture");
+            flag.SetValue(window, true);
+            window.AzureRegionCombo.Text = "francecentral";   // raises the real event too
+            RaiseRegionChanged();
+            Assert.Equal("westeurope", SettingsService.Load().AzureRegion);
+
+            // (b) AFTERWARDS — the same handler, the same control, persists again. A suppression
+            //     that outlived its gesture would leave the region box dead for the session.
+            flag.SetValue(window, false);
+            RaiseRegionChanged();
+            Assert.Equal("francecentral", SettingsService.Load().AzureRegion);
+
+            // …and the real gesture end to end: the flag is down again on the way out, so the box
+            // the user types in next is live.
+            window.AzureKeyBox.Password = "";
+            Save(window);
+            Assert.False((bool)flag.GetValue(window)!);
+            Assert.Equal("", SettingsService.Load().AzureRegion);
+
+            window.AzureRegionCombo.Text = "norwayeast";
+            RaiseRegionChanged();
+            Assert.Equal("norwayeast", SettingsService.Load().AzureRegion);
+        });
     }
 
     // =============================================================================================

@@ -693,8 +693,24 @@ public class HttpProviderCoreTests : GatesTestBase
         // below keeps them honest.
         var decorators = new[] { "CachingTranslator.cs" };
 
+        bool NamesTheCore(string file) =>
+            File.ReadAllText(file).Contains("HttpProviderCore", StringComparison.Ordinal);
+
+        // …and the arm has to be LOAD-BEARING, which review of E6.S4 found it was not. The first arm
+        // matches on the file's RAW TEXT — comments included, deliberately, because RequestLog.cs,
+        // ChainTranslator.cs and PerLineFallback.cs are on the request path and name the core only in
+        // prose — so a single sentence in a decorator mentioning the core (as CachingTranslator.cs's
+        // own ConfigureAwait comment did, via "HttpProviderCoreTests") silently made this second arm
+        // dead code. Nothing failed and nothing would have: the file stayed scanned, by accident,
+        // until the day that comment was reworded. Asserted rather than remembered, and it is the
+        // mutation Winston asked for made permanent — delete the arm and the floor below goes red.
+        foreach (var decorator in decorators)
+            Assert.False(NamesTheCore(Path.Combine(ServicesDir(), decorator)),
+                $"{decorator} names HttpProviderCore, so the `decorators` arm it is listed in adds "
+              + "nothing — reword the mention or drop the arm; do not leave a dead derivation.");
+
         var onTheRequestPath = Directory.EnumerateFiles(ServicesDir(), "*.cs")
-            .Where(f => File.ReadAllText(f).Contains("HttpProviderCore", StringComparison.Ordinal)
+            .Where(f => NamesTheCore(f)
                      || decorators.Contains(Path.GetFileName(f), StringComparer.Ordinal))
             .Where(f => Statements(f).Any(s => Regex.IsMatch(s, @"(^|[^\w.])await\s")))
             .OrderBy(Path.GetFileName, StringComparer.Ordinal)

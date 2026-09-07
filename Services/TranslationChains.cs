@@ -353,9 +353,16 @@ internal static class TranslationChains
     /// </summary>
     internal static string? AzureCredentialProblem(string key, string region)
     {
+        // The clearing gesture is answered FIRST, ahead of the unsendable check (review, E6.S4).
+        // Order matters here and it is a way out, not a preference: a region box carrying a pasted
+        // line break over an emptied key box is a credential nothing will ever send — and refusing
+        // it would leave the user unable to REMOVE Azure until they also tidied a field they are
+        // about to discard. E6-e says an empty key is the whole gesture; the caller blanks the
+        // region with it, so nothing unsendable is persisted either way (§1's second principle, and
+        // R-01's "no refusal without an exit" in miniature).
+        if (key.Length == 0) return null;                        // clearing the pair (E6-e)
         if (AzureTranslator.HasControlChar(key) || AzureTranslator.HasControlChar(region))
             return UserMessages.AzureCredentialUnsendable();
-        if (key.Length == 0) return null;                        // clearing the pair (E6-e)
         if (region.Length == 0) return UserMessages.AzureNeedsARegion();
         return null;
     }
