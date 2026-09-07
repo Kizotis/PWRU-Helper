@@ -97,7 +97,9 @@ public class TranslationPolicyTests
         // E4.S1 split the two: 2000 is the shared TranslationCacheStore's capacity, 500 stays the
         // default of the CachingTranslator constructor that has no store (asserted by reflection
         // below). Listed here because this number is behaviour a user can feel — it decides how much
-        // of a long session is still free after an hour.
+        // of a long session is still free after an hour. Unlike the rate-ceiling four (which are
+        // deliberately unpinned, TranslationPolicy.cs's "§5.4" block), U8/E4.S3 is expected to move
+        // this one: when it does, it edits THIS line and no other, which is the point of pinning it.
         Assert.Equal(2000, TranslationPolicy.CacheCapacity);
         Assert.Equal(1500, TranslationPolicy.MaxQueryBytes);
 

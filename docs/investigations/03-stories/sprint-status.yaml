@@ -114,7 +114,7 @@ development_status:
   epic-4: in-progress
   # A.2 ORDER (2026-09-07, Amelia CS): E4 before E5 — E4 is invisible, low-risk infrastructure and it
   # makes E5.S3's pending-retry drain nearly free (arch §9.3). Within E4: s1 -> s2 -> s4 -> s3.
-  e4-s1-extract-translation-cache-store: review           # order 1 — DoD: CachingTranslatorTests green with ZERO edits
+  e4-s1-extract-translation-cache-store: done             # order 1 — DoD met: CachingTranslatorTests green with ZERO edits; CR approve-with-fixes
   e4-s2-persist-cache-debounced: ready-for-dev            # order 2 — lands IS-2/IS-3 (TempCache + redirect) FIRST
   e4-s3-measure-cache-load-spike-u8: ready-for-dev        # spike (U8); order 4 — runs after s2, blocks nothing
   e4-s4-share-one-store-both-decorators: ready-for-dev    # order 3 — ONE store, THREE decorators (E3.S7 added a 3rd)

@@ -16,8 +16,10 @@ namespace PWRUHelper.Services;
 ///
 /// <para><b>The order is the file format.</b> The front of <see cref="_order"/> is the
 /// most-recently-used entry and the back is the one eviction takes; E4.S2 persists the list MRU-first
-/// so the order survives a restart. An <c>AddLast</c> where this says <c>AddFirst</c> passes every
-/// fresh-store test and evicts the wrong half of a long session's cache.</para>
+/// so the order survives a restart. An <c>AddLast</c> where this says <c>AddFirst</c> is invisible to
+/// any test that only fills a fresh store and evicts the wrong half of a long session's cache — which
+/// is why <c>TranslationCacheStoreTests</c>' two MRU cases drive a READ between the writes: they are
+/// what turns that inversion red.</para>
 ///
 /// <para>UI-free and I/O-free (I2, I10): one lock, two collections, no file until E4.S2 — the LIVE
 /// loop reads it on a background thread while a click writes to it on the UI thread.</para>

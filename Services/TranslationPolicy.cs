@@ -43,14 +43,18 @@ internal static class TranslationPolicy
     /// <summary>The <b>legacy decorator default</b>: what a <c>CachingTranslator</c> built without a
     /// store gives its own private one. No longer "today's cache" — since E4.S1 the shared store's
     /// capacity is <see cref="CacheCapacity"/>, and this number survives only as the parameter default
-    /// of the constructor that has no store to read a capacity from.</summary>
+    /// of the constructor that has no store to read a capacity from — which is, until E4.S4 passes a
+    /// shared store, still all three of the decorators the app builds. 500 is what ships today.</summary>
     public const int CacheCapacityToday = 500;      // [CONFIRMED] now the ctor default at CachingTranslator.cs:25
 
     /// <summary>Entries kept by the shared LRU translation cache — §5.6's number, and the default of
-    /// <see cref="TranslationCacheStore"/>. At ~150 B an entry that is ≈300 KB in memory and, from
-    /// E4.S2, on disk.</summary>
+    /// <see cref="TranslationCacheStore"/>, which nothing builds until E4.S4 shares one. §8.2's
+    /// ~150 B an entry ⇒ ≈300 KB is the JSON FILE; in memory an entry also carries two string objects,
+    /// a list node and a dictionary slot, so the RAM cost is a multiple of that and is the half U8
+    /// must actually measure — this app has a memory budget it has been bitten by.</summary>
     // [ASSUMED] architecture-cible.md §8.2, whose own sentence is "the capacity is the knob": what
-    // settles it is U8 (E4.S3) measuring the load cost of a full file against G6's startup budget.
+    // settles it is U8 (E4.S3) measuring the load cost of a full file against G6's startup budget,
+    // and the memory it costs once loaded.
     public const int CacheCapacity = 2000;
 
     /// <summary>The text travels in a GET query string, so it is chunked to stay well under
