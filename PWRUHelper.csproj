@@ -24,7 +24,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Let the test project reach a couple of internal pure helpers (ChunkText, version parsing) -->
+    <!-- Let the test project reach the internal surface: pure helpers (ChunkText, version parsing),
+         the policy and gate types, and since E4.S1 TranslationCacheStore plus CachingTranslator's
+         store-taking constructor (internal so TranslationPolicyTests' GetConstructors().Single() holds) -->
     <InternalsVisibleTo Include="PWRUHelper.Tests" />
   </ItemGroup>
 

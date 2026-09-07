@@ -263,7 +263,15 @@ public class UserMessagesTests : GatesTestBase
                 $"({s})",                                           // Live.cs:281, Ocr.cs:298
                 $"Live hiccup ({s}) — retrying…",                   // Live.cs:238
                 $"Live stopped after repeated errors ({s}).",       // Live.cs:235
-                $"OCR failed: {s}",                                 // Ocr.cs:248
+                // E5.S4 replaced "OCR failed: {s}" — developer-speak for a component the player
+                // does not have and cannot act on (§3.3). This is the COLON join, the one §3.3's
+                // "lower-cased at the join" was written for, and the reason the helper is public.
+                UserMessages.ReadFailed(new TranslationException(TranslationErrorKind.Unknown, s)),
+                // …and read-once's other three statuses, which join the same sentence three more
+                // ways. Composed through the deck rather than copied, so a wording change to any of
+                // them still has to read as a sentence here.
+                UserMessages.ReadOncePartlyTranslated(4, 3, new TranslationException(TranslationErrorKind.Unknown, s)),
+                UserMessages.ReadOnceNoneTranslated(4, new TranslationException(TranslationErrorKind.Unknown, s)),
                 $"⚠ {s} — your text is kept, press Enter to retry.",// CompactOverlay.xaml.cs:142
             };
 
@@ -281,6 +289,129 @@ public class UserMessagesTests : GatesTestBase
             Assert.True($"({s})".Length <= 110,
                 $"a feed row is {$"({s})".Length} chars, over the 110 the feed can carry: ({s})");
         }
+    }
+
+    // ---- E5.S4: the read-once statuses (§3.3) -------------------------------------------------
+
+    /// <summary>
+    /// The five sentences a read-once can end on, pinned literally like everything else in this
+    /// file: this is the increment that writes them, and the next edit to any of them must be a
+    /// deliberate one that fails here first. They are METHODS rather than table rows because each
+    /// is parameterised on what the read actually did — which is the point of the story that added
+    /// them ("Done" is a claim, and a claim has to be earned line by line).
+    ///
+    /// <para>The paused sentence now carries §3.3's {n} — ruling <b>E5-g</b> (E5.S3): the pre-capture
+    /// check that could not know a line count is gone, so the read captures, OCRs, serves what the
+    /// cache has and REPORTS the pause it was given. What is still deliberately not §3.3's is the
+    /// promise that the rows "will fill in when one is back": the retry queue is drained by the LIVE
+    /// loop, so a read taken with LIVE stopped has nothing coming for it. E7.S1 owns the final
+    /// wording.</para>
+    /// </summary>
+    [Fact]
+    public void The_read_once_statuses_read_as_this_increments_copy()
+    {
+        var offline = new TranslationException(TranslationErrorKind.Network, "raw provider text (HTTP 000)");
+
+        Assert.Equal("Done — 3 line(s) translated.", UserMessages.ReadOnceAllTranslated(3));
+        Assert.Equal("Read 5 line(s) — 3 translated, 2 could not be. No internet connection — nothing can be translated until it is back.",
+                     UserMessages.ReadOncePartlyTranslated(5, 3, offline));
+        Assert.Equal("Read 5 line(s) — 3 translated, 2 could not be.",
+                     UserMessages.ReadOncePartlyTranslated(5, 3, null));
+        Assert.Equal("Read 4 line(s) — none could be translated. No internet connection — nothing can be translated until it is back.",
+                     UserMessages.ReadOnceNoneTranslated(4, offline));
+        Assert.Equal("Read 4 line(s) — none could be translated.",
+                     UserMessages.ReadOnceNoneTranslated(4, null));
+        Assert.Equal("Read 6 line(s) — all engines are paused. Try again in 30 s.",
+                     UserMessages.ReadOncePaused(6, "30 s"));
+        Assert.Equal("Read 6 line(s) — all engines are paused. Try again shortly.",
+                     UserMessages.ReadOncePaused(6, null));
+        Assert.Equal("Could not read the screen: no internet connection — nothing can be translated until it is back.",
+                     UserMessages.ReadFailed(offline));
+        Assert.Equal("Read cancelled.", UserMessages.ReadCancelledStatus());
+        Assert.Equal("not translated — read cancelled", UserMessages.ReadCancelledRow());
+
+        // E5.S3's two row texts. The pending one is the ellipsis the feed already writes, and the
+        // assertion that matters about it is the negative one: it must NOT open with "(", or it
+        // reads as terminal (AC 2) — and, worse, as I4's "this is a failure" marker on a row that
+        // has not failed. The given-up one is the only one of the two the call site parenthesises.
+        Assert.Equal("…", UserMessages.PendingRetryRow());
+        Assert.False(UserMessages.PendingRetryRow().StartsWith('('),
+                     "a pending row may not read as a terminal failure (AC 2)");
+        Assert.Equal("not translated — the engines did not come back", UserMessages.RetryGaveUpRow());
+        Assert.False(UserMessages.RetryGaveUpRow().StartsWith('('),
+                     "the deck never writes the paren — the feed row call site does (I4)");
+    }
+
+    /// <summary>
+    /// <b>The two joins, and the review that split them (E5.S4).</b> §3.3 writes "{reason} is the
+    /// §3.1 sentence, lower-cased at the join" — true of the join it was written for, which glues
+    /// the sentence on after a COLON and must not restart it in upper case. The other three
+    /// read-once statuses join after a FULL STOP, where the same rule produced "…2 could not be. no
+    /// internet connection", and a sentence that opens in lower case after a stop reads as a typo
+    /// rather than as §1's "one sentence answering the three questions". The deck's own capital
+    /// stands there, and the line is terminated instead.
+    ///
+    /// <para>Either way only the first character is ever in play: "Your API key was refused — check
+    /// it in About" keeps the capital A of About.</para>
+    /// </summary>
+    [Fact]
+    public void The_reason_is_lower_cased_after_a_colon_and_left_alone_after_a_full_stop()
+    {
+        Assert.Equal("your API key was refused — check it in About, or clear it",
+                     UserMessages.LowerAtJoin(UserMessages.AuthFailed));
+        Assert.Equal("", UserMessages.LowerAtJoin(""));
+
+        foreach (var s in Sentences())
+        {
+            var joined = UserMessages.LowerAtJoin(s);
+            Assert.Equal(s.Length, joined.Length);
+            Assert.Equal(s[1..], joined[1..]);                       // only the first character moved
+
+            var ex = new TranslationException(
+                Enum.GetValues<TranslationErrorKind>().First(k => UserMessages.Sentence(k) == s), "raw");
+
+            // After the colon: lower-cased, and terminated because the line is shown alone.
+            Assert.Equal($"Could not read the screen: {joined}.", UserMessages.ReadFailed(ex));
+            // After the full stop: the deck's own sentence, verbatim and terminated.
+            Assert.Equal($"Read 2 line(s) — none could be translated. {s}.",
+                         UserMessages.ReadOnceNoneTranslated(2, ex));
+        }
+    }
+
+    /// <summary>
+    /// The colon join lower-cases a sentence, not an acronym. §4.4's <c>Unknown</c> arm and the
+    /// untyped-exception arm both pass a message through that this app did not write, and the
+    /// framework's start with things like "GDI+" — "Could not read the screen: gDI+ …" is the
+    /// developer-speak the join was supposed to remove, spelled worse. A second capital is the
+    /// cheapest signal that the first one is not sentence case; every deck sentence is.
+    /// </summary>
+    [Fact]
+    public void The_join_lower_cases_a_sentence_and_leaves_an_acronym_alone()
+    {
+        Assert.Equal("no internet connection — nothing can be translated until it is back",
+                     UserMessages.LowerAtJoin(UserMessages.Network));
+        Assert.Equal("GDI+ capture failed", UserMessages.LowerAtJoin("GDI+ capture failed"));
+        Assert.Equal("DNS lookup failed", UserMessages.LowerAtJoin("DNS lookup failed"));
+        Assert.Equal("a", UserMessages.LowerAtJoin("A"));
+        Assert.Equal("1 thing", UserMessages.LowerAtJoin("1 thing"));
+
+        Assert.Equal("Could not read the screen: GDI+ capture failed.",
+                     UserMessages.ReadFailed(new InvalidOperationException("GDI+ capture failed")));
+    }
+
+    /// <summary>The <c>Unknown</c> pass-through is the one reason clause that can already carry its
+    /// own full stop, and the join may not double it — "…try again later.." is the shape the deck's
+    /// no-terminal-stop rule exists to prevent, arriving from the one arm that rule does not
+    /// govern.</summary>
+    [Fact]
+    public void A_reason_that_is_already_terminated_is_not_given_a_second_stop()
+    {
+        var passthrough = new TranslationException(TranslationErrorKind.Unknown,
+            "Translation service error (HTTP 418). Please try again later.");
+
+        Assert.EndsWith("Please try again later.", UserMessages.ReadOnceNoneTranslated(2, passthrough));
+        Assert.DoesNotContain("..", UserMessages.ReadOnceNoneTranslated(2, passthrough));
+        Assert.DoesNotContain("..", UserMessages.ReadFailed(passthrough));
     }
 
     /// <summary>H11 — each sentence exists exactly once. Two Kinds sharing a string is how the

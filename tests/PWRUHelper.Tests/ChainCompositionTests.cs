@@ -30,17 +30,64 @@ public class ChainCompositionTests : GatesTestBase
 {
     private const string DictOk = """["hello"]""";
 
+    /// <summary>Every case here builds a chain, and since E4.S4 building one materialises the
+    /// process-wide <c>TranslationChains.Cache</c>. A store pins its path on first use, so leaving
+    /// this instance alive would hand the next case — in this file or in
+    /// <c>TranslationCachePersistenceTests</c> — a store carrying this run's entries and, one day, a
+    /// path into a deleted temp directory (the trap E4.S2's review found the hard way). Dropping it
+    /// per case is free: nothing here translates, so nothing here fills it.
+    ///
+    /// <para>Before as well as after, which is <see cref="GatesTestBase"/>'s own rule for the
+    /// registry applied to the store (review, E4.S4): this collection is serialised against every
+    /// other one, but it is not the first thing to run — a <c>new MainWindow()</c> in the WPF
+    /// collection now builds three chains, and nothing there drops the singleton afterwards. What
+    /// arrives here must be this file's own store, not whatever a window left behind.</para></summary>
+    public ChainCompositionTests() => TranslationChains.ResetCacheForTests();
+
+    protected override void DisposeCore() => TranslationChains.ResetCacheForTests();
+
     // ---- reading a built chain back ------------------------------------------------------------
 
     /// <summary>The tiers of a built chain, in order. Reflection because <c>_tiers</c> is private
     /// and stays private: the chain's shape is this file's business and nobody else's, and widening
-    /// the class to make a test easier would put the tier list in reach of the code-behind.</summary>
+    /// the class to make a test easier would put the tier list in reach of the code-behind.
+    ///
+    /// <para><b>One hop further in since E4.S4:</b> a builder returns the chain already wrapped in
+    /// the <see cref="CachingTranslator"/> that carries the one shared store (§8.2), so the code-
+    /// behind names neither a decorator nor a store. The <c>IsType</c> is deliberate — it makes
+    /// every case in this file assert the wrapping as a side effect, so a builder that quietly
+    /// stopped caching would fail here as well as in the case that owns it.</para></summary>
     private static IReadOnlyList<ChainTier> TiersOf(ITranslator chain)
     {
-        var field = chain.GetType().GetField("_tiers", BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.True(field != null, $"{chain.GetType().Name} has no _tiers field — the reader below is blind");
-        return (IReadOnlyList<ChainTier>)field!.GetValue(chain)!;
+        var inner = InnerOf(chain);
+
+        var field = inner.GetType().GetField("_tiers", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.True(field != null, $"{inner.GetType().Name} has no _tiers field — the reader below is blind");
+        return (IReadOnlyList<ChainTier>)field!.GetValue(inner)!;
     }
+
+    /// <summary>What a builder's decorator actually delegates to. Split out of <see cref="TiersOf"/>
+    /// at review of E5.S1, which needs the reference itself and not its tiers.</summary>
+    private static ITranslator InnerOf(ITranslator chain)
+    {
+        var decorator = Assert.IsType<CachingTranslator>(chain);
+        return (ITranslator)decorator.GetType()
+            .GetField("_inner", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(decorator)!;
+    }
+
+    /// <summary>The store a built chain's decorator was handed, and the capacity that store was
+    /// built with. Both by reflection for the same reason as the tiers: neither is public, and
+    /// neither may become public to make a test shorter.</summary>
+    private static TranslationCacheStore StoreOf(ITranslator chain)
+    {
+        var decorator = Assert.IsType<CachingTranslator>(chain);
+        return (TranslationCacheStore)decorator.GetType()
+            .GetField("_store", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(decorator)!;
+    }
+
+    private static int CapacityOf(TranslationCacheStore store) =>
+        (int)store.GetType()
+            .GetField("_capacity", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(store)!;
 
     private static List<string> IdsOf(ITranslator chain) => TiersOf(chain).Select(t => t.ProviderId).ToList();
 
@@ -145,6 +192,30 @@ public class ChainCompositionTests : GatesTestBase
         // The settings do not reorder it, and today they cannot shorten it either.
         Assert.Equal(new[] { ProviderIds.GoogleDict, ProviderIds.GoogleGtx },
                      IdsOf(TranslationChains.BuildRead(new AppSettings { DeepLApiKey = "abc-123:fx" })));
+    }
+
+    /// <summary>
+    /// <b>E5.S1's <c>out</c> seam, pinned as an IDENTITY.</b> The code-behind translates through the
+    /// returned decorator and asks the chain handed back beside it whether every rung is paused
+    /// (<c>ChainTranslator.PauseNow</c>). Those two references answer for one object graph only as
+    /// long as they really are one object graph.
+    ///
+    /// <para>A builder that handed back a SECOND <c>ChainTranslator.Of(...)</c> would compile, and
+    /// would pass every other case in this file — the gates are process-global (I9), so even
+    /// <c>PauseNow</c> would agree. What it would silently break is the half nothing else covers:
+    /// <b>E7.S3 reads <c>LastOutcome</c> from this same field</b>, and a chain nothing translates
+    /// through has no last outcome. Cheap to assert, and impossible to notice at runtime.</para>
+    /// </summary>
+    [Fact]
+    public void The_chain_handed_back_is_the_one_the_returned_translator_wraps()
+    {
+        var read = TranslationChains.BuildRead(new AppSettings(), RequestPriority.Background,
+                                               out var chain);
+
+        Assert.Same(chain, InnerOf(read));
+        // …and it is a real chain, not an empty shell that happens to be the same reference.
+        Assert.Equal(new[] { ProviderIds.GoogleDict, ProviderIds.GoogleGtx },
+                     TiersOf(read).Select(t => t.ProviderId));
     }
 
     /// <summary>§8.1's write order: the user's own key first when they have one — it is theirs, and
@@ -264,6 +335,58 @@ public class ChainCompositionTests : GatesTestBase
         Assert.NotSame(read.First().Translator, write.First().Translator);
     }
 
+    // =============================================================================================
+    //  E4.S4 — one shared store behind all three chains (§8.2, AC 1)
+    // =============================================================================================
+
+    /// <summary>
+    /// <b>The epic's whole value, as an object identity.</b> <c>SharedCacheStoreTests</c> proves what
+    /// sharing a store DOES (TP-CACHE-13's zero inner calls); this proves that the three chains
+    /// production actually builds share <b>the</b> store — the same shape, and the same reason, as
+    /// <see cref="Both_chains_share_one_gate_per_provider"/> one case up: shared state resolved once,
+    /// at composition.
+    ///
+    /// <para><b>And the capacity, which is the half that would otherwise ship wrong in silence.</b>
+    /// <c>new TranslationCacheStore()</c> is 2000 (§8.2); a builder that passed
+    /// <c>CacheCapacityToday</c> by copy-paste would end release A.2 with a 500-deep cache and every
+    /// other test still green, because nothing else asserts what the shared instance was built with
+    /// (E4.S1's review, deferred here). AC 1's user-visible half lands on this line.</para>
+    ///
+    /// <para><b>Ruling E4-a is asserted here on purpose.</b> One store behind three decorators means
+    /// a value DeepL produced for the Translator tab can later be served to the LIVE feed. That is
+    /// accepted: §8.2's key is provider-agnostic by design, and I8 is about <i>requests</i> — the
+    /// read chain still cannot construct a <see cref="DeepLTranslator"/> (TP-CHN-14 above), so no
+    /// read ever spends a character of the user's one-time million. A cached string costs no quota.
+    /// The producing tier is recorded in the entry's <c>"p"</c> for the log and the Bergamot drop
+    /// rule, and for nothing else — it is deliberately not part of the key.</para>
+    /// </summary>
+    [Fact]
+    public void The_three_chains_are_decorators_over_one_shared_store_of_the_default_capacity()
+    {
+        var settings = new AppSettings { DeepLApiKey = "abc-123:fx" };
+
+        var read = StoreOf(TranslationChains.BuildRead(settings));
+        var readOnce = StoreOf(TranslationChains.BuildRead(settings, RequestPriority.Interactive));
+        var write = StoreOf(TranslationChains.BuildWrite(settings));
+
+        // One instance, and it is the process's one persistent store — not merely "the same as each
+        // other", which three private stores of a single builder call would also satisfy.
+        Assert.Same(TranslationChains.Cache, read);
+        Assert.Same(TranslationChains.Cache, readOnce);
+        Assert.Same(TranslationChains.Cache, write);
+
+        // Still the same instance on a REBUILD, which is AC 2: the key-save handler re-runs
+        // BuildWriteChain() and the session's translations survive it.
+        Assert.Same(read, StoreOf(TranslationChains.BuildWrite(settings)));
+
+        Assert.Equal(TranslationPolicy.CacheCapacity, CapacityOf(read));
+        Assert.Equal(2000, CapacityOf(read));   // spelled out: the number a player feels, not a symbol
+
+        // Non-vacuity: 2000 is not what a decorator built the legacy way would have.
+        Assert.Equal(TranslationPolicy.CacheCapacityToday,
+                     CapacityOf(StoreOf(new CachingTranslator(TranslationChains.BuildRead(settings)))));
+    }
+
     /// <summary>
     /// <b>I10 / TP-START-01.</b> Both chains are built in <c>MainWindow</c>'s constructor, before
     /// first paint, so building one may not touch the disk: <c>ProviderGates.For</c> constructs, and
@@ -306,6 +429,13 @@ public class ChainCompositionTests : GatesTestBase
         // gate the moment something asks for it to be read (the first TryEnter, after first paint).
         ProviderGates.EnsureLoaded();
         Assert.NotNull(ProviderGates.Snapshot(ProviderIds.GoogleDict)?.BlockedUntil);
+
+        // The E4.S4 half of the same invariant, for the second file the constructor now brings into
+        // existence: building a chain CONSTRUCTS the shared store and asks it nothing, so
+        // translation-cache.json is not read before first paint either. `Count` is the assert
+        // precisely because it does not trigger the lazy load (TranslationCacheStore.Count) — the
+        // first MISS does, after the window is up.
+        Assert.Equal(0, TranslationChains.Cache.Count);
     }
 
     // =============================================================================================
@@ -333,17 +463,63 @@ public class ChainCompositionTests : GatesTestBase
 
         Assert.Contains("_readTranslator, ct)", live, StringComparison.Ordinal);
         Assert.DoesNotContain("_readOnceTranslator", live, StringComparison.Ordinal);
-        Assert.Contains("_readOnceTranslator, default)", ocr, StringComparison.Ordinal);
+        // `, ct)` and no longer `, default)`: E5.S4's whole AC 2 is that the argument stopped being
+        // `default`, so this line changed ON PURPOSE. It still pins the chain — the pair of asserts
+        // is about WHICH chain each path reads through — and now pins the token with it, which is
+        // the one thing that would silently bring back ≈36.9 s of uncancellable UI.
+        Assert.Contains("_readOnceTranslator, ct)", ocr, StringComparison.Ordinal);
 
         // Both chains are assigned in the ctor body — never back in a field initializer, where they
         // would run BEFORE _settings and read a null — and _readTranslator stays readonly so no
         // handler can swap the LIVE chain for an Interactive one later.
+        //
+        // The line lost its `new CachingTranslator(…)` in E4.S4: the builder returns the chain
+        // already wrapped in the decorator that carries the shared store, so this file names a chain
+        // and nothing else. The exact-line assert is kept rather than loosened to a substring match
+        // on BuildRead(_settings) — the ordering assert below already does the loose half, and it is
+        // this one that stops the assignment creeping back into a field initializer.
+        //
+        // E5.S1 gained the `out _readChain`: the LIVE loop has to ask the CHAIN whether every rung
+        // is paused (ChainTranslator.PauseNow) before it captures anything, and it may not ask the
+        // registry (TP-START-02). It is an `out` rather than a changed return type — which is what
+        // the story sketched, before E4.S4 landed first — precisely so the decorator keeps being
+        // built inside Services/ and the scan at the bottom of this case stays green. One call, one
+        // object graph: a second BuildRead would build a second chain over the same gates.
         Assert.Contains("private readonly ITranslator _readTranslator;", main, StringComparison.Ordinal);
-        Assert.Contains("_readTranslator = new CachingTranslator(TranslationChains.BuildRead(_settings));",
+        Assert.Contains("private readonly ChainTranslator _readChain;", main, StringComparison.Ordinal);
+        Assert.Contains(
+            "_readTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Background, out _readChain);",
             main, StringComparison.Ordinal);
-        Assert.True(main.IndexOf("TranslationChains.BuildRead(_settings)", StringComparison.Ordinal)
+        Assert.True(main.IndexOf("TranslationChains.BuildRead(_settings", StringComparison.Ordinal)
                     < main.IndexOf("InitializeComponent()", StringComparison.Ordinal),
             "the chains must be built before InitializeComponent() fires the change handlers");
+
+        // …and the write chain's rebuild, which is AC 2's source-level companion: the key-save
+        // handler builds a new CHAIN, and the store it caches into is TranslationChains' — so a
+        // merge that dropped the sharing could not compile past this line without also changing it.
+        var translate = Code(File.ReadAllText(Path.Combine(root, "MainWindow.Translate.cs")));
+        Assert.Contains("private ITranslator BuildWriteChain() => TranslationChains.BuildWrite(_settings);",
+            translate, StringComparison.Ordinal);
+
+        // NO source outside Services/ names a decorator — the same rule, and the same reason, as
+        // TranslationCachePersistenceTests' "no source outside Services/ names the store" and
+        // TP-START-02's ProviderGates scan: the composition lives in Services/ (ruling E3-c), so the
+        // next CachingTranslator outside it has to be a decision rather than a convenience.
+        //
+        // SCANNED, not listed by name (review, E4.S4): a hardcoded list of five MainWindow partials
+        // cannot see the sixth, and MainWindow.Phrasebook.cs, MainWindow.Squad.cs,
+        // MainWindow.Update.cs and CompactOverlay.xaml.cs were all already outside it. A guard that
+        // misses the file it exists for is worth nothing.
+        var decorators = ProductionSources(root)
+            .Where(f => !Path.GetDirectoryName(f)!.EndsWith("Services", StringComparison.Ordinal))
+            .SelectMany(f => Code(File.ReadAllText(f)).Split('\n')
+                .Where(l => l.Contains("new CachingTranslator", StringComparison.Ordinal))
+                .Select(l => Path.GetFileName(f) + ": " + l.Trim()))
+            .ToList();
+
+        Assert.True(decorators.Count == 0,
+            "outside Services/ the code names a chain and never a decorator (ruling E3-c): "
+            + string.Join(" | ", decorators));
     }
 
     // ---- the source-scan helpers (the shape ChainTranslatorTests already uses) -------------------
@@ -353,6 +529,21 @@ public class ChainCompositionTests : GatesTestBase
         var cut = l.IndexOf("//", StringComparison.Ordinal);
         return cut >= 0 ? l[..cut] : l;
     }));
+
+    /// <summary>Every shipped <c>.cs</c> — the app's own sources, not the suite's and not a build
+    /// output. Deliberately the same shape as
+    /// <c>TranslationCachePersistenceTests.ProductionSources</c>, because the two scans are the two
+    /// halves of one rule (no store and no decorator outside <c>Services/</c>) and a copy that
+    /// drifted would be worse than a copy that did not.</summary>
+    private static IEnumerable<string> ProductionSources(string root) =>
+        Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+            .Where(f => Path.GetRelativePath(root, f)
+                            .Split('/', '\\')
+                            .SkipLast(1)
+                            .All(seg => !seg.StartsWith('.')
+                                        && !seg.Equals("tests", StringComparison.OrdinalIgnoreCase)
+                                        && !seg.Equals("bin", StringComparison.OrdinalIgnoreCase)
+                                        && !seg.Equals("obj", StringComparison.OrdinalIgnoreCase)));
 
     private static string RepoRoot()
     {

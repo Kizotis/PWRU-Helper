@@ -42,9 +42,10 @@ namespace PWRUHelper.Services;
 ///       nothing this table returns is ever a translator's return value, so a leading paren here
 ///       could not itself poison the cache; the strings that pass that guard live in
 ///       <c>GoogleGtxTranslator</c>'s per-line fallback.</item>
-/// <item><b>No terminal full stop.</b> Every one of today's six call sites <i>joins</i> this text
+/// <item><b>No terminal full stop.</b> Every one of today's call sites <i>joins</i> this text
 ///       into a longer line — "Failed: {s}", "({s})", "Live hiccup ({s}) — retrying…",
-///       "Live stopped after repeated errors ({s}).", "OCR failed: {s}",
+///       "Live stopped after repeated errors ({s}).", read-once's four §3.3 statuses (E5.S4
+///       replaced "OCR failed: {s}" with them),
 ///       "⚠ {s} — your text is kept, press Enter to retry." — and none of them renders it alone.
 ///       With the deck's own full stop those read ".)." , "(… shortly.)" and ". — your text is
 ///       kept", so the stop is dropped here rather than at the joins: AC 2 freezes the two
@@ -155,4 +156,155 @@ internal static class UserMessages
         TaskCanceledException => Timeout,
         _ => ex.Message,
     };
+
+    // ---- what a read-once says when it is over (ux-mode-degrade.md §3.3) ----------------------
+    //
+    // METHODS, not consts, and the difference is not cosmetic. Every one of these is parameterised
+    // on what the read actually DID — how many lines were read, how many carry a translation, and
+    // why the rest do not — which is the whole of the story that added them: "Done" is a claim, and
+    // a claim has to be earned line by line. They are deliberately outside the Sentence(kind) table
+    // above: that table is keyed by error kind, its house-rule tests read every public const in
+    // this type as one of its rows, and none of these is a row — each one JOINS a row of it.
+    //
+    // The countdown is still not formatted here (I2): ReadOncePaused takes the "{t}" text already
+    // rendered by MainWindow, exactly as LivePausedStatus renders it for the LIVE loop.
+
+    /// <summary>The one sentence that may say "Done", and the caller may only reach it when every
+    /// line read has a translation (UX hint 4 / TP-ONCE-02). Unchanged wording — what changed is
+    /// that it is now one branch of four instead of the only thing a read ever said.</summary>
+    public static string ReadOnceAllTranslated(int lines)
+        => $"Done — {lines} line(s) translated.";
+
+    /// <summary>Some lines came back and some did not. The count is of ROWS that carry a real
+    /// translation, never of lines sent, and <paramref name="error"/> may legitimately be null: a
+    /// provider's per-line fallback fills the gaps it could not do with its own placeholders and
+    /// throws nothing, so there is a partial result with no exception behind it. The sentence then
+    /// stops after the counts rather than inventing a reason it does not have.</summary>
+    public static string ReadOncePartlyTranslated(int lines, int translated, Exception? error)
+        => $"Read {lines} line(s) — {translated} translated, {lines - translated} could not be." + Because(error);
+
+    /// <summary>A person ended the read — a second press, ■ Stop, or closing the window. §2.1 says
+    /// "Cancelled" is not a STATE, and it is not: nothing is degraded, nothing is retrying, no chip
+    /// and no countdown. But §1's first principle is one message per state and its fourth is honest
+    /// status, and a status line left reading "Reading…" over a read that has stopped is neither —
+    /// it is the same lie as "Done" over an empty result, told the other way round.
+    ///
+    /// <para>Terminated, unlike the §3.1 table above, because this one is rendered ALONE on the
+    /// status line and joins nothing (the E1.S6 no-terminal-stop rule is about the joins).</para></summary>
+    public static string ReadCancelledStatus() => "Read cancelled.";
+
+    /// <summary>What the rows of a cancelled read say, wrapped in I4's "(" by the call site like
+    /// every other non-translation. They may not be left on "…": a row that stays pending for ever
+    /// is exactly what makes a player press the button again (amplifier A7), which is the thing this
+    /// story exists to stop — and the read that owned them is over, so nothing will ever fill them.
+    ///
+    /// <para><b>E5.S3:</b> a row carrying this is FINISHED, not failed. A cancelled read is one the
+    /// player refused; re-sending it would spend the request they just declined, so the retry pass
+    /// must not pick these up.</para></summary>
+    public static string ReadCancelledRow() => "not translated — read cancelled";
+
+    // ---- what a row says between two attempts, and when there is no attempt left (§9.3, §2.2) ----
+    //
+    // Methods for the same reason the read-once statuses are: they are ROW text, not rows of the
+    // Sentence(kind) table, and the house-rule tests read every public const in this type as one of
+    // those rows. Here under ruling GAP-4 all the same — the copy deck is one file, so E7.S1 opens
+    // one file.
+
+    /// <summary>
+    /// <b>A row waiting for the next drain, and it is the ellipsis it already was</b> (E5.S3, T2).
+    ///
+    /// <para>§9.3 sketches «Sally: retrying…» and <c>ux-mode-degrade.md</c> §2.2's S5 row says
+    /// pending rows keep the existing "…". The two are reconciled in favour of §2.2, and the reason
+    /// is UX principle 5 rather than economy: <b>a row never carries a countdown</b> and, by the same
+    /// argument, never carries a status — there is exactly one explanation per window and it lives on
+    /// the status line. A row that says "retrying…" is a second one, on every row, saying less than
+    /// the line above it already does.
+    /// </para>
+    ///
+    /// <para>What AC 2 actually requires of it is the half that matters: it is deliberately <b>not</b>
+    /// "("-prefixed, so it reads as pending rather than terminal — a "(" here would be I4's failure
+    /// marker on a row that has not failed yet. It is safe for the identical reason the marker exists:
+    /// this string is written by the UI onto a row and is never a translator's return value, so it
+    /// cannot reach <c>CachingTranslator.IsCacheable</c>. <b>E7.S1</b> owns the final copy, together
+    /// with the retry badge (E7.S6) that is the honest place for "retrying".</para>
+    /// </summary>
+    public static string PendingRetryRow() => "…";
+
+    /// <summary>The row §2.2 calls a "given-up" one: the drain has spent
+    /// <c>TranslationPolicy.PendingRetryMaxAttempts</c> on it and there is nothing left to wait for.
+    /// Wrapped in I4's "(" by the call site like every other non-translation, which is the whole
+    /// distinction AC 2 draws — <b>only the given-up form is parenthesised</b>.
+    ///
+    /// <para>It names no engine and no reason on purpose. The reason belongs to the status line,
+    /// which said it while the row was pending; what the row owes the player is the one fact the
+    /// status line cannot carry once it has moved on — <i>this</i> message was never
+    /// translated.</para></summary>
+    public static string RetryGaveUpRow() => "not translated — the engines did not come back";
+
+    /// <summary>Nothing came back. This is the sentence the false "Done" used to cover
+    /// (amplifier A7: a player told "Done" over an empty result presses the button again).</summary>
+    public static string ReadOnceNoneTranslated(int lines, Exception? error)
+        => $"Read {lines} line(s) — none could be translated." + Because(error);
+
+    /// <summary>Every engine was inside a block window, so not one line could be translated — at a
+    /// cost of <b>zero requests</b>, which is what the pause is actually about.
+    ///
+    /// <para><b>{n} is now known, and that is ruling E5-g</b> (E5.S4 review). E5.S4 shipped this
+    /// sentence from a check that ran BEFORE the capture, so there was no line count to give and
+    /// §3.3's "Read {n} line(s) — all engines are paused" could not be written; worse, a read whose
+    /// every line was already in the cache was refused although it needed no provider at all. The
+    /// check is gone: read-once captures and OCRs (both local), the cache serves what it can, and
+    /// the pause is now <i>reported</i> — it is the chain's own
+    /// <see cref="TranslationErrorKind.AllProvidersPaused"/>, raised without sending anything.</para>
+    ///
+    /// <para>§3.3's row goes on to promise the rows "will fill in when one is back". That promise is
+    /// deliberately NOT made here: the E5.S3 retry queue is drained by the LIVE loop, and no
+    /// read-once can run while that loop does (the OCR engine is shared and non-reentrant, so one
+    /// entry point stops LIVE first and the other refuses) — so a read-once row never has a drain
+    /// coming for it and says what went wrong instead of waiting on "…". Final wording is
+    /// E7.S1's.</para></summary>
+    public static string ReadOncePaused(int lines, string? tryAgainIn)
+        => tryAgainIn is null
+            ? $"Read {lines} line(s) — all engines are paused. Try again shortly."
+            : $"Read {lines} line(s) — all engines are paused. Try again in {tryAgainIn}.";
+
+    /// <summary>The screen itself could not be read — a capture or an OCR failure, not a
+    /// translation one. Replaces "OCR failed: …", which named a component the player does not have
+    /// and cannot act on (§3.3).</summary>
+    public static string ReadFailed(Exception error)
+        => Terminated($"Could not read the screen: {LowerAtJoin(For(error))}");
+
+    /// <summary>§3.3's join rule, and it applies to <b>one</b> of the two joins in this file.
+    /// A deck sentence continues the clause it is glued to after a COLON — "Could not read the
+    /// screen: no internet connection …" — and there it must not restart in upper case.
+    ///
+    /// <para>After a full stop it is the opposite: "…2 could not be. no internet connection" reads
+    /// as a typo, not as a sentence, so <see cref="Because"/> keeps the deck's own capital and
+    /// terminates the result instead. §3.3 writes the rule as "lower-cased at the join" because it
+    /// writes only the join; §1's second principle — every message answers its three questions <i>in
+    /// one sentence</i> — is what decides which join gets it (E5.S4 review).</para>
+    ///
+    /// <para>Only the first character ever changes: "Your API key was refused — check it in About"
+    /// keeps the capital A of About. And a text that OPENS in upper case twice is left alone
+    /// entirely — §4.4's <c>Unknown</c> arm passes a provider's or the framework's own message
+    /// through, and "GDI+ capture failed" must not be joined as "gDI+ capture failed". Every
+    /// sentence in the deck is ordinary sentence case, so the guard costs the rule nothing
+    /// (review, E5.S4).</para></summary>
+    public static string LowerAtJoin(string sentence)
+        => string.IsNullOrEmpty(sentence) || (sentence.Length > 1 && char.IsUpper(sentence[1]))
+            ? sentence
+            : char.ToLowerInvariant(sentence[0]) + sentence[1..];
+
+    /// <summary>A full stop for a line that is rendered alone, added only if there is not one
+    /// already: §4.4's <c>Unknown</c> arm passes a provider's own message through verbatim, and some
+    /// of those are already terminated ("… Please try again later."). The deck's own sentences never
+    /// are — that is the E1.S6 rule, and it is why the stop belongs here, at the join.</summary>
+    private static string Terminated(string line)
+        => line.Length == 0 || ".!?".Contains(line[^1]) ? line : line + ".";
+
+    /// <summary>The reason clause of §3.3's partial and total-failure statuses: the deck's sentence
+    /// as it is written, after the full stop that ends the counts, terminated so the status line
+    /// does not trail off.</summary>
+    private static string Because(Exception? error)
+        => error is null ? "" : " " + Terminated(For(error));
 }

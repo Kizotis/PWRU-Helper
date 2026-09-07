@@ -15,6 +15,32 @@ namespace PWRUHelper.Services;
 internal readonly record struct ChainTier(string ProviderId, ProviderGate Gate, ITranslator Translator);
 
 /// <summary>
+/// Whether a chain has <b>any</b> rung left right now, and when the first one comes back — the
+/// answer <see cref="ChainTranslator.PauseNow"/> gives a caller that wants to know <i>before</i>
+/// spending anything. E5.S1's LIVE loop is the first: on <c>AllPaused</c> it skips the whole tick,
+/// capture and OCR included (owner's answer to OQ-B), so a translation outage costs a player
+/// nothing at all.
+///
+/// <para><see cref="RetryAt"/> is the <b>earliest</b> of the tiers' <c>BlockedUntil</c> windows — the
+/// chain gets a rung back when the FIRST of them reopens — and it is null when the chain is not
+/// paused. <b>It is close to, but not the same number as, the <c>AllProvidersPaused</c> exception's</b>
+/// (review, E5.S1): that one runs <c>Earliest</c> over everything <see cref="ChainTranslator.RunAsync"/>
+/// skipped, and a tier can be skipped for a reason that sets no window at all — a probe deferral, a
+/// rate-ceiling refusal, or a bare <c>Now()</c> for a skip with no remembered instant. Those are not
+/// pauses to this record, deliberately: a caller that skipped its whole tick on them would stop
+/// reading the screen for something that clears in a second. Do not render the two as one countdown.</para>
+///
+/// <para><see cref="Now"/> is the instant this answer was computed against, taken from the gates' own
+/// clock (IS-6). A caller turning <see cref="RetryAt"/> into "in {t}" must subtract THIS and not its
+/// own <c>UtcNow</c> — the two agree in production and diverge under every injected clock, which is
+/// precisely what <c>ProviderGate.Now()</c> exists to prevent.</para>
+///
+/// <para><b>Not an error and not an event</b>: this is a poll (ruling R-2 / OQ-c — <c>Services/</c>
+/// emits nothing), and asking is side-effect free by contract.</para>
+/// </summary>
+internal sealed record ChainPause(bool AllPaused, DateTimeOffset? RetryAt, DateTimeOffset Now);
+
+/// <summary>
 /// <c>architecture-cible.md</c> §6 — the ordered provider chain, and the second half of Epic 2's
 /// answer: E2 put a breaker in front of an endpoint that can refuse on request #1, and this is what
 /// makes a paused tier <b>skipped</b> rather than fatal. Tiers are tried in order; a tier whose gate
@@ -172,10 +198,7 @@ public sealed class ChainTranslator : ITranslator
             var tier = _tiers[i];
             ct.ThrowIfCancellationRequested();
 
-            // Ruling E3-a: BlockedUntil against the GATE's own clock, never State and never the
-            // wall clock. See the class comment for why both halves of that sentence are load-bearing.
-            var snapshot = tier.Gate.Snapshot();
-            if (snapshot.BlockedUntil is { } until && until > tier.Gate.Now())
+            if (BlockedUntil(tier, out var snapshot) is { } until)
             {
                 skipped.Add((tier.ProviderId, snapshot.LastKind?.ToString() ?? PausedReason, until));
                 continue;
@@ -249,6 +272,78 @@ public sealed class ChainTranslator : ITranslator
         Publish(null, skipped, TranslationErrorKind.AllProvidersPaused);
         throw new TranslationException(TranslationErrorKind.AllProvidersPaused,
             UserMessages.AllProvidersPaused, retryAt);
+    }
+
+    /// <summary>
+    /// <b>Is every rung of this chain inside a block window right now?</b> — the question E5.S1's
+    /// LIVE loop asks BEFORE it captures anything, so a paused app costs a player nothing at all
+    /// (owner's answer to OQ-B: no capture, no OCR, no dedup, no request).
+    ///
+    /// <para><b>The loop asks the chain, not the registry</b>, and that is structural:
+    /// <c>ProviderStateStoreTests.No_startup_path_mentions_ProviderGates</c> (TP-START-02) asserts —
+    /// as an exact-equality assert on a one-element array — that <c>ProviderGates.Flush();</c> is the
+    /// ONLY reference to the registry outside <c>Services/</c> in the whole app. The code-behind
+    /// already holds the chain; the chain already holds the gates.</para>
+    ///
+    /// <para><b>It runs exactly the predicate <see cref="RunAsync"/> runs</b> — one
+    /// <see cref="BlockedUntil"/>, called from both — so "paused" cannot come to mean two things:
+    /// the loop must not skip a tick the chain would have found a rung for, and it must not keep
+    /// capturing while the chain has none. Ruling <b>E3-a</b> is the half worth naming twice:
+    /// <c>BlockedUntil &gt; Now()</c>, never <c>State == Open</c>, which deliberately outlives its
+    /// window (R-01 — an app correctly paused for ever).</para>
+    ///
+    /// <para><b>Ruling E5-a's negative half.</b> A rate-ceiling <c>Wait</c> sets no
+    /// <c>BlockedUntil</c>, so it is invisible here and the tick runs: the ≤ 2 bounded waits happen
+    /// INSIDE <c>HttpProviderCore</c>, where they belong. Pre-empting them here would pause LIVE for
+    /// a condition that clears in 500 ms.</para>
+    ///
+    /// <para><b>Side-effect free</b> (ruling R-2): <see cref="ProviderGate.Snapshot"/> and
+    /// <see cref="ProviderGate.Now"/> only. Never <c>TryEnter</c> — a status read that took the
+    /// half-open probe would leave the gate half-open for a whole window with nobody to report the
+    /// result (I1), which is exactly the R-01 the chain refuses to introduce.</para>
+    /// </summary>
+    internal ChainPause PauseNow()
+    {
+        // ONE "now" for the whole answer, and it is the GATES' clock and not the caller's (IS-6).
+        // A caller rendering "next try in {t}" subtracts this from RetryAt; subtracting its own
+        // UtcNow would compare an instant one clock produced against another's — the mistake
+        // ProviderGate.Now() exists to prevent, and the one HttpProviderCore names in the same
+        // words at its own wait. _tiers is never empty (the constructor refuses it).
+        var now = _tiers[0].Gate.Now();
+
+        DateTimeOffset? earliest = null;
+        foreach (var tier in _tiers)
+        {
+            // E2.S4's lazy load, reached from a STATUS read (review, E5.S1). TryEnter is still the
+            // trigger for everything that sends, but this caller's whole point is that it will not
+            // send: an unseeded gate reports "nothing is blocked" for a window standing on disk, so
+            // without this the first tick of a session resumed INTO a pause captures, OCRs, advances
+            // the dedup clock and spends a request before the gate has read the file. Idempotent,
+            // and a no-op for a gate built without the seam.
+            tier.Gate.EnsureStateLoaded();
+
+            // One open rung is enough: the chain is not paused, and the remaining gates are not
+            // even read. "All" is the whole question — a partially paused chain still translates.
+            if (BlockedUntil(tier, out _) is not { } until) return new ChainPause(false, null, now);
+            if (earliest is null || until < earliest) earliest = until;
+        }
+        // RetryAt is therefore non-null here — the sentence a paused player reads always has an
+        // instant behind it.
+        return new ChainPause(true, earliest, now);
+    }
+
+    /// <summary>Ruling <b>E3-a</b>, written ONCE: the instant this tier is blocked until, or null if
+    /// it is available. <c>BlockedUntil</c> against the GATE's own clock (IS-6), never
+    /// <see cref="GateState"/> and never the wall clock — see the class comment for why both halves
+    /// of that sentence are load-bearing.
+    ///
+    /// <para>The snapshot comes back out because the skip path names the kind in
+    /// <see cref="Outcome.Skipped"/> and a second <c>Snapshot()</c> would be a second reading of a
+    /// state that can change between them.</para></summary>
+    private static DateTimeOffset? BlockedUntil(ChainTier tier, out GateSnapshot snapshot)
+    {
+        snapshot = tier.Gate.Snapshot();
+        return snapshot.BlockedUntil is { } until && until > tier.Gate.Now() ? until : null;
     }
 
     /// <summary>One line per tier that really <b>tried</b> and failed — a skipped tier logs nothing,

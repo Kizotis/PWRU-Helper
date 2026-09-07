@@ -161,7 +161,8 @@ internal sealed record GatePolicy(
 /// injected clock — no I/O, no network, no UI, no logging on the hot path (I2, I10; E2.S6 logs
 /// <i>transitions</i>, never skipped requests, or a 30-minute open window fills the 1 MB log).
 ///
-/// Thread-safe behind one <c>lock</c>, like <c>CachingTranslator.cs:20</c>: both chains and the LIVE
+/// Thread-safe behind one <c>lock</c>, like <c>TranslationCacheStore.cs:29</c> (E4.S1 moved that lock
+/// out of <c>CachingTranslator</c>, which this line used to cite): both chains and the LIVE
 /// loop consult the same instance concurrently (I9). No static state lives here — instances are
 /// handed out by <c>ProviderGates</c> (E2.S2) and persisted by <c>ProviderStateStore</c> (E2.S4);
 /// static state in this class would leak across xUnit's parallel collections (R4/R-08).
@@ -328,6 +329,22 @@ internal sealed class ProviderGate
     /// not a side effect — R-2's rule is that a snapshot may not <i>advance</i> one.
     /// </summary>
     internal DateTimeOffset Now() => _clock();
+
+    /// <summary>Seed this gate from <c>provider-state.json</c> if the process has not read it yet —
+    /// E2.S4's lazy load, reached from the one caller that decides <b>not</b> to make a request.
+    ///
+    /// <para><see cref="TryEnter"/> stays the trigger for every path that sends something (AC 2);
+    /// this exists because E5.S1's LIVE loop asks <see cref="Snapshot"/> whether it may skip the
+    /// whole tick, and a snapshot of an unseeded gate answers "nothing is blocked" for a window that
+    /// is standing on disk. Without it the first tick of every session captures, OCRs, advances the
+    /// dedup clock and sends a request that the gate then refuses — the one case the persisted state
+    /// exists for (resuming into a 30-minute window), and the story's own manual verification.</para>
+    ///
+    /// <para>Not a side effect in R-2's sense: no clock advances, no probe is taken, no token is
+    /// spent. It is idempotent and, after the first call of the process, one predicted branch
+    /// (<c>ProviderGates.EnsureLoaded</c>'s <c>Volatile.Read</c>). A gate built without the seam — a
+    /// unit test's own — has nothing to load and this is a no-op.</para></summary>
+    internal void EnsureStateLoaded() => _ensureLoaded?.Invoke();
 
     /// <summary>
     /// Asked once before every request — <b>before</b>, never after (§5.4 AC 1), and it never

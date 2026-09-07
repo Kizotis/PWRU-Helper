@@ -23,9 +23,11 @@ namespace PWRUHelper.Services;
 /// landed — the six breaker numbers arrived with <c>ProviderGate</c> (E2.S1), the four rate-ceiling
 /// numbers with its token bucket (E2.S3), and the two retry numbers with <c>HttpProviderCore</c>
 /// (E2.S5), which is also where the two "…Today" retry constants stopped describing today and were
-/// retired, and <c>PerLineCap</c> arrived with E3.S8's shared per-line loop. The rest
-/// (<c>CacheCapacity = 2000</c> …) still arrive with the code that reads them — E4 for the cache,
-/// E5 for LIVE — because an unused constant is a constant nobody grades.
+/// retired, and <c>PerLineCap</c> arrived with E3.S8's shared per-line loop. <c>CacheCapacity</c>
+/// arrived with E4.S1's <c>TranslationCacheStore</c>, whose default it is, and
+/// <c>CacheSaveDebounceMs</c> with E4.S2's cache file. The rest (the LIVE numbers …) still arrive
+/// with the code that reads them — E5 for LIVE — because an unused constant is a constant nobody
+/// grades.
 /// Source: <c>docs/investigations/02-traduction/architecture-cible.md</c> §5.6 (the target table),
 /// §4.3 (the HTML markers).
 /// </summary>
@@ -39,9 +41,47 @@ internal static class TranslationPolicy
     /// <summary>HttpClient timeout for every provider request, Google and DeepL alike.</summary>
     public const int RequestTimeoutSeconds = 12;    // [CONFIRMED] now read once, at HttpProviderCore.CreateClient
 
-    /// <summary>Entries kept by the in-memory LRU translation cache. §5.6 raises it to 2000 and
-    /// persists it (E4); today it is memory-only and dies with the process.</summary>
-    public const int CacheCapacityToday = 500;      // [CONFIRMED] now the ctor default at CachingTranslator.cs:24
+    /// <summary>The <b>legacy decorator default</b>: what a <c>CachingTranslator</c> built without a
+    /// store gives its own private one. No longer "today's cache" and, since E4.S4, no longer what
+    /// ships either — all three chains are decorators over the shared store, whose capacity is
+    /// <see cref="CacheCapacity"/>. This number survives only as the parameter default of the
+    /// constructor that has no store to read a capacity from, which nothing in production calls.
+    /// Kept rather than deleted because that constructor is public API of an assembly the tests
+    /// exercise, and because a story that ever needs a private cache should get 500 and not 2000 of
+    /// them.</summary>
+    public const int CacheCapacityToday = 500;      // [CONFIRMED] now the ctor default at CachingTranslator.cs:25
+
+    /// <summary>Entries kept by the shared LRU translation cache — §5.6's number, the default of
+    /// <see cref="TranslationCacheStore"/>, and since E4.S4 what the one store the app builds is
+    /// built with (<c>TranslationChains.Cache</c>, pinned by <c>ChainCompositionTests</c>). §8.2's
+    /// ~150 B an entry ⇒ ≈300 KB was the estimate for the JSON FILE, and U8 found it three times
+    /// short (see below); in memory an entry also carries two string objects, a list node and a
+    /// dictionary slot, which is the half U8 had to measure because this app has a memory budget it
+    /// has been bitten by.</summary>
+    // [MEASURED] E4.S3 / U8 on the dev box, 2026-09-07 (docs/investigations/03-stories/spikes/
+    // U8-cache-load.md): a full 2000-entry file of realistic Cyrillic chat lines is 981 KB and
+    // loads in 17.8 ms (median of 7, warm) on the calling thread of the first miss, for +960 KB
+    // managed / +892 KB working set — against §8.2's go criterion of 50 ms and G6's ~150 MB budget,
+    // both with an order of magnitude to spare. The capacity is the knob and it did not need
+    // turning; what the same measurement DID turn is TranslationCacheStore.MaxBytes, which the
+    // 981 KB had come within 4% of. The remaining open half is the cold, Defender-scanned number
+    // from a personal machine (the owner's hand-off), which does not gate A.2.
+    public const int CacheCapacity = 2000;
+
+    /// <summary>How long <see cref="TranslationCacheStore"/> waits after a store before it writes
+    /// <c>translation-cache.json</c>, coalescing every store inside the window into one write
+    /// (§8.2). Five seconds and not one: a LIVE tick stores several entries a second, and the file
+    /// is two orders of magnitude larger than <c>provider-state.json</c> — whose 1 s window
+    /// (<c>ProviderGates.SaveDebounceMs</c>) covers a handful of bytes on a rare transition, not
+    /// 300 KB on a hot path. The window is fixed from the FIRST pending store rather than restarted
+    /// by each one, so a busy minute cannot postpone the write for ever; a close inside the window
+    /// is covered by <c>SaveNow()</c> on the <c>OnClosing</c> path.</summary>
+    // [ASSUMED] architecture-cible.md §8.2 ("save debounced ~5 s, plus one on exit"); the WINDOW is
+    // still unmeasured. What U8 (E4.S3) settled is only its cost: a full 2000-entry write measured
+    // 15.8 ms on the dev box (2026-09-07), so the five seconds buy coalescing and not headroom for
+    // a slow write. What is left to settle is the window itself — field reports of the app being
+    // closed mid-window, and the storage a real user has.
+    public const int CacheSaveDebounceMs = 5000;
 
     /// <summary>The text travels in a GET query string, so it is chunked to stay well under
     /// typical URL limits.</summary>
@@ -167,6 +207,95 @@ internal static class TranslationPolicy
     /// instead (§5.4, architect's concern #1). One second: long enough to cover a keystroke, short
     /// enough that a paused provider is re-tried promptly when nobody is typing.</summary>
     public const int ProbeDeferMs = 1000;       // [ASSUMED] architecture-cible.md §5.4
+
+    // ---- the paused LIVE loop (§9.1) ---------------------------------------------------------
+    // Read by Services/LiveTickPolicy.cs (E5.S1), which is where the arithmetic lives.
+
+    /// <summary>Longest wait between two <b>skipped</b> LIVE ticks. While every read tier is inside
+    /// a block window the loop does nothing at all — no capture, no OCR, no request (OQ-B) — and the
+    /// wait doubles per skipped tick until it reaches this ceiling: 0.7 s → 1.4 → 2.8 → 5 → 5…
+    ///
+    /// <para>Five seconds is the compromise the two halves of the requirement meet at. Longer and a
+    /// gate that reopens (a 5 s <see cref="SoftCooldownSecs"/> window, the common case for a dropped
+    /// connection) would leave the feed frozen for a visible extra beat after the network is back;
+    /// shorter and a long block — a 30-minute <see cref="OpenCapMinutes"/> window — would cost
+    /// hundreds of pointless wake-ups a minute in a loop whose entire purpose is to be free while
+    /// paused. A skipped tick costs a <c>Snapshot()</c> and a string, so the ceiling is about the
+    /// wake-up and not about the work.</para></summary>
+    // [ASSUMED] architecture-cible.md §9.1 (the back-off sketch); the ceiling is calibrated to
+    // SoftCooldownSecs = 5 and has never been measured. Field logs settle it (U9 / E2.S7).
+    public const int LiveBackoffCapMs = 5000;
+
+    // ---- the honest auto-stop (§9.2) ----------------------------------------------------------
+    // Read by Services/LiveTickPolicy.cs's LiveErrorTracker (E5.S2). ONE number and one rule: LIVE
+    // stops itself after LiveAutoStopThreshold consecutive failures that COST A REQUEST, counted
+    // since the last tick that translated — no time window, whatever the elapsed time (architect's
+    // ruling, E5.S2 review). What does not count is as important as what does: an EMPTY tick asked
+    // the providers nothing and forgives nothing (that was the bug), and a pause or a gate refusal
+    // is the system working correctly and never reaches the counter at all (ruling E5-c).
+
+    /// <summary>Sent failures that stop LIVE. <b>Five is not a new number</b>: it is the literal
+    /// that shipped inside the loop (<c>if (++consecutiveErrors >= 5)</c>), moved here so that the
+    /// rule around it could change without the number changing with it — which is exactly what
+    /// happened: what the five now counts is five <i>sent</i> failures since the last translated
+    /// tick, where it used to count five non-empty ticks in a row.
+    ///
+    /// <para>It is pinned by <c>TranslationPolicyTests</c> — unlike the rate-ceiling four, which are
+    /// deliberately unpinned — because it decides <b>when LIVE stops</b>, which is behaviour a
+    /// player watches and already knows.</para></summary>
+    // [CONFIRMED] the literal this app shipped with: `if (++consecutiveErrors >= 5)` in
+    // MainWindow.Live.cs' generic catch, up to and including baseline 9c8e935. Cited by the
+    // expression and not by a line number, which the same commit moved.
+    public const int LiveAutoStopThreshold = 5;
+
+    // ---- the pending-retry queue (§9.3) --------------------------------------------------------
+    // Read by Services/PendingRetryQueue.cs and by MainWindow.Live.cs' drain (E5.S3). Ruling E3-h is
+    // what these two numbers implement: lines that failed — including the ones E3.S8's PerLineCap
+    // never asked for — are re-translated after recovery rather than burned for the session.
+
+    /// <summary>Rows the pending-retry queue holds at most, oldest dropped. <b>It is
+    /// <c>MainWindow.MaxHistory</c>'s 50 and not a number of its own</b>: the queue is bounded by the
+    /// same rule the feed is, so it can never hold a row the feed has already forgotten — and an
+    /// entry whose row HAS been evicted is dropped at drain time before it can cost a request
+    /// (<c>PendingRetryQueue.TakeAll</c>).
+    ///
+    /// <para>What the bound is really for: a 30-minute outage on a busy chat produces far more failed
+    /// rows than a feed keeps, and an unbounded queue would come back from it with a drain nobody
+    /// asked for — hundreds of requests into a provider that has just stopped refusing, which is how
+    /// a recovery becomes the next block.</para></summary>
+    // [CONFIRMED] MainWindow.xaml.cs' `private const int MaxHistory = 50`, mirrored here because
+    // Services/ cannot read the code-behind's constant; PendingRetryTests pins the two together.
+    public const int PendingRetryCapacity = 50;
+
+    /// <summary>How many drains may try one row before it becomes the terminal
+    /// <c>(not translated — …)</c> row of <c>ux-mode-degrade.md</c> §2.2. Counted in ATTEMPTS MADE,
+    /// so two means a row that has failed its retry twice stops being retried and starts saying so.
+    ///
+    /// <para>Two and not more because a row is not a request: every entry of a drain rides the same
+    /// batch, so an N-row queue retried three times is three batches into a provider whose gate has
+    /// only just reopened. The player's protection against a pending row that never resolves is this
+    /// number — after it, the row is honest about having been given up on.</para></summary>
+    // [ASSUMED] architecture-cible.md §9.3 (the number is named there and nowhere measured)
+    public const int PendingRetryMaxAttempts = 2;
+
+    // ---- read-once (§9.4) ---------------------------------------------------------------------
+    // Read by MainWindow.Ocr.cs (E5.S4), which builds one CancellationTokenSource per read from it.
+
+    /// <summary>How long a single "read the screen once" may run before it gives up and says so.
+    ///
+    /// <para>It is a <b>budget</b> and not a request timeout: <see cref="RequestTimeoutSeconds"/>
+    /// bounds ONE HTTP call, while a read fans out over two source groups, two tiers and up to
+    /// <see cref="MaxAttempts"/> attempts each. That fan-out is what took the uncancellable worst
+    /// case to ≈36.9 s — measured, in <c>analyse-implementation-actuelle.md</c> §4 — with both
+    /// read-once buttons greyed and no way out but the window.</para>
+    ///
+    /// <para>Thirty seconds is the round number just under that worst case: long enough that a slow
+    /// but working read still lands, short enough that a dead one ends inside the patience of
+    /// somebody who pressed a button and is watching. It is the CEILING and not the wait — the same
+    /// token is cancelled by a second press, by <c>StopLive</c> and by closing the window, so the
+    /// common way a read ends early is still a person ending it.</para></summary>
+    // [ASSUMED] architecture-cible.md §9.4 (the number is named there and nowhere measured)
+    public const int ReadOnceBudgetSeconds = 30;
 
     // ---- HTML abuse-page markers (§4.3) ------------------------------------------------------
     // Matched lower-cased against DE-TAGGED text — E1.S4 does the de-tagging and lower-casing, so

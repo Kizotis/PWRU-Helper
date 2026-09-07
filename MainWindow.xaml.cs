@@ -47,8 +47,11 @@ public partial class MainWindow : Window
     //                          is a user click waiting on an answer (ruling OQ-a). A second chain
     //                          instance rather than a per-call argument, because ITranslator may
     //                          not grow a priority parameter (I1) and the gates are process-global,
-    //                          so the two instances cost a few bytes and share their state. The two
-    //                          caches they carry become ONE shared store in E4 (§8.2).
+    //                          so the two instances cost a few bytes and share their state.
+    //
+    // All three are cache decorators over the SAME store since E4.S4 (§8.2): the one a chain
+    // translated is the one the other two get for free, and it is the same store across a DeepL key
+    // save, which rebuilds _writeTranslator alone.
     //
     // ALL THREE ARE ASSIGNED IN THE CONSTRUCTOR BODY, not here: field initializers run in
     // declaration order, and _settings (:65) is initialised AFTER these lines. A chain needs the
@@ -56,6 +59,19 @@ public partial class MainWindow : Window
     private ITranslator _writeTranslator;
     private readonly ITranslator _readTranslator;
     private readonly ITranslator _readOnceTranslator;
+
+    // The CHAIN inside _readTranslator — the same object, one decorator down. It is a field because
+    // the LIVE loop has to ask a question a translator cannot answer: "is every rung of you inside a
+    // block window right now?" (ChainTranslator.PauseNow, E5.S1). On a yes the loop skips the whole
+    // tick — no capture, no OCR, no request — and a translation outage costs the game nothing.
+    //
+    // ONE field for both read paths on purpose: read-once's chain is a second instance over the SAME
+    // process-global gates (I9), so this one's answer is also its own. Asking the registry directly
+    // would be the obvious alternative and is exactly what TP-START-02 forbids outside Services/ —
+    // the code-behind names a chain, never ProviderGates.
+    //
+    // E7.S3 reads ChainTranslator.LastOutcome from this same field.
+    private readonly ChainTranslator _readChain;
 
     // What the Translator tab is currently showing. Its output is a RichTextBox (so the 78-character
     // chat blocks can be tinted), and a FlowDocument's text can't be read back cleanly — so the
@@ -81,6 +97,13 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _liveCts;
     private bool _selectingRegion;                       // a screen-area drag is in progress
     private bool _readingOnce;                            // a one-shot Ctrl+Alt+R / read-once is mid-flight
+    // The read-once in flight, and WHY it was cancelled. Both are needed: a person's Stop and the
+    // 30 s budget cancel the very same token, so the exception they raise is identical by design
+    // (I3) and the reason cannot be recovered from it. It is recorded at the cancel site instead —
+    // a stop renders nothing at all (ux-mode-degrade §2.1: "Cancelled" is not a state), a budget
+    // expiry is a failure the player has to be told about (E5.S4).
+    private CancellationTokenSource? _readOnceCts;
+    private bool _readOnceStopped;
     private System.Drawing.Rectangle? _liveRegion;
     private LiveDedup _dedup = new();                     // decides which lines are genuinely new
     private int _liveTicks;
@@ -101,12 +124,18 @@ public partial class MainWindow : Window
         //     _readTranslator lost its initializer; it stays readonly so no handler can reassign it.
         //   · InitializeComponent() fires change handlers (see _restoringSettings above), so
         //     anything a handler could reach must already exist by the time it runs.
-        // Nothing here touches a control, and nothing here reads provider-state.json: the registry
-        // only CONSTRUCTS gates at this point (I10) — the first request, after first paint, loads it.
+        // Nothing here touches a control, and nothing here reads provider-state.json OR
+        // translation-cache.json: the registry only CONSTRUCTS gates at this point and the shared
+        // cache store only constructs a map (I10) — the first request loads the one, the first cache
+        // MISS loads the other, both after first paint.
+        //
+        // Each of the three is a thin cache decorator over ONE shared store — TranslationChains'
+        // (§8.2, E4.S4) — so a line any of the three translated is free to the other two. That
+        // wrapping is the builder's, not this file's: the code-behind names a chain and never a
+        // decorator or a store, for the same reason it never names ProviderGates (ruling E3-c).
         _writeTranslator = BuildWriteChain();
-        _readTranslator = new CachingTranslator(TranslationChains.BuildRead(_settings));
-        _readOnceTranslator = new CachingTranslator(
-            TranslationChains.BuildRead(_settings, RequestPriority.Interactive));
+        _readTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Background, out _readChain);
+        _readOnceTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Interactive);
         InitializeComponent();                  // fires change handlers — _restoringSettings guards them
         _toastTimer.Tick += (_, _) => { Toast.Visibility = Visibility.Collapsed; _toastTimer.Stop(); };
 
@@ -257,6 +286,10 @@ public partial class MainWindow : Window
     {
         base.OnClosing(e);
 
+        // A read-once in flight is ended by closing the window (AC 2, E5.S4). Nothing renders after
+        // it — the surfaces are going away — which is exactly what a cancel is supposed to show.
+        CancelReadOnce();
+
         // Write out any provider pause that is still inside its 1-second debounce, so a block the
         // user is waiting out survives the restart instead of being re-earned on the first request
         // (E2.S4, architecture §5.7). The ONE ProviderGates reference outside Services/ (ruling
@@ -266,6 +299,17 @@ public partial class MainWindow : Window
         // that is already being written on this very path. Outside the settings try/catch, because
         // neither save may be skipped because the other threw.
         ProviderGates.Flush();
+
+        // …and the translation cache that is still inside its 5-second debounce, so a session's
+        // last few translations survive the restart instead of being re-earned (E4.S2,
+        // architecture §8.2). Same shape and same reasoning as the line above it: one bounded
+        // synchronous write, outside the settings try/catch because neither save may be skipped
+        // because the other threw; no control, no binding, so _restoringSettings is not engaged.
+        // The facade, not the store: TranslationChains already owns the composition the code-behind
+        // is not allowed to name (ruling E3-c), and it owns the shared cache for the same reason.
+        // Since E4.S4 all three chains cache into that one store, so what this writes is the whole
+        // session — the LIVE feed's lines and the Translator tab's alike, in one file.
+        TranslationChains.FlushCache();
 
         try
         {

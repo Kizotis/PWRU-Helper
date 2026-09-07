@@ -797,8 +797,18 @@ interface change (I1):
                  "p": "google-dict", "t": "2026-09-06T13:02:11Z" } ] }
 ```
 
-Size: 2000 entries × ~150 B ≈ **300 KB**. The load cost must be measured against G6 (U8); if it is not a few
-milliseconds off the UI thread, the capacity is the knob.
+Size: **measured** at 2000 entries × **277 B ≈ 541 KB**, loading in **9.7 ms** (U8 addendum / E4.S5, 2026-09-07 —
+`docs/investigations/03-stories/spikes/U8-cache-load.md` §8). It was **502 B ≈ 981 KB** when E4.S3 first measured
+it: the ~150 B estimate this line used to carry counted Cyrillic at its two UTF-8 bytes, while `JsonSerializer`'s
+**default** encoder escaped it to `\uXXXX`, six bytes a character. E4.S5 switched the store's options to
+`JavaScriptEncoder.UnsafeRelaxedJsonEscaping` — the file is this app's alone and is never rendered — which
+recovered 45% of the file; the remaining gap to ~150 B is the English value, the timestamp and the field names,
+which no encoder touches. E4.S3's numbers below stand as the pre-change measurement:
+the load cost **17.8 ms** (median, warm) on the calling thread of the first miss for **≈1 MB** of heap — inside
+G6's budget with an order of magnitude to spare, so **the capacity stays 2000 and the knob was not turned**. What
+the same measurement did turn is the store's `MaxBytes` read bound, **1 MB → 4 MB**: a full cache had come within
+4% of being refused unread. 5000 entries were measured too (2.6 MB, 32 ms) and would **not** pass — a capacity
+increase is re-measured before it ships.
 
 **The trade-off, stated plainly (decision F).** The cache is **provider-agnostic**: the key does not include the
 provider, so a translation produced by the offline engine (COMET 0.8497) can be served later from disk while Google
@@ -1177,7 +1187,7 @@ a very different support cost.
 | **U5** | Do existing DeepL `:fx` keys still work after the July 2026 plan change? (`benchmark…` OQ-3) | what the DeepL settings row tells current users | One user with an old key, or a DeepL support ticket. |
 | **U6** | Bergamot RAM and latency on the **slow** P1 machines, not one dev laptop (`benchmark…` OQ-8b) | the Bergamot go/no-go | Same harness, run during the P1 measurement campaign. |
 | **U7** | Does shipping `bergamot.dll` beside the exe actually avoid the `%TEMP%` self-extraction? (`benchmark…` OQ-8c) | whether the offline path costs a P1 regression | Publish both ways, compare cold start. |
-| **U8** | The cost of loading a 2000-entry cache file, measured against G6 | the cache capacity | Stopwatch on the lazy-load path; capacity is the knob. |
+| **U8** | ~~The cost of loading a 2000-entry cache file, measured against G6~~ — **SETTLED 2026-09-07** (E4.S3, `03-stories/spikes/U8-cache-load.md`) | the cache capacity | **981 KB, 17.8 ms, ≈1 MB of heap, warm, on the first miss's own thread ⇒ capacity 2000 stands and is now `[MEASURED]`.** The spike also found the file 3.3× the estimate (Cyrillic `\uXXXX` escaping) and raised `MaxBytes` 1 MB → 4 MB; **E4.S5 then fixed the escaping** (non-escaping encoder ⇒ **277 B/entry, 541 KB, 9.7 ms**, U8 §8) and left the bound at 4 MB. Open half: the cold, Defender-only personal machine — owner's hand-off, does not gate A.2. |
 | **U9** | Are the §5.6 windows right? 60 s / ×2 / 30 min cap / 10 min clean reset are all **[ASSUMED]**, calibrated to a REPORTED range | nothing — they ship, instrumented | Field logs from increment 1, then tuned. This is deliberate: instrument first, tune after. |
 
 ### 15.2 Risks
