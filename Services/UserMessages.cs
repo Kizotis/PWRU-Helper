@@ -605,7 +605,15 @@ internal static class UserMessages
     /// <para>It names no engine and no reason on purpose. The reason belongs to the status line,
     /// which said it while the row was pending; what the row owes the player is the one fact the
     /// status line cannot carry once it has moved on — <i>this</i> message was never
-    /// translated.</para></summary>
+    /// translated.</para>
+    ///
+    /// <para><b>E7.S6/T1 — this sentence stands, and the alternative was considered.</b> E7.S6's
+    /// AC 2 quotes an older draft, <c>(not translated — all engines were paused)</c>. That version
+    /// states a <i>cause</i> which can be false: <c>TranslationPolicy.PendingRetryMaxAttempts</c>
+    /// (2) is reachable by two <i>sent</i> failures with nothing paused at all, and by an E3-h
+    /// per-line cap overflow. The shipped sentence is true in every case AC 2 can reach, and
+    /// <c>ux-mode-degrade.md</c> §3.3a — amendment <b>A5</b>, which is binding for E7 — lists this
+    /// exact string as one of the three row texts that exist. One spelling, not two (UX-DR19).</para></summary>
     public static string RetryGaveUpRow() => "not translated — the engines did not come back";
 
     /// <summary>Nothing came back. This is the sentence the false "Done" used to cover

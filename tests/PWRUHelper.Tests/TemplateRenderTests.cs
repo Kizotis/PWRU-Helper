@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows;
 using System.Windows.Automation;
@@ -94,6 +95,249 @@ public class TemplateRenderTests
                 Assert.True(once > live, $"a read-once card must be framed more heavily than a live one ({once} vs {live})");
             }
         });
+    }
+
+    /// <summary>
+    /// <b>TP-RENDER-01 and TP-RENDER-02 — every row state, on both templates, with zero binding
+    /// errors and the text in the visual tree.</b> §3.3a (amendment <b>A5</b>) says three row texts
+    /// exist and a row may carry nothing else; this renders all three plus a real translation, live
+    /// and read-once, through <c>window.OcrResults.ItemTemplate</c> and
+    /// <c>compact.FeedItems.ItemTemplate</c>.
+    ///
+    /// <para><b>Why a <c>ContentControl</c> and not an <c>ItemsControl</c>:</b> container generation
+    /// is deferred to the dispatcher, so an <c>ItemsControl</c> renders NOTHING headless and every
+    /// assertion below would pass over an empty tree. That is written down in four places in this
+    /// repo and it is the vacuous-green failure this story exists to avoid.</para>
+    ///
+    /// <para><b>The strings come from the deck, never as literals.</b> A row text is
+    /// <c>UserMessages</c>' to spell (GAP-4 / UX-DR19), and the "(" is I4's failure marker added by
+    /// the call site — which is exactly the distinction AC 1 and AC 2 draw: the two FINISHED forms
+    /// are parenthesised, the pending one deliberately is not, because it has not failed yet.</para>
+    /// </summary>
+    [Fact]
+    public void TP_RENDER_01_02_every_row_state_renders_on_both_feed_templates()
+    {
+        using var _ = new TempSettings("""{ "SettingsVersion": 3 }""");
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+            var compact = new CompactOverlay(window);
+
+            var states = new (string Name, string Body)[]
+            {
+                ("translated", "hello world"),
+                ("pending",    UserMessages.PendingRetryRow()),
+                ("given-up",   $"({UserMessages.RetryGaveUpRow()})"),
+                ("cancelled",  $"({UserMessages.ReadCancelledRow()})"),
+            };
+
+            foreach (var template in new[] { window.OcrResults.ItemTemplate, compact.FeedItems.ItemTemplate })
+                foreach (var (name, body) in states)
+                    foreach (var readOnce in new[] { false, true })
+                    {
+                        var texts = RenderAndCollectText(template, new OcrResultItem
+                        {
+                            Speaker = "Игрок",
+                            OriginalBody = "привет мир",
+                            TranslationBody = body,
+                            IsReadOnce = readOnce,       // the DataTrigger is a binding too
+                        });
+
+                        Assert.True(texts.Any(t => t.Contains(body, StringComparison.Ordinal)),
+                            $"the {name} row never reached the visual tree (read-once: {readOnce}); "
+                            + "rendered: " + string.Join(" | ", texts));
+
+                        // The Russian is never replaced by the row text: a message that could not be
+                        // translated still leaves the player the line they can copy and ask about.
+                        Assert.Contains(texts, t => t.Contains("привет мир", StringComparison.Ordinal));
+
+                        // AC 1, at the surface rather than at the deck: a pending row must not read
+                        // as terminal, and "(" is the only thing that would make it.
+                        if (name == "pending")
+                            Assert.DoesNotContain(texts, t => t.Contains('('));
+                    }
+        });
+    }
+
+    /// <summary>
+    /// <b>E5.S3's whole point, as a render case.</b> A pending row is filled in <i>in place</i> —
+    /// <c>TranslationBody</c> raises <c>PropertyChanged</c>, the <c>Mode=OneWay</c> <c>Run.Text</c>
+    /// binding repaints, and the row is NOT appended a second time (a duplicated feed would be worse
+    /// than the failure it came from).
+    ///
+    /// <para>Asserted as "same visual root, different text": the template child the first layout
+    /// produced is still the one carrying the new string. A binding that had been dropped, or a
+    /// property that stopped notifying, would leave "…" on screen for ever with the drain reporting
+    /// success — the failure no other test in this file can see.</para>
+    /// </summary>
+    [Fact]
+    public void A_pending_row_that_is_filled_in_repaints_the_same_visual_tree()
+    {
+        using var _ = new TempSettings("""{ "SettingsVersion": 3 }""");
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+            var compact = new CompactOverlay(window);
+
+            foreach (var template in new[] { window.OcrResults.ItemTemplate, compact.FeedItems.ItemTemplate })
+            {
+                var item = new OcrResultItem
+                {
+                    Speaker = "Игрок",
+                    OriginalBody = "привет мир",
+                    TranslationBody = UserMessages.PendingRetryRow(),
+                };
+                var host = new ContentControl { ContentTemplate = template, Content = item };
+
+                Assert.Empty(Render(host).Messages);
+                Assert.Contains(CollectTextBlockText(host),
+                                t => t.Contains(UserMessages.PendingRetryRow(), StringComparison.Ordinal));
+                var root = VisualTreeHelper.GetChild(host, 0);
+
+                // The drain, exactly as MainWindow.Live.cs writes it: one assignment, no re-add.
+                item.TranslationBody = "hello world";
+                var errors = Render(host);
+
+                Assert.True(errors.Messages.Count == 0,
+                    "WPF reported binding errors while filling a pending row in:\n" + errors.Dump());
+
+                var after = CollectTextBlockText(host);
+                Assert.Contains(after, t => t.Contains("hello world", StringComparison.Ordinal));
+                Assert.DoesNotContain(after, t => t.Contains(UserMessages.PendingRetryRow(), StringComparison.Ordinal));
+                Assert.Same(root, VisualTreeHelper.GetChild(host, 0));
+            }
+        });
+    }
+
+    /// <summary>
+    /// <b>TP-RENDER-06 — no row ever carries a countdown</b> (UX principle 5, hint 2). Fifty rows in
+    /// the state a full pause leaves them — mostly pending, some given up, one read cancelled — laid
+    /// out through both real templates, and the RENDERED text of every one of them is scanned for a
+    /// clock.
+    ///
+    /// <para>A render-time scan rather than a source one on purpose: the regression this catches is
+    /// a future story helpfully appending "— back in 0:58" to a row, which no assertion about
+    /// <c>UserMessages</c> would see. There is exactly one clock per window and it lives in the chip
+    /// and the status line (E7.S2); fifty of them, repainting at 1 Hz, is also NFR7's repaint budget
+    /// spent on saying the same thing fifty times.</para>
+    /// </summary>
+    [Fact]
+    public void TP_RENDER_06_no_row_carries_a_countdown_with_fifty_rows_paused()
+    {
+        using var _ = new TempSettings("""{ "SettingsVersion": 3 }""");
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+            var compact = new CompactOverlay(window);
+
+            var rows = Enumerable.Range(0, 50).Select(i => new OcrResultItem
+            {
+                Speaker = i % 3 == 0 ? "" : "Игрок" + i,       // both shapes of the two-tone line
+                OriginalBody = "привет мир " + i,
+                TranslationBody = (i % 10) switch
+                {
+                    7 => $"({UserMessages.RetryGaveUpRow()})",     // attempts spent
+                    9 => $"({UserMessages.ReadCancelledRow()})",   // E5-g's third state
+                    _ => UserMessages.PendingRetryRow(),           // still waiting for the drain
+                },
+            }).ToList();
+
+            int renderedRows = 0;
+            foreach (var template in new[] { window.OcrResults.ItemTemplate, compact.FeedItems.ItemTemplate })
+                foreach (var row in rows)
+                {
+                    var texts = RenderAndCollectText(template, row);
+                    Assert.NotEmpty(texts);                        // non-vacuous: it really rendered
+                    renderedRows++;
+
+                    foreach (var text in texts)
+                    {
+                        Assert.False(Regex.IsMatch(text, @"\d+:\d{2}"),
+                            $"a feed row rendered an m:ss countdown: {text}");
+                        Assert.False(Regex.IsMatch(text, @"\babout\b", RegexOptions.IgnoreCase),
+                            $"a feed row rendered \"about N min\" / \"about to retry\": {text}");
+                        Assert.False(Regex.IsMatch(text, @"\bmins?\b|\bseconds?\b|\bsecs?\b",
+                                                   RegexOptions.IgnoreCase),
+                            $"a feed row rendered a duration: {text}");
+                        Assert.False(Regex.IsMatch(text, @"retry|retrying|paused", RegexOptions.IgnoreCase),
+                            $"a feed row rendered a status the status line already carries: {text}");
+                    }
+                }
+
+            Assert.Equal(rows.Count * 2, renderedRows);
+        });
+    }
+
+    /// <summary>
+    /// <b>TP-RENDER-04 / I15 — the source scan.</b> Every <c>Run.Text</c> BINDING in the two windows
+    /// carries <c>Mode=OneWay</c>. <c>Run.Text</c> binds TwoWay by default and a get-only property
+    /// (<c>SpeakerPrefix</c>, <c>Original</c>, <c>Translation</c>) bound TwoWay throws once per
+    /// rendered row — the v0.11.2 crash, invisible to an empty-list smoke launch.
+    ///
+    /// <para><b>Scoped to bindings, and proved non-vacuous twice.</b> The About tab is full of
+    /// <c>&lt;Run Text="literal"/&gt;</c>, which a naive scan would flag; this one requires
+    /// <c>{Binding</c>. The standard failure of a source-scan test is a regex that matches nothing
+    /// and is green for ever, so the scan asserts a floor (the four bindings each feed template ships
+    /// today) AND is run against a synthetic TwoWay Run that it must catch.</para>
+    /// </summary>
+    [Fact]
+    public void TP_RENDER_04_every_Run_Text_binding_is_Mode_OneWay()
+    {
+        const string pattern = @"<Run\s[^>]*?Text\s*=\s*""\{\s*Binding[^""]*""";
+
+        // The tripwire first: a pattern that matched nothing would pass the loop below silently.
+        var trap = Regex.Matches("""<Run Text="{Binding TranslationBody}" Foreground="x"/>""", pattern);
+        Assert.Single(trap);
+        Assert.DoesNotContain("Mode=OneWay", trap[0].Value, StringComparison.Ordinal);
+
+        var total = 0;
+        foreach (var file in new[] { "MainWindow.xaml", "CompactOverlay.xaml" })
+        {
+            var runs = Regex.Matches(File.ReadAllText(RepoFile(file)), pattern)
+                            .Select(m => m.Value).ToList();
+
+            Assert.True(runs.Count >= 4,
+                $"{file}: the scan found {runs.Count} Run.Text bindings and the feed template ships "
+                + "four — the regex has drifted from the XAML and would pass over anything");
+
+            foreach (var run in runs)
+                Assert.True(run.Contains("Mode=OneWay", StringComparison.Ordinal),
+                    $"{file}: a Run.Text binding without Mode=OneWay (I15 — it binds TwoWay by "
+                    + $"default and throws once per rendered row): {run}");
+
+            total += runs.Count;
+        }
+
+        Assert.True(total >= 8, $"only {total} Run.Text bindings found across both feed templates");
+    }
+
+    /// <summary>
+    /// <b>AC 4 — <c>OcrResultItem</c> does not move.</b> It lives at the repository ROOT with
+    /// namespace <c>PWRUHelper</c> (not <c>.Models</c>), <c>project-context.md</c> says so, and every
+    /// render case in this file binds against it. A rule stated in four documents and enforced by
+    /// none is a rule that gets tidied away by the next refactor.
+    /// </summary>
+    [Fact]
+    public void OcrResultItem_stays_at_the_repository_root_in_the_PWRUHelper_namespace()
+    {
+        Assert.Equal("PWRUHelper", typeof(OcrResultItem).Namespace);
+
+        var path = RepoFile("OcrResultItem.cs");     // asserts it is AT the root
+        Assert.Contains("namespace PWRUHelper;", File.ReadAllText(path), StringComparison.Ordinal);
+    }
+
+    private static string RepoFile(string relative)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "PWRUHelper.csproj")))
+            dir = dir.Parent;
+        Assert.True(dir != null, "could not find the repo root (no PWRUHelper.csproj above the test output)");
+        var path = Path.Combine(dir!.FullName, relative);
+        Assert.True(File.Exists(path), $"expected {relative} at the repo root");
+        return path;
     }
 
     /// <summary>Render one item and report the top border thickness the card actually ended up with.</summary>
@@ -432,8 +676,35 @@ public class TemplateRenderTests
     // WPF binding error OR if the bound text never reached the visual tree.
     private static void AssertRendersCleanly(DataTemplate template, OcrResultItem item)
     {
-        var host = new ContentControl { ContentTemplate = template, Content = item };
+        var texts = RenderAndCollectText(template, item);
+        Assert.Contains(texts, t => t.Contains("hello world"));
+        Assert.Contains(texts, t => t.Contains("привет мир"));
+        Assert.Contains(texts, t => t.Contains("Игрок:"));   // grey speaker prefix rendered
+    }
 
+    /// <summary>
+    /// The render half of the helper above, reusable by the row-state cases: apply the real
+    /// template to a real item through a <c>ContentControl</c>, fail on ANY WPF binding error, and
+    /// hand back the text that actually reached the visual tree.
+    ///
+    /// <para>Renders into a fresh host every call on purpose — a row state is a different item, not
+    /// a mutated one, and reusing a host would let a stale tree answer for a template that never
+    /// re-applied. (The one case that DOES mutate an item in place asks for that explicitly.)</para>
+    /// </summary>
+    private static List<string> RenderAndCollectText(DataTemplate template, OcrResultItem item)
+    {
+        var host = new ContentControl { ContentTemplate = template, Content = item };
+        var errors = Render(host);
+
+        Assert.True(errors.Messages.Count == 0,
+            "WPF reported binding errors while rendering the item:\n" + errors.Dump());
+
+        return CollectTextBlockText(host);
+    }
+
+    /// <summary>One layout pass with the data-binding trace source captured for its duration.</summary>
+    private static BindingErrorListener Render(ContentControl host)
+    {
         var errors = new BindingErrorListener();
         PresentationTraceSources.Refresh();
         PresentationTraceSources.DataBindingSource.Listeners.Add(errors);
@@ -450,14 +721,7 @@ public class TemplateRenderTests
         {
             PresentationTraceSources.DataBindingSource.Listeners.Remove(errors);
         }
-
-        Assert.True(errors.Messages.Count == 0,
-            "WPF reported binding errors while rendering the item:\n" + errors.Dump());
-
-        var texts = CollectTextBlockText(host);
-        Assert.Contains(texts, t => t.Contains("hello world"));
-        Assert.Contains(texts, t => t.Contains("привет мир"));
-        Assert.Contains(texts, t => t.Contains("Игрок:"));   // grey speaker prefix rendered
+        return errors;
     }
 
     private static List<string> CollectTextBlockText(DependencyObject root)

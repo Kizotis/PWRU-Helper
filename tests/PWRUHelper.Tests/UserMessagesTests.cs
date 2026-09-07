@@ -688,6 +688,63 @@ public class UserMessagesTests : GatesTestBase
         }
     }
 
+    /// <summary>
+    /// <b>E7.S6 — I4's "(" marker, per row form, at every call site that writes one.</b> This is the
+    /// whole distinction AC 1 and AC 2 draw and the only thing that tells "not yet" from "never":
+    /// the two FINISHED forms are parenthesised, the PENDING one deliberately is not, because a "("
+    /// on a row that has not failed reads as terminal.
+    ///
+    /// <para>Asserted at the call sites and not only at the deck, because the deck writes no paren at
+    /// all — every one of the three strings starts bare and the marker is added where the row is
+    /// stamped. A regression here is a one-character edit in a file <c>UserMessagesTests</c> would
+    /// otherwise never open.</para>
+    ///
+    /// <para>Scanned over EVERY production source rather than the two known files, so a fourth call
+    /// site added later is covered without this test being remembered. Comments are stripped first
+    /// (<see cref="Code"/>): the rendered forms are quoted all over <c>UserMessages.cs</c>' own doc
+    /// comments, which is documentation doing its job.</para>
+    /// </summary>
+    [Fact]
+    public void E7_S6_only_the_two_finished_row_forms_are_parenthesised_at_their_call_sites()
+    {
+        foreach (var row in new[] { UserMessages.PendingRetryRow(), UserMessages.RetryGaveUpRow(),
+                                    UserMessages.ReadCancelledRow() })
+            Assert.False(row.StartsWith('('),
+                         $"the deck never writes I4's marker — the call site does: {row}");
+
+        int pending = 0, finished = 0;
+        foreach (var file in ProductionSources())
+        {
+            var code = Code(File.ReadAllText(file));
+
+            // A finished row is always written as $"({...})" — never bare, or nothing downstream
+            // can tell it from a translation (I4, and it is what keeps a placeholder out of the
+            // cache where the per-line ones really are a translator's return value).
+            foreach (var call in new[] { "RetryGaveUpRow()", "ReadCancelledRow()" })
+                foreach (Match m in Regex.Matches(code, @"[^\r\n]*" + Regex.Escape(call) + @"[^\r\n]*"))
+                {
+                    if (m.Value.Contains("public static string", StringComparison.Ordinal)) continue;  // the deck itself
+                    Assert.True(m.Value.Contains($"$\"({{UserMessages.{call}}})\"", StringComparison.Ordinal)
+                                || m.Value.Contains($"$\"({{{call}}})\"", StringComparison.Ordinal),
+                        $"a finished row is written without I4's marker in {Path.GetFileName(file)}: {m.Value.Trim()}");
+                    finished++;
+                }
+
+            // …and the pending row is written bare, on the same line, every time.
+            foreach (Match m in Regex.Matches(code, @"[^\r\n]*PendingRetryRow\(\)[^\r\n]*"))
+            {
+                if (m.Value.Contains("public static string", StringComparison.Ordinal)) continue;
+                Assert.DoesNotContain("$\"(", m.Value);
+                pending++;
+            }
+        }
+
+        // Non-vacuous: the two LIVE/read-once stamps for pending, and at least the given-up,
+        // cancelled and per-line call sites for the finished forms.
+        Assert.True(pending >= 2, $"the scan found {pending} pending-row call sites — it has gone blind");
+        Assert.True(finished >= 3, $"the scan found {finished} finished-row call sites — it has gone blind");
+    }
+
     // ---- T1: {P} — one provider-name table, total, keyed off ProviderIds ----------------------
 
     /// <summary>
