@@ -219,31 +219,27 @@ public partial class MainWindow
     //  TRANSLATION BACKEND (Google default, optional DeepL)
     // ============================================================
 
-    /// <summary>Build the WRITING translator from settings: DeepL in front of Google when an API
-    /// key is set, otherwise Google alone — always wrapped in the cache. Rebuilt on key change.
-    /// The screen-reading side never comes through here: it uses <c>_readTranslator</c> (Google only),
-    /// because a live loop translating every new chat line would eat a DeepL quota in one session.
+    /// <summary>Build the WRITING translator from settings (§8.1): the user's DeepL key in front of
+    /// the free tiers when one is set, the free tiers alone when it is not — always wrapped in the
+    /// cache. Rebuilt on key change.
     ///
-    /// <para>E3.S3 swapped <c>FallbackTranslator</c> for <see cref="ChainTranslator"/>, so a provider
-    /// whose gate is open is now SKIPPED instead of being spent a request on. The tiers are named by
-    /// id and the gates are resolved inside <c>Of</c> — this file may not name <c>ProviderGates</c>
-    /// (TP-START-02). The real §8.1 order (<c>google-dict → google-gtx</c> for reading, DeepL in
-    /// front for writing) is <b>E3.S7</b>'s; this keeps today's two tiers exactly as they were.</para></summary>
-    private ITranslator BuildTranslator()
-    {
-        var key = (_settings.DeepLApiKey ?? "").Trim();
-        ITranslator backend = key.Length > 0
-            ? ChainTranslator.Of((ProviderIds.DeepL, new DeepLTranslator(key)),
-                                 (ProviderIds.GoogleGtx, new GoogleGtxTranslator()))
-            : ChainTranslator.Of((ProviderIds.GoogleGtx, new GoogleGtxTranslator()));
-        return new CachingTranslator(backend);
-    }
+    /// <para><b>DeepL is absent from the READ chain by construction, not by configuration (I8).</b>
+    /// That is <see cref="TranslationChains.BuildRead"/>'s doing and no setting can undo it — which
+    /// is why this comment no longer says the read side is "Google only": E6 lands Azure-for-reading
+    /// behind an opt-in, and the invariant that survives it is the one about DeepL.</para>
+    ///
+    /// <para>The composition itself lives in <see cref="TranslationChains"/>, in <c>Services/</c>:
+    /// a chain needs gates, and this file may not name <c>ProviderGates</c> (TP-START-02).</para></summary>
+    private ITranslator BuildWriteChain() => new CachingTranslator(TranslationChains.BuildWrite(_settings));
 
     private void DeepLSaveKey_Click(object sender, RoutedEventArgs e)
     {
         _settings.DeepLApiKey = (DeepLKeyBox.Password ?? "").Trim();
         SettingsService.Save(_settings);
-        _writeTranslator = BuildTranslator();   // apply immediately (starts with a fresh cache)
+        // Apply immediately. It still starts with a fresh cache — the session's accumulated
+        // translations are thrown away here, an accepted A.1 tradeoff (amplifier A5): the shared
+        // store that outlives the decorator is E4's (§8.2), not this story's.
+        _writeTranslator = BuildWriteChain();
         UpdateDeepLStatus();
         ShowToast(_settings.DeepLApiKey.Length > 0
             ? "DeepL key saved — used when you write (screen reading stays on Google)"

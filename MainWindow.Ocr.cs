@@ -292,7 +292,11 @@ public partial class MainWindow
         ResultsScroller?.ScrollToEnd();   // the overlay's feed scrolls itself on CollectionChanged
 
         List<string> translations;
-        try { translations = await TranslateBodiesAsync(parts.Select(p => p.Body).ToList(), target, default); }
+        // _readOnceTranslator, not _readTranslator: this is a click, and a person is waiting on it,
+        // so its providers ask the gate as Interactive (ruling OQ-a). Same free chain, same gates,
+        // same I8 — the LIVE loop's Background reserve exists to keep a token free for exactly this.
+        try { translations = await TranslateBodiesAsync(parts.Select(p => p.Body).ToList(), target,
+                                                       _readOnceTranslator, default); }
         catch (Exception ex)
         {
             foreach (var it in items) it.TranslationBody = $"({Friendly(ex)})";

@@ -55,6 +55,13 @@ public class GoogleGtxTranslator : ITranslator
     /// it too.</summary>
     private readonly HttpProviderCore _core;
 
+    /// <summary>§5.4's reserve, per INSTANCE — the same field, for the same reason, as
+    /// <see cref="GoogleDictTranslator"/>'s: <see cref="ITranslator"/> has no channel for a priority
+    /// (I1), and E3.S7 needs the LIVE read chain to say <c>Background</c> while the Translator tab
+    /// and read-once say <c>Interactive</c>. The instances that answer to those chains share
+    /// <b>one</b> gate (I9). Defaults to <c>Interactive</c>, so the write path is unchanged.</summary>
+    private readonly RequestPriority _priority;
+
     public GoogleGtxTranslator() : this((HttpMessageHandler?)null) { }
 
     /// <summary>Test seam: a handler builds a private client — configured exactly like the shared
@@ -63,10 +70,12 @@ public class GoogleGtxTranslator : ITranslator
     /// static client. Nothing disposes the private client: production never takes this path, and a
     /// test handler owns no sockets. <paramref name="gate"/> is the same idea for E2's registry: a
     /// case that wants to watch the admission hands in its own gate instead of the shared one.</summary>
-    internal GoogleGtxTranslator(HttpMessageHandler? handler = null, ProviderGate? gate = null)
+    internal GoogleGtxTranslator(HttpMessageHandler? handler = null, ProviderGate? gate = null,
+        RequestPriority priority = RequestPriority.Interactive)
     {
         _http = handler == null ? Http : CreateClient(handler);
         _core = new HttpProviderCore(Options, _http, gate);
+        _priority = priority;
     }
 
     /// <summary>What this provider tells the core about itself (§7.0). The sentences are the LOG's
@@ -178,9 +187,9 @@ public class GoogleGtxTranslator : ITranslator
     }
 
     /// <summary>One logical call: this method owns the URL and the parser, and hands everything
-    /// else to <see cref="HttpProviderCore"/> (§7.0). <c>Interactive</c> is passed for now by
-    /// ruling — it is never worse than today's behaviour, and E3.S7 / E5.S4 are where the LIVE
-    /// loop starts saying <c>Background</c> and E2.S3's reserve becomes effective.</summary>
+    /// else to <see cref="HttpProviderCore"/> (§7.0). The priority is the INSTANCE's since E3.S7 —
+    /// the read chain builds this provider <c>Background</c> and every other caller keeps the
+    /// <c>Interactive</c> default — which is where E2.S3's reserve stopped being inert.</summary>
     private Task<string> RequestAsync(string text, string source, string target, CancellationToken ct)
     {
         var url = "https://translate.googleapis.com/translate_a/single?client=gtx" +
@@ -189,7 +198,7 @@ public class GoogleGtxTranslator : ITranslator
         // The address travels as a Uri because RequestLog renders host + path and cannot render a
         // query, and the text is handed over only to be MEASURED (I11).
         return _core.SendAsync(new Uri(url), () => new HttpRequestMessage(HttpMethod.Get, url),
-            Parse, source, target, text, RequestPriority.Interactive, ct);
+            Parse, source, target, text, _priority, ct);
     }
 
     /// <summary>Pull the translated segments out of a gtx response:

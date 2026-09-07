@@ -39,10 +39,11 @@ internal static class ProviderIds
 /// <para><b>Why static</b> (§5.1, restated here so no story re-opens it). The state a gate holds
 /// mirrors an <i>external, process-independent</i> condition — an IP-scoped counter on Google's
 /// side. It is not per-window, per-chain or per-request state, so a process-global singleton is the
-/// honest model rather than a convenience. And the alternative would have to be threaded through a
-/// field initializer that runs before <c>_settings</c> is even loaded (<c>MainWindow.xaml.cs:43</c>
-/// vs <c>:50</c>) and through <c>BuildTranslator()</c>, which runs again on every key save
-/// (<c>MainWindow.Translate.cs:239</c>) — an ordering hazard that has already produced bugs here.</para>
+/// honest model rather than a convenience. And the alternative would have to be threaded through
+/// <c>MainWindow</c>'s constructor, which builds three chains before <c>InitializeComponent()</c>
+/// (E3.S7), and through <c>BuildWriteChain()</c>, which runs again on every key save
+/// (<c>MainWindow.Translate.cs</c>'s DeepL key handler) — an ordering hazard that has already
+/// produced bugs here.</para>
 ///
 /// <para><b>The cost, paid deliberately.</b> Static state is shared across xUnit's parallel
 /// collections, so every test that touches this type lives in the non-parallel <c>Gates</c>

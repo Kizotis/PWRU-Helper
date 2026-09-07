@@ -272,7 +272,8 @@ public partial class MainWindow
         List<string> translations;
         try
         {
-            translations = await TranslateBodiesAsync(parts.Select(p => p.Body).ToList(), target, ct);
+            translations = await TranslateBodiesAsync(parts.Select(p => p.Body).ToList(), target,
+                                                     _readTranslator, ct);
         }
         catch (Exception ex)
         {
@@ -291,9 +292,17 @@ public partial class MainWindow
     /// message: real Russian (Cyrillic) is translated FROM "ru", but English/other-language messages
     /// are sent with "auto" so Google detects them instead of mangling plain English into invented
     /// Cyrillic. The two groups are still batched (one request each) and reassembled in the original
-    /// order. Always goes through <c>_readTranslator</c> (free Google) — never DeepL, whose quota a
-    /// live loop would burn through in an evening.</summary>
-    private async Task<List<string>> TranslateBodiesAsync(List<string> bodies, string target, CancellationToken ct)
+    /// order. Always goes through a READ chain — never DeepL, whose one-time free million characters
+    /// a live loop would burn through in days; that absence is structural (I8) and lives in
+    /// <c>TranslationChains.BuildRead</c>.
+    ///
+    /// <para><paramref name="reader"/> is which read chain: the LIVE loop hands in
+    /// <c>_readTranslator</c> (whose providers ask the gate as <c>Background</c>, §5.4's reserve)
+    /// and read-once hands in <c>_readOnceTranslator</c> (<c>Interactive</c> — a user is waiting on
+    /// it, ruling OQ-a). Both chains resolve the same process-global gates, so the two paths still
+    /// share one view of what each provider is doing.</para></summary>
+    private async Task<List<string>> TranslateBodiesAsync(List<string> bodies, string target,
+        ITranslator reader, CancellationToken ct)
     {
         // Expand known slang to its Russian long form BEFORE translating, so the machine
         // translation is meaningful (e.g. "нужен хил" → "нужен лекарь" → "need a healer").
@@ -312,12 +321,12 @@ public partial class MainWindow
         var result = new string?[bodies.Count];
         if (ru.Count > 0)
         {
-            var t = await _readTranslator.TranslateLinesAsync(ru, "ru", target, ct);
+            var t = await reader.TranslateLinesAsync(ru, "ru", target, ct);
             for (int i = 0; i < ruIdx.Count && i < t.Count; i++) result[ruIdx[i]] = t[i];
         }
         if (auto.Count > 0)
         {
-            var t = await _readTranslator.TranslateLinesAsync(auto, "auto", target, ct);
+            var t = await reader.TranslateLinesAsync(auto, "auto", target, ct);
             for (int i = 0; i < autoIdx.Count && i < t.Count; i++) result[autoIdx[i]] = t[i];
         }
         // Any gap (shouldn't happen) falls back to the (expanded) text rather than a null.

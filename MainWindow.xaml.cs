@@ -34,13 +34,28 @@ public partial class MainWindow : Window
     // which is why a saved "Boost contrast" came back Off on every launch (fixed in v0.13.0).
     private bool _restoringSettings = true;
 
-    // Two translators on purpose (see BuildTranslator):
-    //   _writeTranslator — what the USER writes (Translator tab, compact quick reply). Uses DeepL
-    //                      with a Google fallback when an API key is set. Rebuilt when the key changes.
-    //   _readTranslator  — the OCR feed (read-once + live). ALWAYS the free Google engine: a live
-    //                      loop translates every new chat line and would drain a DeepL quota fast.
+    // Three translators on purpose (the chains themselves are TranslationChains', §8.1):
+    //   _writeTranslator     — what the USER writes (Translator tab, compact quick reply). The
+    //                          user's DeepL key first when they have one, then the free tiers.
+    //                          Rebuilt when the key changes (BuildWriteChain, Translate.cs).
+    //   _readTranslator      — the LIVE feed. Free tiers only — DeepL is absent BY CONSTRUCTION
+    //                          (I8), because a loop translating every new chat line would drain
+    //                          DeepL's one-time free million characters in days. Its providers ask
+    //                          the gate as Background (§5.4's reserve): the loop may draw the token
+    //                          bucket down but never takes the last token.
+    //   _readOnceTranslator  — the same free chain over the same gates, but Interactive: read-once
+    //                          is a user click waiting on an answer (ruling OQ-a). A second chain
+    //                          instance rather than a per-call argument, because ITranslator may
+    //                          not grow a priority parameter (I1) and the gates are process-global,
+    //                          so the two instances cost a few bytes and share their state. The two
+    //                          caches they carry become ONE shared store in E4 (§8.2).
+    //
+    // ALL THREE ARE ASSIGNED IN THE CONSTRUCTOR BODY, not here: field initializers run in
+    // declaration order, and _settings (:65) is initialised AFTER these lines. A chain needs the
+    // settings, so an initializer here would read a null. See the ctor.
     private ITranslator _writeTranslator;
-    private readonly ITranslator _readTranslator = new CachingTranslator(new GoogleGtxTranslator());
+    private readonly ITranslator _readTranslator;
+    private readonly ITranslator _readOnceTranslator;
 
     // What the Translator tab is currently showing. Its output is a RichTextBox (so the 78-character
     // chat blocks can be tinted), and a FlowDocument's text can't be read back cleanly — so the
@@ -79,7 +94,19 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
-        _writeTranslator = BuildTranslator();   // depends on _settings, which is already loaded above
+        // The three chains, built ONCE, here, and above InitializeComponent() (§8.1). Two reasons,
+        // both of which have cost this codebase a bug:
+        //   · _settings is a field initializer (:65) and therefore already loaded, while a chain in
+        //     a field initializer of its own would run BEFORE it and read a null. That is why
+        //     _readTranslator lost its initializer; it stays readonly so no handler can reassign it.
+        //   · InitializeComponent() fires change handlers (see _restoringSettings above), so
+        //     anything a handler could reach must already exist by the time it runs.
+        // Nothing here touches a control, and nothing here reads provider-state.json: the registry
+        // only CONSTRUCTS gates at this point (I10) — the first request, after first paint, loads it.
+        _writeTranslator = BuildWriteChain();
+        _readTranslator = new CachingTranslator(TranslationChains.BuildRead(_settings));
+        _readOnceTranslator = new CachingTranslator(
+            TranslationChains.BuildRead(_settings, RequestPriority.Interactive));
         InitializeComponent();                  // fires change handlers — _restoringSettings guards them
         _toastTimer.Tick += (_, _) => { Toast.Visibility = Visibility.Collapsed; _toastTimer.Stop(); };
 

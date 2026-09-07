@@ -361,8 +361,8 @@ internal sealed class ProviderGate
     internal GateDecision TryEnter(RequestPriority priority)
     {
         // E2.S4 / AC 2: the one place provider-state.json is read. It is here rather than in
-        // ProviderGates.For because For runs inside MainWindow's field initializer
-        // (MainWindow.xaml.cs:43), i.e. before first paint — loading there would break I10 and
+        // ProviderGates.For because For runs while MainWindow's constructor builds the chains
+        // (E3.S7), i.e. before first paint — loading there would break I10 and
         // TP-START-01. Before the lock, so the registry's load can seed this very gate without a
         // lock inversion; after the first request of the process it is one predicted branch
         // (ProviderGates.EnsureLoaded's Volatile.Read).

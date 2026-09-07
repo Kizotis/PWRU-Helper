@@ -38,24 +38,31 @@ namespace PWRUHelper.Services;
 /// That path is paced by the §5.4 rate ceiling and stopped by the gate. Callers say which they are
 /// with <c>afterFailedBatch</c>, and the two are pinned by separate tests.</para>
 ///
-/// <para><b>And when every line failed for a gate reason, it throws</b> (ruling E3-f). A list of
-/// placeholders reads to <see cref="ChainTranslator"/> as a SUCCESS — the chain receives a list and
-/// has no way to see that every element of it is an apology — so a tier that was rate-limited on
-/// every line would end the chain with a healthy tier untried. If nothing succeeded and every
-/// failure was <c>RateLimited</c>, <c>Blocked</c>, or a <c>NotSent</c> refusal raised by
-/// <see cref="HttpProviderCore"/>'s admission, the last such failure is rethrown <i>as it is</i> —
-/// carrying its <c>RetryAt</c> and its <c>NotSent</c> flag, so the chain can still tell a tier that
-/// was skipped from one that tried.</para>
+/// <para><b>And a tier that translated NO line throws</b> (ruling E3-f, <b>widened by E3-g</b>). A
+/// list of placeholders reads to <see cref="ChainTranslator"/> as a SUCCESS — the chain receives a
+/// list and has no way to see that every element of it is an apology — so a tier that failed on
+/// every line would end the chain with a healthy tier untried. If nothing was translated, the last
+/// failure is rethrown <i>as it is</i> — carrying its <c>RetryAt</c> and the <c>NotSent</c> flag
+/// only <see cref="HttpProviderCore"/> may set, so the chain can still tell a tier that was refused
+/// at admission from one that really spoke to the endpoint and failed.</para>
 ///
-/// <para><b>Anything else in the loop switches that throw off</b> — a success, but also a failure
-/// that is this provider's own answer about a line (a timeout, an unparseable body), because the
-/// ruling names three gate kinds and no others. Be exact about what that costs, because "a partial
-/// failure still returns placeholders, and some of those lines really were translated" is <i>not</i>
-/// always true (E3.S8 review): a SOFT failure on line 1 is a §5.3 <c>SoftCooldown</c>, so the gate
-/// closes for 5 s and lines 2..N come back as <c>NotSent</c> refusals — the loop then returns N
-/// placeholders of which none is a translation, and the chain reads that list as a success with a
-/// healthy tier untried. The behaviour is E3-f's text applied literally and is pinned as it stands;
-/// widening the predicate is a change to the ruling and therefore the architect's, not a review's.</para>
+/// <para><b>Why the predicate is "nothing was translated" and not "every failure was a gate
+/// reason".</b> E3-f named three kinds (<c>RateLimited</c>, <c>Blocked</c>, a <c>NotSent</c>
+/// refusal), and E3.S8's review found the hole that leaves: a SOFT failure on line 1 is a §5.3
+/// <c>SoftCooldown</c>, so the gate closes for 5 s and lines 2..N come back as <c>NotSent</c>
+/// refusals — but line 1's timeout had already ticked "something other than a gate reason
+/// happened", the throw stayed off, and the loop returned N placeholders of which <b>none was a
+/// translation</b>. One timeout was enough to hand the chain a "success" with nothing in it. Ruling
+/// E3-g widened the predicate to the only thing that actually distinguishes the two cases: <b>was
+/// anything translated?</b> Placeholders are for a PARTIAL failure — a list that still contains
+/// something the player can read — and nothing else.</para>
+///
+/// <para><b>What that costs, stated plainly.</b> A tier whose every line failed softly (an
+/// unparseable body on all of them) now throws instead of returning placeholders, so the chain asks
+/// the next tier — one more provider tried on a page that was going to be unreadable anyway. When
+/// no tier is left, the chain rethrows the last failure and the player reads that provider's own
+/// sentence rather than a column of "(translation failed: …)" rows, which is the better message of
+/// the two.</para>
 ///
 /// <para><b>The placeholder strings are E7.S1's copy and this file's policy</b> (ruling E2-d): they
 /// are byte-for-byte what they were in the two providers, and they are not reworded here. All of
@@ -95,10 +102,13 @@ internal static class PerLineFallback
         bool rateLimited = false;
         int attempted = 0;
         bool capReported = false;
-        // The E3-f bookkeeping: the last gate/rate failure, and whether ANY line produced something
-        // that was not one — a success or a failure the next tier could not fix.
-        TranslationException? gated = null;
-        bool anythingElse = false;
+        // The E3-f/E3-g bookkeeping, and it is deliberately only two things: the last failure of
+        // ANY kind, and whether ANY line was actually translated. E3-f used to track "was every
+        // failure a gate reason", which is what let one timeout switch the throw off (see the class
+        // comment). Captured rather than stored so a non-TranslationException — the shape the
+        // generic catch below renders — can be rethrown with its own stack intact too.
+        ExceptionDispatchInfo? lastFailure = null;
+        bool translatedSomething = false;
 
         foreach (var line in lines)
         {
@@ -136,7 +146,7 @@ internal static class PerLineFallback
             }
 
             attempted++;
-            try { result.Add(await translateOne(line, ct).ConfigureAwait(false)); anythingElse = true; }
+            try { result.Add(await translateOne(line, ct).ConfigureAwait(false)); translatedSomething = true; }
             // A real cancel must propagate — and ONLY a real one (I3). Unfiltered, this catch rethrew
             // an HttpClient timeout (an OCE whose token is NOT cancelled) as if the user had pressed
             // Stop, throwing away every line already translated above it: exactly what rule 1 exists
@@ -150,28 +160,27 @@ internal static class PerLineFallback
             // anything.
             catch (TranslationException tex) when (tex.Kind is TranslationErrorKind.RateLimited
                                                             or TranslationErrorKind.Blocked)
-            { rateLimited = true; gated = tex; result.Add(RateLimitedMessage); }
-            // Every other typed failure is this line's problem and no other line's — except for the
-            // E3-f tally: a NotSent refusal cost no request and is the gate's doing, so a loop made
-            // entirely of them is a tier that never spoke, not a batch of failed translations.
-            // Written out rather than left to the generic catch below (which renders it identically)
-            // so the intent survives an edit to that catch: this arm exists to NOT latch.
+            { rateLimited = true; lastFailure = ExceptionDispatchInfo.Capture(tex); result.Add(RateLimitedMessage); }
+            // Every other typed failure is this line's problem and no other line's. Written out
+            // rather than left to the generic catch below (which renders it identically) so the
+            // intent survives an edit to that catch: this arm exists to NOT latch.
             catch (TranslationException tex)
             {
-                if (tex.NotSent) gated = tex; else anythingElse = true;
+                lastFailure = ExceptionDispatchInfo.Capture(tex);
                 result.Add(Failed(tex.Message));
             }
-            catch (Exception ex) { anythingElse = true; result.Add(Failed(ex.Message)); }
+            catch (Exception ex) { lastFailure = ExceptionDispatchInfo.Capture(ex); result.Add(Failed(ex.Message)); }
         }
 
-        // Ruling E3-f. Nothing got through and nothing failed for a reason the next tier shares:
-        // this is one failure of the PROVIDER, not N failures of N lines, and it is thrown so the
-        // chain moves on. Rethrown as the instance it is — RetryAt, ProviderId and NotSent included —
-        // rather than rebuilt, because ChainTranslator reads all three. Through
-        // ExceptionDispatchInfo and not `throw gated;`, which would reset the stack to THIS line
+        // Rulings E3-f and E3-g. Not one line came back translated, so the list below would be
+        // nothing but apologies: that is one failure of the PROVIDER, not N failures of N lines, and
+        // it is thrown so the chain moves on to a tier that might work. Rethrown as the instance it
+        // is — RetryAt, ProviderId and NotSent included — rather than rebuilt, because
+        // ChainTranslator reads all three (and classifies anything untyped through the mapper).
+        // Through ExceptionDispatchInfo and not `throw`, which would reset the stack to THIS line
         // and lose the throw site inside the core — on the one path the epic exists to make
         // reportable (E3.S8 review).
-        if (gated is not null && !anythingElse) ExceptionDispatchInfo.Capture(gated).Throw();
+        if (!translatedSomething && lastFailure is not null) lastFailure.Throw();
 
         return result;
     }

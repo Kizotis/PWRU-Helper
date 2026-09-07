@@ -10,7 +10,8 @@ namespace PWRUHelper.Tests;
 /// <summary>
 /// E3.S8 — the shared per-line loop: <b>TP-CHN-10</b> (a small mismatch still fans out),
 /// <b>TP-CHN-11</b> (the DoD: a big one does not), the <c>&lt;=</c>/<c>&gt;</c> boundary pair,
-/// <b>TP-CHN-12</b> (the latch keeps its shape), and ruling <b>E3-f</b>'s throw.
+/// <b>TP-CHN-12</b> (the latch keeps its shape), and ruling <b>E3-f</b>'s throw as widened by
+/// <b>E3-g</b> (E3.S7): a tier that translated NO line throws its last failure, whatever kind it is.
 ///
 /// <para>Everything is driven through the REAL providers on a <see cref="FakeHandler"/> (IS-10/
 /// IS-11): the assertion that matters is the handler's <b>request count</b>, because it is the only
@@ -236,7 +237,7 @@ public class PerLineFallbackTests : GatesTestBase
     }
 
     // =============================================================================================
-    //  Ruling E3-f — a loop that was gated on every line THROWS
+    //  Rulings E3-f / E3-g — a loop that translated NOTHING throws
     // =============================================================================================
 
     /// <summary>
@@ -284,51 +285,99 @@ public class PerLineFallbackTests : GatesTestBase
     }
 
     /// <summary>
-    /// <b>E3-f's boundary, and the reason it is not "throw whenever nothing succeeded".</b> A
-    /// failure the next tier cannot fix — an unparseable body, a timeout — is this provider's answer
-    /// about those lines, and the loop still returns it as placeholders. Only a GATE reason means
-    /// "ask somebody else".
+    /// <b>E3-g, and it is the exact case E3-f used to exclude.</b> Under E3-f a failure the next
+    /// tier "cannot fix" — an unparseable body, a timeout — came back as placeholders, on the
+    /// reasoning that they were this provider's answer about those lines. E3-g overturns that when
+    /// there is nothing else in the list: three soft failures on three lines is a list with no
+    /// translation in it, which <see cref="ChainTranslator"/> reads as a success. It now throws the
+    /// last failure, so the next tier is asked.
+    ///
+    /// <para>The thrown failure is the provider's own — <c>BadResponse</c>, and <b>not</b>
+    /// <c>NotSent</c>: this tier really did speak to the endpoint, and the chain records it as a
+    /// failure rather than a skip (ruling E3-b).</para>
     /// </summary>
     [Fact]
-    public async Task E3_f_soft_failures_on_every_line_still_return_placeholders()
+    public async Task E3_g_soft_failures_on_every_line_now_throw_instead_of_returning_placeholders()
     {
         var fake = new FakeHandler().RespondJson("not json");    // every line: a 200 of the wrong shape
 
+        var ex = await Assert.ThrowsAsync<TranslationException>(
+            () => new GoogleDictTranslator(fake).TranslateLinesAsync(Lines(3), "ru", "en"));
+
+        Assert.Equal(TranslationErrorKind.BadResponse, ex.Kind);
+        Assert.False(ex.NotSent, "the endpoint really answered — this is a failure, not a skip");
+        Assert.Equal(3, fake.Requests);          // every line was still tried before the throw
+    }
+
+    /// <summary>The other side of E3-g, and the reason it is "nothing was translated" rather than
+    /// "anything failed": one good line is a PARTIAL failure, and a translation the player can read
+    /// is never thrown away. Two soft failures around one success still come back as a list.</summary>
+    [Fact]
+    public async Task E3_g_one_translated_line_is_enough_to_keep_the_placeholders()
+    {
+        var fake = new FakeHandler()
+            .RespondJson("not json")        // line 1 fails
+            .RespondJson(DictOk)            // line 2 translates
+            .RespondJson("not json");       // line 3 fails
+
         var outp = await new GoogleDictTranslator(fake).TranslateLinesAsync(Lines(3), "ru", "en");
 
-        Assert.Equal(3, outp.Count);
-        Assert.All(outp, l => Assert.StartsWith("(translation failed: ", l));
-        Assert.Equal(3, fake.Requests);
+        Assert.StartsWith("(translation failed: ", outp[0]);
+        Assert.Equal("hello", outp[1]);
+        Assert.StartsWith("(translation failed: ", outp[2]);
     }
 
     /// <summary>
-    /// <b>The shape ruling E3-f does NOT cover, pinned as it behaves</b> (E3.S8 review — recorded
-    /// for the architect rather than changed inside a review). A soft failure on line 1 is a §5.3
+    /// <b>The hole E3-g was ruled for, now closed</b> (found by E3.S8's review, recorded for the
+    /// architect rather than changed inside a review). A soft failure on line 1 is a §5.3
     /// <c>SoftCooldown</c>: the gate closes for 5 s, so lines 2-5 are refused at admission with
-    /// <c>NotSent</c> and cost nothing. But line 1's timeout already counted as "something other
-    /// than a gate reason happened", so the throw stays off and the loop returns five placeholders
-    /// of which <b>none is a translation</b> — a list <see cref="ChainTranslator"/> reads as a
-    /// success, leaving the healthy tier below untried. One timeout is enough to reach it.
+    /// <c>NotSent</c> and cost nothing. Under E3-f, line 1's timeout counted as "something other
+    /// than a gate reason happened", the throw stayed off, and the loop returned five placeholders
+    /// of which <b>none was a translation</b> — a list <see cref="ChainTranslator"/> reads as a
+    /// success, leaving the healthy tier below untried. One timeout was enough to reach it.
     ///
-    /// <para><c>E3_f_soft_failures_on_every_line_still_return_placeholders</c> cannot see this: at
-    /// three lines against <c>BadResponseStrikesToOpen = 3</c> the gate never closes mid-loop, so
-    /// the suite pinned E3-f's two clean poles and nothing between them. This is that middle.</para>
+    /// <para>E3-g's predicate is "was anything translated", so this now throws — and it throws the
+    /// LAST failure, which is line 5's <c>NotSent</c> refusal rather than line 1's timeout: the
+    /// chain therefore records a skip with the gate's window, which is the truth about the tier as
+    /// it stands when the loop gives up.</para>
     /// </summary>
     [Fact]
-    public async Task A_soft_failure_that_closes_the_gate_leaves_the_rest_refused_and_still_does_not_throw()
+    public async Task E3_g_a_soft_failure_that_closes_the_gate_now_throws_instead_of_reading_as_a_success()
     {
         var fake = new FakeHandler()
             .RespondJson(GoogleOk)   // batch: one part for five lines — mismatch
             .TimesOut();             // line 1: a Timeout, i.e. an immediate 5 s SoftCooldown
 
-        var outp = await new GoogleGtxTranslator(fake).TranslateLinesAsync(Lines(5), "ru", "en");
+        var ex = await Assert.ThrowsAsync<TranslationException>(
+            () => new GoogleGtxTranslator(fake).TranslateLinesAsync(Lines(5), "ru", "en"));
 
-        Assert.Equal(5, outp.Count);
-        Assert.All(outp, l => Assert.StartsWith("(translation failed: ", l));
-        Assert.DoesNotContain("hello", outp);        // not one line was translated
+        Assert.True(ex.NotSent, "the last thing that happened was a refusal at admission");
+        Assert.NotNull(ex.RetryAt);
         // The batch, then line 1's attempt and its single §5.6 retry (MaxAttempts = 2). Lines 2-5
         // were refused at admission behind the cooldown — no request, and no translation either.
         Assert.Equal(1 + TranslationPolicy.MaxAttempts, fake.Requests);
+    }
+
+    /// <summary>
+    /// The same shape, end to end, which is what E3-g is FOR: the tier above hands the chain a
+    /// throw instead of five apologies, so the healthy tier below is actually asked — and the
+    /// player gets translations rather than a feed of "(translation failed: …)" rows.
+    /// </summary>
+    [Fact]
+    public async Task E3_g_end_to_end_a_tier_that_translated_nothing_lets_the_chain_use_the_next_one()
+    {
+        var gtx = new FakeHandler().RespondJson(GoogleOk).TimesOut();
+        var dict = new FakeHandler().RespondJson(DictOk);
+
+        var chain = ChainTranslator.Of(
+            (ProviderIds.GoogleGtx, new GoogleGtxTranslator(gtx)),
+            (ProviderIds.GoogleDict, new GoogleDictTranslator(dict)));
+
+        var outp = await chain.TranslateLinesAsync(Lines(5), "ru", "en");
+
+        Assert.Equal(Enumerable.Repeat("hello", 5), outp);
+        Assert.Equal(5, dict.Requests);
+        Assert.Equal(ProviderIds.GoogleDict, chain.LastOutcome!.ProviderId);
     }
 
     /// <summary>
