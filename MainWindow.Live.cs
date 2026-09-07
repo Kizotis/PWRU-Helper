@@ -220,13 +220,26 @@ public partial class MainWindow
                     // recomputed by the skipped tick itself, so it steps at most every 5 s and there
                     // is no new timer anywhere. E7.S2 replaces exactly this line with the 1 Hz poll,
                     // §2.4's granularity bands and the repaint guard.
+                    //
+                    // pause.Now, never DateTimeOffset.UtcNow: RetryAt was produced against the
+                    // GATES' clock, and subtracting a different one is the two-clocks bug IS-6 and
+                    // ProviderGate.Now() exist to prevent (review, E5.S1).
                     SetScreenStatus(LivePausedStatus(
-                        LiveTickPolicy.CountdownSeconds(pause.RetryAt, DateTimeOffset.UtcNow)));
+                        LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now)));
 
-                    // consecutiveErrors is untouched: pausing is not an error and may never feed the
-                    // auto-stop. This is what retires E2.S5's accepted escalation — a dead network
-                    // opens a 5 s soft window on every read tier, which used to be five "errors" in
-                    // ~3 s and a LIVE loop that stopped itself.
+                    // consecutiveErrors is untouched: a SKIPPED tick is neither a success nor a
+                    // failure (§9.2's table), so it may not feed the auto-stop. That is precisely
+                    // E2.S5's accepted escalation retired — "no network ⇒ 5 REFUSED ticks inside the
+                    // 5 s cooldown ⇒ LIVE auto-stops after ~3 s": those five ticks are now skipped
+                    // and reach no counter at all.
+                    //
+                    // It is NOT the whole of the auto-stop, and the difference is E5.S2's (review,
+                    // E5.S1): a tick that runs because the window has just elapsed, tries and fails,
+                    // still counts — as does one refused INSIDE the tick for a reason that sets no
+                    // BlockedUntil (the 1 s Background probe deferral, a rate-ceiling refusal),
+                    // which arrives here as an AllProvidersPaused throw. With a busy chat a dead
+                    // cable therefore still auto-stops LIVE, after ~25-30 s instead of ~3 s. §9.2's
+                    // table (gate-open ⇒ unchanged) and its 2-minute error window finish the job.
                 }
                 else
                 {

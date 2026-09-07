@@ -21,15 +21,24 @@ internal readonly record struct ChainTier(string ProviderId, ProviderGate Gate, 
 /// capture and OCR included (owner's answer to OQ-B), so a translation outage costs a player
 /// nothing at all.
 ///
-/// <para><see cref="RetryAt"/> is the <b>earliest</b> of the tiers' windows — the chain gets a rung
-/// back when the FIRST of them reopens — and it is null when the chain is not paused. It is the same
-/// instant, computed the same way, as the <c>AllProvidersPaused</c> exception's, because both come
-/// from <c>ChainTranslator.Earliest</c>.</para>
+/// <para><see cref="RetryAt"/> is the <b>earliest</b> of the tiers' <c>BlockedUntil</c> windows — the
+/// chain gets a rung back when the FIRST of them reopens — and it is null when the chain is not
+/// paused. <b>It is close to, but not the same number as, the <c>AllProvidersPaused</c> exception's</b>
+/// (review, E5.S1): that one runs <c>Earliest</c> over everything <see cref="ChainTranslator.RunAsync"/>
+/// skipped, and a tier can be skipped for a reason that sets no window at all — a probe deferral, a
+/// rate-ceiling refusal, or a bare <c>Now()</c> for a skip with no remembered instant. Those are not
+/// pauses to this record, deliberately: a caller that skipped its whole tick on them would stop
+/// reading the screen for something that clears in a second. Do not render the two as one countdown.</para>
+///
+/// <para><see cref="Now"/> is the instant this answer was computed against, taken from the gates' own
+/// clock (IS-6). A caller turning <see cref="RetryAt"/> into "in {t}" must subtract THIS and not its
+/// own <c>UtcNow</c> — the two agree in production and diverge under every injected clock, which is
+/// precisely what <c>ProviderGate.Now()</c> exists to prevent.</para>
 ///
 /// <para><b>Not an error and not an event</b>: this is a poll (ruling R-2 / OQ-c — <c>Services/</c>
 /// emits nothing), and asking is side-effect free by contract.</para>
 /// </summary>
-internal sealed record ChainPause(bool AllPaused, DateTimeOffset? RetryAt);
+internal sealed record ChainPause(bool AllPaused, DateTimeOffset? RetryAt, DateTimeOffset Now);
 
 /// <summary>
 /// <c>architecture-cible.md</c> §6 — the ordered provider chain, and the second half of Epic 2's
@@ -295,17 +304,32 @@ public sealed class ChainTranslator : ITranslator
     /// </summary>
     internal ChainPause PauseNow()
     {
+        // ONE "now" for the whole answer, and it is the GATES' clock and not the caller's (IS-6).
+        // A caller rendering "next try in {t}" subtracts this from RetryAt; subtracting its own
+        // UtcNow would compare an instant one clock produced against another's — the mistake
+        // ProviderGate.Now() exists to prevent, and the one HttpProviderCore names in the same
+        // words at its own wait. _tiers is never empty (the constructor refuses it).
+        var now = _tiers[0].Gate.Now();
+
         DateTimeOffset? earliest = null;
         foreach (var tier in _tiers)
         {
+            // E2.S4's lazy load, reached from a STATUS read (review, E5.S1). TryEnter is still the
+            // trigger for everything that sends, but this caller's whole point is that it will not
+            // send: an unseeded gate reports "nothing is blocked" for a window standing on disk, so
+            // without this the first tick of a session resumed INTO a pause captures, OCRs, advances
+            // the dedup clock and spends a request before the gate has read the file. Idempotent,
+            // and a no-op for a gate built without the seam.
+            tier.Gate.EnsureStateLoaded();
+
             // One open rung is enough: the chain is not paused, and the remaining gates are not
             // even read. "All" is the whole question — a partially paused chain still translates.
-            if (BlockedUntil(tier, out _) is not { } until) return new ChainPause(false, null);
+            if (BlockedUntil(tier, out _) is not { } until) return new ChainPause(false, null, now);
             if (earliest is null || until < earliest) earliest = until;
         }
-        // _tiers is never empty (the constructor refuses it), so RetryAt is non-null here — the
-        // sentence a paused player reads always has an instant behind it.
-        return new ChainPause(true, earliest);
+        // RetryAt is therefore non-null here — the sentence a paused player reads always has an
+        // instant behind it.
+        return new ChainPause(true, earliest, now);
     }
 
     /// <summary>Ruling <b>E3-a</b>, written ONCE: the instant this tier is blocked until, or null if

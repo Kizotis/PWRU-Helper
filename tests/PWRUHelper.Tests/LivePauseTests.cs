@@ -137,6 +137,103 @@ public class LivePauseTests
     }
 
     /// <summary>
+    /// <b>Ruling GAP-3 / R-6 — "full pause is universal", and the end-to-end half of the escalation
+    /// this story retires.</b> The gates are told only the KIND here, never a window: <c>Network</c>
+    /// classifies to <c>GateReaction.SoftCooldown</c>, so a machine with no connection has every read
+    /// tier blocked for <see cref="TranslationPolicy.SoftCooldownSecs"/> at a time and
+    /// <c>AllPaused</c> is true with no special case for UX state <b>S6</b>. That is why the loop
+    /// stops capturing when the cable is out, and it is the chain half of E2.S5's accepted
+    /// "no network ⇒ LIVE auto-stops after ~3 s (5 <i>refused</i> ticks)" — those ticks are now
+    /// skipped, so they reach no counter at all.
+    ///
+    /// <para>Asserting the classification rather than a hand-written <c>BlockedUntil</c> is the
+    /// point: a future kind table that stopped giving <c>Network</c> a window would leave the loop
+    /// capturing and OCR-ing through an outage, and every other case in this file would stay green.
+    /// It also pins that what the player is counted down to is the gate's window and not a number
+    /// the loop invented.</para>
+    /// </summary>
+    [Fact]
+    public void A_dead_network_pauses_the_whole_read_chain_with_no_special_case_for_S6()
+    {
+        var clock = new FakeClock();
+        var dict = new ProviderGate(clock.Read);
+        var gtx = new ProviderGate(clock.Read);
+        dict.ReportFailure(TranslationErrorKind.Network);
+        gtx.ReportFailure(TranslationErrorKind.Network);
+
+        var pause = Chain(dict, gtx).PauseNow();
+
+        Assert.True(pause.AllPaused);
+        Assert.Equal(clock.Now + TimeSpan.FromSeconds(TranslationPolicy.SoftCooldownSecs),
+                     pause.RetryAt);
+        Assert.Equal(TranslationPolicy.SoftCooldownSecs,
+                     LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now));
+    }
+
+    /// <summary>
+    /// <b>IS-6, as the countdown a player actually reads.</b> <c>RetryAt</c> is produced against the
+    /// gates' clock, so the answer carries the instant it was compared against and the caller
+    /// subtracts THAT — never its own <c>UtcNow</c>. The two agree in production and diverge under
+    /// every injected clock, which is the whole reason <c>ProviderGate.Now()</c> exists; before this
+    /// was fixed (review, E5.S1) the loop mixed them and the countdown could only ever be asserted
+    /// through the formatting helper, never end to end.
+    /// </summary>
+    [Fact]
+    public void The_pause_answer_carries_the_gate_clock_it_was_computed_against()
+    {
+        var clock = new FakeClock();
+        var gate = new ProviderGate(clock.Read);
+        gate.ReportFailure(TranslationErrorKind.RateLimited, clock.Now + TimeSpan.FromSeconds(30));
+        var chain = Chain(gate);
+
+        var pause = chain.PauseNow();
+        Assert.Equal(clock.Now, pause.Now);
+        // The window is the gate's to choose (it extends a hint it thinks too short), so the whole
+        // countdown is read back rather than asserted — what matters is that it then runs down.
+        int whole = LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now)!.Value;
+        Assert.True(whole > 5, "the window has to be long enough to run down");
+
+        clock.Advance(TimeSpan.FromSeconds(whole - 5));
+
+        // The wall clock did not move; the gates' did, and the countdown followed it.
+        var later = chain.PauseNow();
+        Assert.Equal(clock.Now, later.Now);
+        Assert.Equal(5, LiveTickPolicy.CountdownSeconds(later.RetryAt, later.Now));
+    }
+
+    /// <summary>
+    /// <b>A gate that has not read <c>provider-state.json</c> yet must not answer "nothing is
+    /// blocked".</b> E2.S4 hangs the lazy load off <c>TryEnter</c> — the right trigger for every path
+    /// that sends something, and the wrong one for the single caller whose entire purpose is to
+    /// decide NOT to send. Without the seeding call inside <c>PauseNow</c> (review, E5.S1) the first
+    /// tick of a session resumed INTO a standing window captures, OCRs, advances the dedup clock and
+    /// spends a request before the gate has looked at the file — which is exactly the story's own
+    /// manual verification (hand-edit the file, restart, start LIVE, expect a frozen feed).
+    ///
+    /// <para>The seam is the gate's, so this test needs no registry and no temp file: the
+    /// <c>ensureLoaded</c> delegate stands in for the load and reports whether it ran.</para>
+    /// </summary>
+    [Fact]
+    public void A_status_read_seeds_the_persisted_window_before_it_answers()
+    {
+        var clock = new FakeClock();
+        int loads = 0;
+        ProviderGate? gate = null;
+        gate = new ProviderGate(clock.Read, ensureLoaded: () =>
+        {
+            loads++;
+            // What ProviderGates.EnsureLoaded does: seed the gate from the file, once.
+            gate!.ReportFailure(TranslationErrorKind.RateLimited, clock.Now + TimeSpan.FromMinutes(30));
+        });
+
+        var pause = Chain(gate).PauseNow();
+
+        Assert.Equal(1, loads);
+        Assert.True(pause.AllPaused, "a window standing on disk is a pause on the FIRST tick, not the second");
+        Assert.Equal(clock.Now + TimeSpan.FromMinutes(30), pause.RetryAt);
+    }
+
+    /// <summary>
     /// Ruling <b>R-2</b>, as an assertion rather than a promise: asking a hundred times changes
     /// nothing. No token is spent (the bucket still admits its two), no probe is taken (the state is
     /// exactly what it was), no clock moves. A status read that took the half-open probe would leave
@@ -180,6 +277,75 @@ public class LivePauseTests
     }
 
     // ---- TP-LIVE-01: the skipped tick is empty --------------------------------------------------
+
+    /// <summary>
+    /// <b>TP-LIVE-01 and TP-LIVE-15, behaviourally — the four counters, actually counted.</b> The
+    /// loop is code-behind and needs a window; its DECISION is not, so this drives the real
+    /// <see cref="ChainTranslator.PauseNow"/> over real gates and the real <see cref="LiveDedup"/>
+    /// through the same branch the loop takes, with a counter standing in for each of the four
+    /// things a tick costs. The source scans below pin that the loop's branch has this shape; this
+    /// pins that the shape does what OQ-B says.
+    ///
+    /// <para>It is the half a scan cannot reach: it fails if <c>PauseNow</c> ever answers "not
+    /// paused" for a fully blocked chain, and it asserts <b>AC 3 on the other side of the pause</b>,
+    /// which is where the player sees it — a message that arrived DURING the outage is translated
+    /// the moment the window elapses (the row this story stops burning), while one already
+    /// translated before it stays suppressed because the dedup clock never advanced.</para>
+    /// </summary>
+    [Fact]
+    public void TP_LIVE_01_twenty_paused_ticks_cost_nothing_and_the_feed_catches_up_after_them()
+    {
+        const double match = 0.85, confirm = 0.70;
+        const string before = "proBlemka: ТС ЛЕГА 2 ДД";
+        const string during = "kotik: го в лк, нужен хил";
+
+        var clock = new FakeClock();
+        var dict = new ProviderGate(clock.Read);
+        var gtx = new ProviderGate(clock.Read);
+        var chain = Chain(dict, gtx);
+        var dedup = new LiveDedup();
+
+        int captures = 0, ocrReads = 0, requests = 0;
+        var feed = new List<string>();
+
+        // The loop's tick with its four costs counted instead of incurred. The order, the branch and
+        // "confirmed lines are translated" are the loop's own (MainWindow.Live.cs:203-275).
+        void Tick(string[] onScreen)
+        {
+            if (chain.PauseNow().AllPaused) return;          // …the whole tick body is skipped
+            captures++;
+            ocrReads++;
+            var confirmed = dedup.Next(onScreen, match, confirm);
+            if (confirmed.Count == 0) return;
+            requests++;
+            feed.AddRange(confirmed);
+        }
+
+        Tick(new[] { before });
+        Tick(new[] { before });
+        Assert.Equal(new[] { before }, feed);
+        var (capturesBefore, ocrBefore, requestsBefore) = (captures, ocrReads, requests);
+
+        // The cable comes out — every read tier takes a soft window (GAP-3) — and a new message
+        // arrives on screen and stays there for the whole outage.
+        dict.ReportFailure(TranslationErrorKind.Network);
+        gtx.ReportFailure(TranslationErrorKind.Network);
+        for (int i = 0; i < 20; i++) Tick(new[] { before, during });
+
+        Assert.Equal(capturesBefore, captures);              // no capture…
+        Assert.Equal(ocrBefore, ocrReads);                   // …no OCR…
+        Assert.Equal(requestsBefore, requests);              // …and no request.
+        Assert.Equal(new[] { before }, feed);                // the feed is frozen and nothing burned
+
+        // The window elapses: the loop resumes, and the message that sat on screen throughout is
+        // still genuinely new. Two ticks because LiveDedup confirms on the second sighting.
+        clock.Advance(TimeSpan.FromSeconds(TranslationPolicy.SoftCooldownSecs + 1));
+        Tick(new[] { before, during });
+        Tick(new[] { before, during });
+
+        Assert.Equal(new[] { before, during }, feed);
+        Assert.Equal(capturesBefore + 2, captures);          // and the loop is back at full cadence
+    }
 
     /// <summary>
     /// <b>TP-LIVE-01, OQ-B's full pause.</b> The loop is code-behind and cannot be driven headlessly,
@@ -265,6 +431,34 @@ public class LivePauseTests
 
         Assert.DoesNotContain("DispatcherTimer", live);
         Assert.Contains("int wait = pausedWait", live);
+    }
+
+    /// <summary>
+    /// Two properties of the wait itself, which the scan above only names.
+    ///
+    /// <list type="bullet">
+    /// <item><b>The skipped tick is what sets it</b> — the branch computes the back-off AND advances
+    ///       the step counter, so the curve really is per skipped tick and not per second.</item>
+    /// <item><b>Stop during a five-second back-off exits at once</b>: the wait is awaited on the
+    ///       loop's own token. A player who presses Stop 4 s into a paused wait must not watch a
+    ///       dead LIVE indicator until the wait elapses — <c>StopLive</c> has already run
+    ///       <c>SetLiveUi(false)</c> on the dispatcher, and nothing after the break writes a status
+    ///       over its "Live stopped." (R-02 again, in the longest window this story introduces).</item>
+    /// </list>
+    /// </summary>
+    [Fact]
+    public void The_skipped_tick_sets_the_wait_and_the_wait_is_cancellable()
+    {
+        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+        var body = BracedBlock(live, live.IndexOf("if (pause.AllPaused)", StringComparison.Ordinal));
+
+        Assert.Contains("pausedWait = LiveTickPolicy.BackoffWaitMs(CurrentLiveIntervalMs(), backoffSteps)",
+                        body, StringComparison.Ordinal);
+        Assert.Contains("backoffSteps = LiveTickPolicy.NextBackoffSteps(backoffSteps, LiveTickOutcome.Paused)",
+                        body, StringComparison.Ordinal);
+
+        Assert.Contains("await Task.Delay(wait, ct);", live, StringComparison.Ordinal);
+        Assert.Contains("catch (TaskCanceledException) { break; }", live, StringComparison.Ordinal);
     }
 
     /// <summary>

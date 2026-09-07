@@ -330,6 +330,22 @@ internal sealed class ProviderGate
     /// </summary>
     internal DateTimeOffset Now() => _clock();
 
+    /// <summary>Seed this gate from <c>provider-state.json</c> if the process has not read it yet —
+    /// E2.S4's lazy load, reached from the one caller that decides <b>not</b> to make a request.
+    ///
+    /// <para><see cref="TryEnter"/> stays the trigger for every path that sends something (AC 2);
+    /// this exists because E5.S1's LIVE loop asks <see cref="Snapshot"/> whether it may skip the
+    /// whole tick, and a snapshot of an unseeded gate answers "nothing is blocked" for a window that
+    /// is standing on disk. Without it the first tick of every session captures, OCRs, advances the
+    /// dedup clock and sends a request that the gate then refuses — the one case the persisted state
+    /// exists for (resuming into a 30-minute window), and the story's own manual verification.</para>
+    ///
+    /// <para>Not a side effect in R-2's sense: no clock advances, no probe is taken, no token is
+    /// spent. It is idempotent and, after the first call of the process, one predicted branch
+    /// (<c>ProviderGates.EnsureLoaded</c>'s <c>Volatile.Read</c>). A gate built without the seam — a
+    /// unit test's own — has nothing to load and this is a no-op.</para></summary>
+    internal void EnsureStateLoaded() => _ensureLoaded?.Invoke();
+
     /// <summary>
     /// Asked once before every request — <b>before</b>, never after (§5.4 AC 1), and it never
     /// blocks: no <c>Task</c>, no <c>CancellationToken</c>, no sleep. A gate that waits for you is

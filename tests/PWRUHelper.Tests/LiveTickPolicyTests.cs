@@ -55,6 +55,21 @@ public class LiveTickPolicyTests
     public void A_negative_step_count_is_simply_the_base_interval()
         => Assert.Equal(700, LiveTickPolicy.BackoffWaitMs(700, -3));
 
+    /// <summary>
+    /// The value leaves this method and goes STRAIGHT into <c>Task.Delay</c> — the one place in the
+    /// loop that is outside its <c>try</c>. A negative would throw there, faulting the
+    /// fire-and-forget loop task with no <c>SetLiveUi(false)</c> behind it: the R-02 zombie
+    /// indicator, reached through arithmetic rather than through a gate. Nothing reachable produces
+    /// a negative interval (the speed slider is clamped to 0–100 → 500–3000 ms), which is exactly
+    /// why the floor has to be asserted rather than assumed (review, E5.S1).
+    /// </summary>
+    [Theory]
+    [InlineData(-700, 0)]
+    [InlineData(-700, 3)]
+    [InlineData(0, 5)]
+    public void The_wait_can_never_be_negative_or_a_busy_loop(int interval, int steps)
+        => Assert.Equal(LiveTickPolicy.MinWaitMs, LiveTickPolicy.BackoffWaitMs(interval, steps));
+
     /// <summary>The cap is the graded constant and not a literal repeated in the loop — §9.1's
     /// number, in the one table this project argues about numbers in.</summary>
     [Fact]

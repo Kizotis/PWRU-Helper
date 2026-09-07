@@ -59,13 +59,20 @@ public class ChainCompositionTests : GatesTestBase
     /// stopped caching would fail here as well as in the case that owns it.</para></summary>
     private static IReadOnlyList<ChainTier> TiersOf(ITranslator chain)
     {
-        var decorator = Assert.IsType<CachingTranslator>(chain);
-        var inner = (ITranslator)decorator.GetType()
-            .GetField("_inner", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(decorator)!;
+        var inner = InnerOf(chain);
 
         var field = inner.GetType().GetField("_tiers", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.True(field != null, $"{inner.GetType().Name} has no _tiers field — the reader below is blind");
         return (IReadOnlyList<ChainTier>)field!.GetValue(inner)!;
+    }
+
+    /// <summary>What a builder's decorator actually delegates to. Split out of <see cref="TiersOf"/>
+    /// at review of E5.S1, which needs the reference itself and not its tiers.</summary>
+    private static ITranslator InnerOf(ITranslator chain)
+    {
+        var decorator = Assert.IsType<CachingTranslator>(chain);
+        return (ITranslator)decorator.GetType()
+            .GetField("_inner", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(decorator)!;
     }
 
     /// <summary>The store a built chain's decorator was handed, and the capacity that store was
@@ -185,6 +192,30 @@ public class ChainCompositionTests : GatesTestBase
         // The settings do not reorder it, and today they cannot shorten it either.
         Assert.Equal(new[] { ProviderIds.GoogleDict, ProviderIds.GoogleGtx },
                      IdsOf(TranslationChains.BuildRead(new AppSettings { DeepLApiKey = "abc-123:fx" })));
+    }
+
+    /// <summary>
+    /// <b>E5.S1's <c>out</c> seam, pinned as an IDENTITY.</b> The code-behind translates through the
+    /// returned decorator and asks the chain handed back beside it whether every rung is paused
+    /// (<c>ChainTranslator.PauseNow</c>). Those two references answer for one object graph only as
+    /// long as they really are one object graph.
+    ///
+    /// <para>A builder that handed back a SECOND <c>ChainTranslator.Of(...)</c> would compile, and
+    /// would pass every other case in this file — the gates are process-global (I9), so even
+    /// <c>PauseNow</c> would agree. What it would silently break is the half nothing else covers:
+    /// <b>E7.S3 reads <c>LastOutcome</c> from this same field</b>, and a chain nothing translates
+    /// through has no last outcome. Cheap to assert, and impossible to notice at runtime.</para>
+    /// </summary>
+    [Fact]
+    public void The_chain_handed_back_is_the_one_the_returned_translator_wraps()
+    {
+        var read = TranslationChains.BuildRead(new AppSettings(), RequestPriority.Background,
+                                               out var chain);
+
+        Assert.Same(chain, InnerOf(read));
+        // …and it is a real chain, not an empty shell that happens to be the same reference.
+        Assert.Equal(new[] { ProviderIds.GoogleDict, ProviderIds.GoogleGtx },
+                     TiersOf(read).Select(t => t.ProviderId));
     }
 
     /// <summary>§8.1's write order: the user's own key first when they have one — it is theirs, and

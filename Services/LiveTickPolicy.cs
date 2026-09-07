@@ -53,6 +53,17 @@ internal static class LiveTickPolicy
     /// real exit is re-saving the key and not a timer.</summary>
     internal const int MaxCountdownSeconds = 3600;
 
+    /// <summary>Floor on the wait, mirroring the one the WORKING path keeps
+    /// (<c>Math.Max(150, …)</c> at the loop's own <c>Task.Delay</c>). The doubling can only ever
+    /// grow a wait, so nothing reachable today lands here — the speed slider is clamped to 0–100
+    /// and maps to 500–3000 ms. It is a floor rather than a comment because the value leaves this
+    /// method and goes straight into <c>Task.Delay</c>, which throws
+    /// <see cref="ArgumentOutOfRangeException"/> on a negative — from OUTSIDE the loop's
+    /// <c>try</c>, faulting the fire-and-forget loop task with no <c>SetLiveUi(false)</c> behind it.
+    /// That is the R-02 zombie indicator reached through arithmetic, and one <c>Math.Max</c> closes
+    /// it (review, E5.S1).</summary>
+    internal const int MinWaitMs = 150;
+
     /// <summary>§9.1's <c>min(interval &lt;&lt; steps, cap)</c>: the wait between two SKIPPED ticks,
     /// doubling per skipped tick and capped at <see cref="TranslationPolicy.LiveBackoffCapMs"/>.
     /// At the shipped speed (700 ms) that is 0.7 s → 1.4 → 2.8 → 5 → 5…
@@ -66,7 +77,7 @@ internal static class LiveTickPolicy
     internal static int BackoffWaitMs(int intervalMs, int backoffSteps)
     {
         long doubled = (long)intervalMs << Math.Clamp(backoffSteps, 0, MaxBackoffShift);
-        return (int)Math.Min(doubled, TranslationPolicy.LiveBackoffCapMs);
+        return (int)Math.Clamp(doubled, MinWaitMs, TranslationPolicy.LiveBackoffCapMs);
     }
 
     /// <summary>AC 4, and the reason <see cref="LiveTickOutcome"/> exists: only a tick that really
