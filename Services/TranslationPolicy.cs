@@ -11,38 +11,33 @@ namespace PWRUHelper.Services;
 /// <item><c>[MEASURED]</c> — a value this project measured; the comment says where and when.</item>
 /// <item><c>[ASSUMED]</c> — calibrated to a reported range and never measured; the comment says what
 ///       would settle it.</item>
+/// <item><c>[UNKNOWN]</c> — the value ships at the SAFE end of an open question, and the comment
+///       names the open question and the capture that would close it. Different from
+///       <c>[ASSUMED]</c> on purpose: an assumption is calibrated to something, this is not
+///       calibrated to anything — it is the answer that is correct whether the question is ever
+///       settled or not.</item>
 /// </list>
 ///
 /// A table and nothing else: no methods, no state, no I/O, and no dependency — not even on
-/// <c>Logging</c> (I2). It holds <b>today's</b> values only. The §5.6 target numbers
-/// (<c>OpenBaseSeconds</c>, <c>MinSpacingMs</c>, <c>MaxAttempts = 2</c>, <c>PerLineCap</c>,
-/// <c>CacheCapacity = 2000</c> …) arrive with the code that reads them — E2.S1/E2.S3/E2.S5 for the
-/// gate and the retry, E3.S8 for the batch cap, E4 for the cache, E5 for LIVE — because an unused
-/// constant is a constant nobody grades.
+/// <c>Logging</c> (I2). It holds today's values plus the §5.6 target numbers whose code has
+/// landed — the six breaker numbers arrived with <c>ProviderGate</c> (E2.S1), the four rate-ceiling
+/// numbers with its token bucket (E2.S3), and the two retry numbers with <c>HttpProviderCore</c>
+/// (E2.S5), which is also where the two "…Today" retry constants stopped describing today and were
+/// retired, and <c>PerLineCap</c> arrived with E3.S8's shared per-line loop. The rest
+/// (<c>CacheCapacity = 2000</c> …) still arrive with the code that reads them — E4 for the cache,
+/// E5 for LIVE — because an unused constant is a constant nobody grades.
 /// Source: <c>docs/investigations/02-traduction/architecture-cible.md</c> §5.6 (the target table),
 /// §4.3 (the HTML markers).
 /// </summary>
 internal static class TranslationPolicy
 {
     // ---- what the providers do today ---------------------------------------------------------
-    // These five are behaviour-neutral by construction: each one is the literal that was already
-    // in the code, moved here and referenced from the same place. If one of them changes value,
-    // the change belongs to the story that changes the behaviour with it.
+    // Behaviour-neutral by construction: each one is the literal that was already in the code,
+    // moved here and referenced from the same place. If one of them changes value, the change
+    // belongs to the story that changes the behaviour with it.
 
     /// <summary>HttpClient timeout for every provider request, Google and DeepL alike.</summary>
-    public const int RequestTimeoutSeconds = 12;    // [CONFIRMED] now read at TranslationService.cs:57 and DeepLTranslator.cs:48
-
-    /// <summary>Requests per translated line today: one try plus two retries. Named "…Today" so it
-    /// cannot be confused with §5.6's target <c>MaxAttempts = 2</c>, which E2.S5 introduces —
-    /// benchmark-fournisseurs.md §11.4 item 3: three attempts into a hard block triple the abuse
-    /// signal for no benefit.</summary>
-    // E1.S5 replaced the literal with this constant, because §10.1's line renders `attempt=n/m` and
-    // an `m` that could drift from the loop's own bound is a log that lies. Same value, same shape.
-    public const int MaxAttemptsToday = 3;          // [CONFIRMED] now the retry loop's bound at TranslationService.cs:179
-
-    /// <summary>Base of the linear back-off between those attempts: <c>300 * (attempt + 1)</c>, so
-    /// 300 ms then 600 ms. §5.6's target replaces it with exponential + full jitter.</summary>
-    public const int RetrySpacingBaseMs = 300;      // [CONFIRMED] TranslationService.cs:229, still a literal there
+    public const int RequestTimeoutSeconds = 12;    // [CONFIRMED] now read once, at HttpProviderCore.CreateClient
 
     /// <summary>Entries kept by the in-memory LRU translation cache. §5.6 raises it to 2000 and
     /// persists it (E4); today it is memory-only and dies with the process.</summary>
@@ -50,7 +45,128 @@ internal static class TranslationPolicy
 
     /// <summary>The text travels in a GET query string, so it is chunked to stay well under
     /// typical URL limits.</summary>
-    public const int MaxQueryBytes = 1500;          // [CONFIRMED] now read at TranslationService.cs:76, :81, :100
+    public const int MaxQueryBytes = 1500;          // [CONFIRMED] now read at GoogleGtxTranslator.cs:111, :116, :135
+                                                    // (:116 passes it on to Services/TextChunker.cs, E3.S6)
+
+    /// <summary>Whether <c>GoogleDictTranslator</c> may translate a multi-line group as ONE
+    /// <c>\n</c>-joined <c>q</c>, splitting the answer back on <c>\n</c>. <b>False</b>, which is
+    /// OQ-A's settled answer: <c>dict-chrome-ex</c> returns one string rather than gtx's segments,
+    /// and whether the newlines survive the round trip is U1 — the single most important [UNKNOWN]
+    /// of <c>architecture-cible.md</c> §7.1. Joining on a guess would silently glue a squad's
+    /// thirteen chat lines into one sentence.
+    ///
+    /// <para>It lives here rather than in the provider so the flip is a one-line change to a graded
+    /// table with a test on it, not an edit inside a request path. E3.S1's capture
+    /// (<c>google-dict-batch.txt</c>) is what flips it, in the same commit that turns TP-PRV-04 from
+    /// the negative pin ("3 lines cost 3 requests") into the positive one. Multi-<c>q=</c> is not
+    /// the alternative — it is a declined non-feature (<c>project-context.md</c>).</para>
+    ///
+    /// <para><c>static readonly</c> rather than <c>const</c>: a <c>const false</c> would make the
+    /// dormant join path unreachable code, and the compiler would report the very branch this value
+    /// exists to keep compiled, tested-adjacent and one edit from live.</para></summary>
+    // [UNKNOWN] until U1 — architecture-cible.md §7.1; settled by E3.S1's capture, test-plan TP-PRV-04
+    public static readonly bool GoogleDictBatchJoinEnabled = false;
+
+    /// <summary>How many lines a per-line fallback may ask for after a batch that failed or came
+    /// back with the wrong count. Read by <see cref="PerLineFallback"/> (E3.S8), which is the one
+    /// loop the join/split providers share; beyond it the remaining lines get the skipped
+    /// placeholder and cost <b>no request at all</b>.
+    ///
+    /// <para>What the number buys: <c>analyse…</c> S6/A11 measured a mismatch on a 14-line LIVE tick
+    /// turning one logical translation into up to 30 requests inside that tick, on a connection that
+    /// was already being throttled. At 8 the worst case is <b>8 lines asked</b> instead of thirty —
+    /// lines and not requests, because one line can cost several (a line over
+    /// <see cref="MaxQueryBytes"/> is chunked) or none at all (the gate refused it, or it was
+    /// blank). The measured LIVE batch size is ≈2.1 lines, so on a healthy tick this constant never
+    /// fires at all.</para>
+    ///
+    /// <para><b>It bounds the FALLBACK and never a primary per-line path</b> (ruling E3-e):
+    /// <c>GoogleDictTranslator</c> ships per line by design under OQ-A, whose answer accepts "≈2× the
+    /// LIVE request volume", and capping that would refuse the behaviour the owner approved. That
+    /// path is bounded by the §5.4 rate ceiling and by the gate instead.</para></summary>
+    // [ASSUMED] architecture-cible.md §6.3 / §5.6; calibrated to analyse-implementation-actuelle.md
+    // S6/A11 (the 14-line → 30-request amplifier) and never measured. Field logs settle it (U9/E2.S7).
+    public const int PerLineCap = 8;
+
+    // ---- the retry policy (§5.6) ---------------------------------------------------------------
+    // Read by Services/HttpProviderCore.cs (E2.S5), which replaced the three-attempt / 300 ms-linear
+    // loop these two numbers describe the successor of. Both are [ASSUMED] and both are revisited
+    // from field logs after the A.1 release (U9 / E2.S7).
+
+    /// <summary>Requests per logical call: one try plus at most one retry, and only for a failure a
+    /// second attempt could survive (<c>Unavailable</c>, <c>Timeout</c>). benchmark-fournisseurs.md
+    /// §11.4 item 3: three attempts into a hard block triple the abuse signal for no benefit — and
+    /// §10.1's line renders <c>attempt=n/m</c>, so the bound is read from here rather than written
+    /// twice.</summary>
+    public const int MaxAttempts = 2;               // [ASSUMED] architecture-cible.md §5.6; benchmark-fournisseurs.md §11.4 item 3
+
+    /// <summary>Base of the exponential back-off, drawn with <b>full jitter</b>:
+    /// <c>Random(0, BackoffBaseMs &lt;&lt; attempt)</c>. Jittered rather than fixed because two
+    /// instances behind one NAT retrying in lockstep is what a fixed spacing guarantees.</summary>
+    public const int BackoffBaseMs = 500;           // [ASSUMED] architecture-cible.md §5.6
+
+    // ---- circuit breaker (§5.6) --------------------------------------------------------------
+    // Read by Services/ProviderGate.cs (E2.S1). Every one of the six is [ASSUMED]: they are
+    // calibrated to a REPORTED range (mecanismes-de-blocage-google.md Q3: "a few minutes" ..
+    // "12-24 h") and this project has never measured one. They ship instrumented and are tuned
+    // from >= 3 field reports after the A.1 release (U9 / E2.S7) — instrument first, tune from the
+    // logs, never from an opinion. A field experiment can override all six at runtime through
+    // GatePolicy.Parse, which is why the gate reads them through GatePolicy rather than directly.
+
+    /// <summary>First strike's open window. Also the window three consecutive
+    /// <c>BadResponse</c>s open, and the floor the strikes reset to after a clean run.</summary>
+    public const int OpenBaseSeconds = 60;      // [ASSUMED] architecture-cible.md §5.6; matches the app's own "wait a minute"
+
+    /// <summary>Ceiling on the doubling — 60 s, 2, 4, 8, 16, then 30 min for ever. Also the clamp
+    /// on a server-sent <c>Retry-After</c> (§5.5): beyond this a user restarts rather than waits,
+    /// so a 24-hour hint would simply read as a broken app.</summary>
+    public const int OpenCapMinutes = 30;       // [ASSUMED] architecture-cible.md §5.6
+
+    /// <summary>How long a provider must behave before its strike count is forgiven, so the next
+    /// failure opens for 60 s and not for the escalated window.</summary>
+    public const int CleanResetMinutes = 10;    // [ASSUMED] architecture-cible.md §5.6
+
+    /// <summary>A quota is refilled by a billing period, not by a back-off, so the gate waits an
+    /// hour instead of escalating. Re-saving the key clears it (§5.3).</summary>
+    public const int QuotaOpenMinutes = 60;     // [ASSUMED] architecture-cible.md §5.6, §15 R9
+
+    /// <summary>The no-strike cooldown after a 5xx, a timeout, a DNS blip or an unclassifiable
+    /// failure. Small, and not optional: without it the next LIVE tick re-hits the same dead
+    /// provider 700 ms later.</summary>
+    public const int SoftCooldownSecs = 5;      // [ASSUMED] architecture-cible.md §5.6
+
+    /// <summary>Consecutive <c>BadResponse</c>s that open the gate. One is a hiccup; three in a row
+    /// is a provider whose shape has changed.</summary>
+    public const int BadResponseStrikesToOpen = 3;  // [ASSUMED] architecture-cible.md §5.6
+
+    // ---- rate ceiling (§5.4) -----------------------------------------------------------------
+    // Read by Services/ProviderGate.cs's token bucket (E2.S3). All four are [ASSUMED]: 500 ms is
+    // the value the ecosystem converged on (mecanismes-de-blocage-google.md Q2) and this project
+    // has measured none of them. They ship instrumented and are tuned from >= 3 field reports
+    // after the A.1 release (U9 / E2.S7) — instrument first, tune from the logs, never from an
+    // opinion. Deliberately NOT pinned by TranslationPolicyTests' today's-values case: a literal
+    // there would make E2.S7's tuning commit rewrite the suite.
+
+    /// <summary>Minimum spacing between two requests to the same provider, expressed as the token
+    /// bucket's refill period: one token per <c>MinSpacingMs</c>.</summary>
+    public const int MinSpacingMs = 500;        // [ASSUMED] architecture-cible.md §5.4/§5.6; mecanismes-de-blocage-google.md Q2
+
+    /// <summary>Tokens the bucket holds at rest. Two, so an interactive keypress after a quiet
+    /// minute is never made to wait — and so exactly one of them can be reserved: with a capacity
+    /// of 2, "<c>Background</c> may not take the last token" is the whole reserve (§5.4).</summary>
+    public const int BucketCapacity = 2;        // [ASSUMED] architecture-cible.md §5.4
+
+    /// <summary>How long a caller may sit on a <c>Wait</c> before the tier counts as unavailable.
+    /// It is the <b>caller's</b> rule, not the gate's: <c>ChainTranslator</c> (E3.S3) moves on past
+    /// a longer wait and the LIVE loop (E5.S1) backs off — <c>ProviderGate.TryEnter</c> never waits
+    /// for anybody (§5.4: it is not a scheduler).</summary>
+    public const int MaxSpacingWaitMs = 2000;   // [ASSUMED] architecture-cible.md §5.4
+
+    /// <summary>How long a <c>Background</c> caller that finds the gate probe-eligible stands aside
+    /// before taking the half-open probe itself, so a user pressing Enter inside that second gets it
+    /// instead (§5.4, architect's concern #1). One second: long enough to cover a keystroke, short
+    /// enough that a paused provider is re-tried promptly when nobody is typing.</summary>
+    public const int ProbeDeferMs = 1000;       // [ASSUMED] architecture-cible.md §5.4
 
     // ---- HTML abuse-page markers (§4.3) ------------------------------------------------------
     // Matched lower-cased against DE-TAGGED text — E1.S4 does the de-tagging and lower-casing, so

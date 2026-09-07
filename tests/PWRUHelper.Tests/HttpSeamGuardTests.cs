@@ -11,23 +11,36 @@ namespace PWRUHelper.Tests;
 /// test handler, or its retry policy and its response parsing stay unreachable — and a test that
 /// forgets one turns CI into a client of a rented endpoint.
 ///
-/// It also PINS today's retry behaviour before anything changes it. Those two pins are deliberately
-/// "3 requests"; the story that re-points the policy (429 ⇒ one request, 503 ⇒ two) rewrites them in
-/// the same commit that changes the loop.
+/// It also PINS the retry behaviour. E1.S1 wrote those two pins as "3 requests" and said in its own
+/// tasks that E2.S5 would re-point them to TP-RET-01 / TP-RET-03 in the same commit that changed the
+/// loop; this is that commit, so they now read one request for a 429 and two for a 503.
 /// </summary>
-public class HttpSeamGuardTests
+[Collection("Gates")]
+public class HttpSeamGuardTests : GatesTestBase
 {
     // The Google endpoint's shape: [[["translated","original",…], …], …]
     private const string GoogleOk = """[[["hello","привет",null,null,10]],null,"ru"]""";
 
     // ---------- IS-10: no provider can be built without a handler in a test ----------
 
-    /// <summary>Every ITranslator in the app that holds an HttpClient. The list grows on its own as
-    /// providers are added — which is the point: a new provider without the seam fails here.</summary>
+    /// <summary>
+    /// Every ITranslator in the app that can reach the network. The list grows on its own as
+    /// providers are added — which is the point: a new provider without the seam fails here.
+    ///
+    /// <para>An <c>HttpProviderCore</c> field counts as well as an <c>HttpClient</c> one, and that
+    /// is the whole derivation since E2.S5. The comment on <c>FieldsIncludingBase</c> anticipated
+    /// the shared core arriving as a BASE CLASS; it arrived as a FIELD instead. E3's three new
+    /// providers are meant to be "a URL, a payload and a parser" — a natural one holds only an
+    /// <c>HttpProviderCore</c> and no <c>HttpClient</c> at all, and under the old derivation it
+    /// would not have been enumerated: not a failing guard, an <b>absent</b> one, with CI free to
+    /// reach the real Internet. Both shipped providers still keep a redundant <c>_http</c> field,
+    /// which is the only reason this was not already broken.</para>
+    /// </summary>
     private static List<Type> HttpProviders() =>
         AppTypes()
             .Where(t => t.IsClass && !t.IsAbstract && typeof(ITranslator).IsAssignableFrom(t))
-            .Where(t => FieldsIncludingBase(t).Any(f => f.FieldType == typeof(HttpClient)))
+            .Where(t => FieldsIncludingBase(t).Any(f => f.FieldType == typeof(HttpClient)
+                                                     || f.FieldType == typeof(HttpProviderCore)))
             .OrderBy(t => t.Name)
             .ToList();
 
@@ -54,8 +67,12 @@ public class HttpSeamGuardTests
     {
         var providers = HttpProviders();
 
-        // Without these two the loop below could pass on an empty list.
-        Assert.Contains(typeof(TranslationService), providers);
+        // Without these the loop below could pass on an empty list. GoogleDictTranslator joined
+        // them with E3.S4 — not to make the guard find it (the reflection above does that on its
+        // own, which is the whole design) but so that a provider silently dropping off the list
+        // fails here instead of quietly widening the network surface CI is allowed to reach.
+        Assert.Contains(typeof(GoogleGtxTranslator), providers);
+        Assert.Contains(typeof(GoogleDictTranslator), providers);
         Assert.Contains(typeof(DeepLTranslator), providers);
 
         foreach (var t in providers)
@@ -91,27 +108,33 @@ public class HttpSeamGuardTests
     [Fact]
     public void No_handler_keeps_the_shared_static_client()
     {
-        // The only two handler-less providers the suite builds: IS-10 forbids them because they
-        // *could* reach the Internet, and neither is ever asked to translate — constructing them is
-        // the only way to prove "null means the shared client" (IS-8).
+        // The only three handler-less providers the suite builds (GoogleDict joined them with
+        // E3.S4): IS-10 forbids them because they *could* reach the Internet, and none of the three
+        // is ever asked to translate — constructing them is the only way to prove "null means the
+        // shared client" (IS-8).
         // Both NotNull guards matter: without them a renamed field would make this Assert.Same
         // compare null to null and pass while checking nothing.
-        Assert.NotNull(SharedClientOf(typeof(TranslationService)));
+        Assert.NotNull(SharedClientOf(typeof(GoogleGtxTranslator)));
+        Assert.NotNull(SharedClientOf(typeof(GoogleDictTranslator)));
         Assert.NotNull(SharedClientOf(typeof(DeepLTranslator)));
 
-        Assert.Same(SharedClientOf(typeof(TranslationService)), ClientOf(new TranslationService()));
+        Assert.Same(SharedClientOf(typeof(GoogleGtxTranslator)), ClientOf(new GoogleGtxTranslator()));
+        Assert.Same(SharedClientOf(typeof(GoogleDictTranslator)), ClientOf(new GoogleDictTranslator()));
         Assert.Same(SharedClientOf(typeof(DeepLTranslator)), ClientOf(new DeepLTranslator("k:fx")));
     }
 
     [Fact]
     public void A_handler_gets_its_own_client()
     {
-        var google = new TranslationService(new FakeHandler());
+        var google = new GoogleGtxTranslator(new FakeHandler());
+        var dict = new GoogleDictTranslator(new FakeHandler());
         var deepl = new DeepLTranslator("k:fx", new FakeHandler());
 
         Assert.NotNull(ClientOf(google));
+        Assert.NotNull(ClientOf(dict));
         Assert.NotNull(ClientOf(deepl));
-        Assert.NotSame(SharedClientOf(typeof(TranslationService)), ClientOf(google));
+        Assert.NotSame(SharedClientOf(typeof(GoogleGtxTranslator)), ClientOf(google));
+        Assert.NotSame(SharedClientOf(typeof(GoogleDictTranslator)), ClientOf(dict));
         Assert.NotSame(SharedClientOf(typeof(DeepLTranslator)), ClientOf(deepl));
     }
 
@@ -122,12 +145,20 @@ public class HttpSeamGuardTests
         // connection that has gone stale (or on a DNS answer that has moved) and never replace it.
         // Asserted on the factory each shared client is built from: digging the handler back out of
         // an HttpClient means reading a private runtime field, which breaks on a .NET servicing
-        // update for a reason that has nothing to do with this app.
-        using var google = TranslationService.CreatePooledHandler();
-        using var deepl = DeepLTranslator.CreatePooledHandler();
+        // update for a reason that has nothing to do with this app. Since E2.S5 there is ONE
+        // factory — the two were byte-identical — so this asserts the shape both providers get.
+        using var handler = HttpProviderCore.CreatePooledHandler();
 
-        Assert.Equal(TimeSpan.FromMinutes(2), google.PooledConnectionLifetime);
-        Assert.Equal(TimeSpan.FromMinutes(2), deepl.PooledConnectionLifetime);
+        Assert.Equal(TimeSpan.FromMinutes(2), handler.PooledConnectionLifetime);
+
+        // …and the production handler keeps the RUNTIME's connect path. E2.S5 first shipped a
+        // ConnectCallback to learn the address family for §10.1's `ipv=`; Winston's review removed
+        // it, because a connect callback replaces DNS resolution, dual-stack Happy Eyeballs, proxy
+        // tunnelling and the connect-timeout semantics with this app's own code — on a tool that
+        // runs on arbitrary home and corporate networks that nobody here can diagnose remotely. A
+        // diagnostic field is not worth owning the path every request travels on. `ipv=` stays `?`
+        // (pinned in HttpProviderCoreTests); this is the pin that stops the callback coming back.
+        Assert.Null(handler.ConnectCallback);
     }
 
     // ---------- IS-11: the double really drives the providers ----------
@@ -137,7 +168,7 @@ public class HttpSeamGuardTests
     {
         var fake = new FakeHandler().RespondJson(GoogleOk);
 
-        Assert.Equal("hello", await new TranslationService(fake).TranslateAsync("привет", "ru", "en"));
+        Assert.Equal("hello", await new GoogleGtxTranslator(fake).TranslateAsync("привет", "ru", "en"));
 
         var call = Assert.Single(fake.Calls);
         Assert.Equal(HttpMethod.Get, call.Method);
@@ -160,17 +191,25 @@ public class HttpSeamGuardTests
         Assert.Equal("api-free.deepl.com", call.Uri.Host);
         Assert.Equal("DeepL-Auth-Key k:fx", call.Headers["Authorization"]);
         Assert.Contains("target_lang=EN-US", call.Body);
+        // The other half of the User-Agent pin above: E2.S5 moved the client factory into
+        // HttpProviderCore, and the UA is a provider OPTION rather than a shared default precisely
+        // so this stays true. DeepL has never sent one; a shared factory that added Google's Chrome
+        // string here would be a behaviour change on a keyed vendor path, smuggled in by a refactor.
+        Assert.False(call.Headers.ContainsKey("User-Agent"),
+            "DeepL must not start sending a User-Agent it has never sent");
     }
 
     [Fact]
     public async Task A_scripted_sequence_lets_a_retry_succeed()
     {
-        // 429 first, then the real answer — proving the script advances and the loop retries.
+        // 503 first, then the real answer — proving the script advances and the loop retries. It
+        // used to be a 429; since E2.S5 that is the one thing a retry may NOT be tried on (the gate
+        // owns the wait), and Unavailable is what a second attempt is for.
         var fake = new FakeHandler()
-            .Respond(HttpStatusCode.TooManyRequests, "<html>blocked</html>", "text/html")
+            .Respond(HttpStatusCode.ServiceUnavailable)
             .RespondJson(GoogleOk);
 
-        Assert.Equal("hello", await new TranslationService(fake).TranslateAsync("привет", "ru", "en"));
+        Assert.Equal("hello", await new GoogleGtxTranslator(fake).TranslateAsync("привет", "ru", "en"));
         Assert.Equal(2, fake.Requests);
     }
 
@@ -205,34 +244,41 @@ public class HttpSeamGuardTests
         var fake = new FakeHandler { Delay = TimeSpan.FromMilliseconds(40) }.RespondJson(GoogleOk);
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        await new TranslationService(fake).TranslateAsync("привет", "ru", "en");
+        await new GoogleGtxTranslator(fake).TranslateAsync("привет", "ru", "en");
 
         Assert.True(sw.ElapsedMilliseconds >= 30, $"the delay was not honoured ({sw.ElapsedMilliseconds} ms)");
     }
 
-    // ---------- Pre-change pins of today's retry policy ----------
+    // ---------- The retry policy (§5.6), pinned where E1.S1 pinned its predecessor ----------
 
+    /// <summary>TP-RET-01 — the sentence the whole epic is about: a refusal costs <b>one</b>
+    /// request. It cost three, and the two extra ones bought nothing but a tripled abuse signal
+    /// (benchmark-fournisseurs.md §11.4 item 3).</summary>
     [Fact]
-    public async Task Today_a_429_costs_three_requests()
+    public async Task TP_RET_01_a_429_costs_exactly_one_request()
     {
         var fake = new FakeHandler().Respond(HttpStatusCode.TooManyRequests, "<html>blocked</html>", "text/html");
 
         var ex = await Assert.ThrowsAsync<TranslationException>(
-            () => new TranslationService(fake).TranslateAsync("привет", "ru", "en"));
+            () => new GoogleGtxTranslator(fake).TranslateAsync("привет", "ru", "en"));
 
-        Assert.Equal(3, fake.Requests);
+        Assert.Equal(1, fake.Requests);
+        Assert.Equal(TranslationErrorKind.RateLimited, ex.Kind);
         Assert.Contains("limiting translations", ex.Message);
     }
 
+    /// <summary>TP-RET-03 — a 5xx is the failure a second attempt could plausibly survive, so it is
+    /// the one that gets it: exactly two requests, then <c>Unavailable</c>.</summary>
     [Fact]
-    public async Task Today_a_503_costs_three_requests()
+    public async Task TP_RET_03_a_503_costs_exactly_two_requests()
     {
         var fake = new FakeHandler().Respond(HttpStatusCode.ServiceUnavailable);
 
         var ex = await Assert.ThrowsAsync<TranslationException>(
-            () => new TranslationService(fake).TranslateAsync("привет", "ru", "en"));
+            () => new GoogleGtxTranslator(fake).TranslateAsync("привет", "ru", "en"));
 
-        Assert.Equal(3, fake.Requests);
+        Assert.Equal(2, fake.Requests);
+        Assert.Equal(TranslationErrorKind.Unavailable, ex.Kind);
         Assert.Contains("unavailable", ex.Message);
     }
 }

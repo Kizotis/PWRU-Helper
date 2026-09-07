@@ -9,11 +9,13 @@ namespace PWRUHelper.Services;
 /// does not have.
 ///
 /// <b>What this table does NOT yet own</b>, so nobody reads the paragraph above as a finished job:
-/// the per-line fallback in <c>TranslationService.cs</c> writes three placeholder strings straight
+/// the per-line fallback in <c>GoogleGtxTranslator.cs</c> writes three placeholder strings straight
 /// into a feed row as if they were translations — "(skipped — rate-limited, try again shortly)",
-/// "(rate-limited — try again shortly)" and "(translation failed: {ex.Message})" — and the middle
-/// one is produced by a <c>catch (TranslationException)</c> that fires for <i>every</i> Kind, so a
-/// dead network still reads "rate-limited" on the most common OCR path. They start with "(" by
+/// "(rate-limited — try again shortly)" and "(translation failed: {ex.Message})". The middle one
+/// used to be produced by a <c>catch (TranslationException)</c> that fired for <i>every</i> Kind,
+/// so a dead network read "rate-limited" on the most common OCR path; E3.S6 narrowed that catch to
+/// <c>RateLimited</c>/<c>Blocked</c>, which is what the sentence claims — the wording is still
+/// unowned here. They start with "(" by
 /// design (I4) and they are results, not statuses, so they are not <c>Friendly</c>'s to render.
 /// <b>E2.S5's <c>HttpProviderCore</c> owns folding them into this table.</b>
 ///
@@ -39,7 +41,7 @@ namespace PWRUHelper.Services;
 ///       never be mistakable for one of those placeholders. To be exact about the blast radius:
 ///       nothing this table returns is ever a translator's return value, so a leading paren here
 ///       could not itself poison the cache; the strings that pass that guard live in
-///       <c>TranslationService</c>'s per-line fallback.</item>
+///       <c>GoogleGtxTranslator</c>'s per-line fallback.</item>
 /// <item><b>No terminal full stop.</b> Every one of today's six call sites <i>joins</i> this text
 ///       into a longer line — "Failed: {s}", "({s})", "Live hiccup ({s}) — retrying…",
 ///       "Live stopped after repeated errors ({s}).", "OCR failed: {s}",
@@ -96,12 +98,12 @@ internal static class UserMessages
     /// <summary>401, or 403 while a key was sent. "About" — not "Settings": the key box is on the
     /// About tab, and the sentence this replaces sent the user to a tab that has never existed in
     /// this app.
-    /// <para><b>"Keys only" is what this sentence assumes, not what the mapper guarantees.</b>
-    /// §4.2 row 5 is <c>if (code == 401) return AuthFailed;</c> — unconditional on
-    /// <c>keyWasSent</c>, unlike rows 6/7/8 for 403 — so a 401 on the keyless Google path (an
-    /// authenticating proxy, a captive portal) sends a user who has never typed a key to an empty
-    /// key box. Recorded in E1.S6's review: the fix belongs in the mapper rule, not in this
-    /// sentence, and it is E6's when a second keyed provider makes the row worth reopening.</para></summary>
+    /// <para><b>"Keys only" is now what the mapper guarantees too.</b> Row 5 used to be
+    /// <c>if (code == 401) return AuthFailed;</c>, unconditional on <c>keyWasSent</c> unlike rows
+    /// 6/7/8 for 403, so a 401 on the keyless Google path (an authenticating proxy, a captive
+    /// portal) sent a user who has never typed a key to an empty key box. Ruling <b>E2-g</b> closed
+    /// it in E2.S2: <c>ProviderErrorMapper</c> guards 401 on <c>keyWasSent</c> and a keyless 401 is
+    /// <c>Blocked</c>. The item E1.S6's review recorded for E6 is done — nothing to reopen.</para></summary>
     public const string AuthFailed = "Your API key was refused — check it in About, or clear it";
 
     /// <summary>Not reachable yet: nothing raises this Kind until the chain has gates (E2.S3).

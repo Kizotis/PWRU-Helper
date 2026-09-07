@@ -20,7 +20,8 @@ namespace PWRUHelper.Tests;
 /// that changes it, and the next edit to any of these sentences must be a deliberate one that
 /// fails here first.
 /// </summary>
-public class UserMessagesTests
+[Collection("Gates")]
+public class UserMessagesTests : GatesTestBase
 {
     // The one Kind that must never reach a surface. TP-MAP-17's scan excludes tests/
     // (TranslationErrorsTests.ProductionSources), so a test file MAY name the token and
@@ -125,16 +126,16 @@ public class UserMessagesTests
         foreach (var status in new[] { HttpStatusCode.BadRequest, HttpStatusCode.NotFound,
                                        HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden })
             raised.Add(await Assert.ThrowsAsync<TranslationException>(
-                () => new TranslationService(new FakeHandler().Respond(status, body))
+                () => new GoogleGtxTranslator(new FakeHandler().Respond(status, body))
                           .TranslateAsync(sentinel, "ru", "en")));
 
         // A 200 whose body is not the provider's shape, and a transport failure: the two messages
         // that are built where the body and the exception are both in scope.
         raised.Add(await Assert.ThrowsAsync<TranslationException>(
-            () => new TranslationService(new FakeHandler().Respond(HttpStatusCode.OK, body, "text/plain"))
+            () => new GoogleGtxTranslator(new FakeHandler().Respond(HttpStatusCode.OK, body, "text/plain"))
                       .TranslateAsync(sentinel, "ru", "en")));
         raised.Add(await Assert.ThrowsAsync<TranslationException>(
-            () => new TranslationService(new FakeHandler().Throws(new HttpRequestException(sentinel)))
+            () => new GoogleGtxTranslator(new FakeHandler().Throws(new HttpRequestException(sentinel)))
                       .TranslateAsync(sentinel, "ru", "en")));
 
         // DeepL, with a key actually set — the provider whose messages are about the key.
@@ -171,8 +172,8 @@ public class UserMessagesTests
     // ---- AC: the two raw-exception arms and the default are unchanged in shape ---------------
 
     /// <summary>
-    /// Not everything reaches the code-behind classified: `FallbackTranslator` and the OCR path can
-    /// still surface a raw transport failure. These two arms existed before this story and are kept
+    /// Not everything reaches the code-behind classified: the OCR path can still surface a raw
+    /// transport failure. These two arms existed before this story and are kept
     /// — what changed is that they now answer with the same sentence as their typed twins, so a
     /// dead network reads identically whether or not it was mapped on the way up.
     /// </summary>

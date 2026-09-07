@@ -1,10 +1,17 @@
 using System.Threading;
+using System.Web;
 using PWRUHelper.Services;
 using Xunit;
 
 namespace PWRUHelper.Tests;
 
-public class DeepLTranslatorTests
+/// <summary>
+/// <c>[Collection("Gates")]</c> since E3.S8: the count-mismatch case below drives the REAL provider
+/// through <see cref="HttpProviderCore"/>, which consults the process-global registry (IS-5). The
+/// pure mapping and parser cases above it touch nothing.
+/// </summary>
+[Collection("Gates")]
+public class DeepLTranslatorTests : GatesTestBase
 {
     [Theory]
     [InlineData("en", "EN-US")]
@@ -44,70 +51,41 @@ public class DeepLTranslatorTests
     [Fact]
     public void Parse_throws_TranslationException_when_shape_is_wrong()
         => Assert.Throws<TranslationException>(() => DeepLTranslator.Parse("""{"message":"quota exceeded"}"""));
-}
 
-public class FallbackTranslatorTests
-{
-    private sealed class Fake : ITranslator
-    {
-        private readonly Func<string> _f;
-        public int Calls;
-        public Fake(Func<string> f) { _f = f; }
-
-        public Task<string> TranslateAsync(string text, string s, string t, CancellationToken ct = default)
-        { Calls++; return Task.FromResult(_f()); }
-
-        public Task<List<string>> TranslateLinesAsync(IReadOnlyList<string> lines, string s, string t, CancellationToken ct = default)
-        { Calls++; return Task.FromResult(lines.Select(_ => _f()).ToList()); }
-    }
-
+    /// <summary>
+    /// <b>TP-CHN-09 / TP-PRV-08 — I5, the reason E3.S8 exists.</b> DeepL is a 1:1 provider: one
+    /// translation per input, in order. Three answers for four inputs is a <c>BadResponse</c> and
+    /// <b>never</b> a padded list — padding once bypassed the fallback (the chain read the padded
+    /// list as a success and never tried Google) AND cached raw Russian source as if it were a
+    /// translation. The provider has been correct since that bug; this case is the guard, so a
+    /// future 1:1 provider (Azure, E6.S2) inherits a pin rather than a habit.
+    ///
+    /// <para>The assertion that carries the weight is <c>ThrowsAsync</c> itself: a padding
+    /// implementation returns a list and never reaches it. The second one is non-vacuity, not a
+    /// second proof — it shows the request really was made and really carried all four lines, so
+    /// the mismatch is the provider's answer and not a call that never happened (E3.S8 review: the
+    /// earlier wording claimed the message check was the padding guard, which it cannot be —
+    /// <c>ex.Message</c> is a constant).</para>
+    /// </summary>
     [Fact]
-    public async Task Uses_primary_when_it_succeeds()
+    public async Task TP_CHN_09_a_short_batch_is_a_BadResponse_and_the_list_is_never_padded()
     {
-        var fallback = new Fake(() => "G");
-        var ft = new FallbackTranslator(new Fake(() => "P"), fallback);
+        var lines = new[] { "раз", "два", "три", "четыре" };
+        var fake = new FakeHandler().RespondJson(
+            """{"translations":[{"text":"one"},{"text":"two"},{"text":"three"}]}""");
 
-        Assert.Equal("P", await ft.TranslateAsync("x", "ru", "en"));
-        Assert.Equal(0, fallback.Calls);
-    }
+        var ex = await Assert.ThrowsAsync<TranslationException>(
+            () => new DeepLTranslator("k:fx", fake).TranslateLinesAsync(lines, "ru", "en"));
 
-    [Fact]
-    public async Task Falls_back_when_primary_fails()
-    {
-        var fallback = new Fake(() => "G");
-        // The fixture is "the primary failed"; which Kind is arbitrary — any but Cancelled, which
-        // nothing may construct (see TranslationErrorsTests).
-        var ft = new FallbackTranslator(
-            new Fake(() => throw new TranslationException(TranslationErrorKind.Unavailable, "deepl down")), fallback);
-
-        Assert.Equal("G", await ft.TranslateAsync("x", "ru", "en"));
-        Assert.Equal(1, fallback.Calls);
-    }
-
-    [Fact]
-    public async Task Cancellation_is_not_turned_into_a_fallback()
-    {
-        // A GENUINE cancellation: the token passed to the wrapper IS cancelled and the primary
-        // throws an OCE bound to it. This must propagate — never silently fall back to Google.
-        var cts = new CancellationTokenSource();
-        cts.Cancel();
-        var fallback = new Fake(() => "G");
-        var ft = new FallbackTranslator(new Fake(() => throw new OperationCanceledException(cts.Token)), fallback);
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => ft.TranslateAsync("x", "ru", "en", cts.Token));
-        Assert.Equal(0, fallback.Calls);
-    }
-
-    [Fact]
-    public async Task Timeout_OCE_with_uncancelled_token_falls_back()
-    {
-        // On .NET 8 an HttpClient timeout arrives as a TaskCanceledException (subclass of OCE)
-        // with the caller's token NOT cancelled. That's a failure, not a cancellation — it must
-        // fall through to the fallback (Google) instead of propagating like a real stop.
-        var fallback = new Fake(() => "G");
-        var ft = new FallbackTranslator(new Fake(() => throw new TaskCanceledException()), fallback);
-
-        Assert.Equal("G", await ft.TranslateAsync("x", "ru", "en"));
-        Assert.Equal(1, fallback.Calls);
+        Assert.Equal(TranslationErrorKind.BadResponse, ex.Kind);
+        // Non-vacuity: the request really was made and really carried all four lines, so the
+        // mismatch is the provider's answer and not a call that never happened.
+        var sent = Assert.Single(fake.Calls).Body ?? "";
+        Assert.All(lines, l => Assert.Contains(HttpUtility.UrlEncode(l), sent, StringComparison.OrdinalIgnoreCase));
+        // There is deliberately no third assertion. A padded implementation returns a list whose
+        // fourth element is the untranslated source — and it would fail on ThrowsAsync above, long
+        // before anything could inspect it. The `Assert.DoesNotContain("четыре", ex.Message)` that
+        // stood here read like a padding guard and was a tautology: ex.Message is the constant at
+        // DeepLTranslator.cs:111 and could not contain a source line whatever the code did.
     }
 }

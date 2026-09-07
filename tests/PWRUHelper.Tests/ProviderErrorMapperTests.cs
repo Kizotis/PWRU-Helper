@@ -17,7 +17,8 @@ namespace PWRUHelper.Tests;
 /// Row 11's HTML sniffing (§4.3, TP-MAP-11…14) is the last section of the file, added by E1.S4
 /// together with the recorded bodies under <c>Fixtures/</c>.
 /// </summary>
-public class ProviderErrorMapperTests
+[Collection("Gates")]
+public class ProviderErrorMapperTests : GatesTestBase
 {
     private static HttpResponseMessage Resp(int status, string body = "", string contentType = "application/json")
         => new((HttpStatusCode)status) { Content = new StringContent(body, System.Text.Encoding.UTF8, contentType) };
@@ -76,7 +77,8 @@ public class ProviderErrorMapperTests
     [Theory]
     [InlineData(429, false, TranslationErrorKind.RateLimited)]      // TP-MAP-04, row 4
     [InlineData(429, true, TranslationErrorKind.RateLimited)]       // a key changes nothing here
-    [InlineData(401, false, TranslationErrorKind.AuthFailed)]       // TP-MAP-05, row 5
+    [InlineData(401, true, TranslationErrorKind.AuthFailed)]        // TP-MAP-05, row 5 — with a key
+    [InlineData(401, false, TranslationErrorKind.Blocked)]          // row 5b, ruling E2-g — keyless
     [InlineData(403, false, TranslationErrorKind.Blocked)]          // TP-MAP-08, row 8
     [InlineData(403, true, TranslationErrorKind.AuthFailed)]        // TP-MAP-07, row 7
     [InlineData(456, true, TranslationErrorKind.QuotaExhausted)]    // TP-MAP-09, row 9
@@ -114,6 +116,23 @@ public class ProviderErrorMapperTests
         using var resp = Resp(403, envelope);
         Assert.Equal(TranslationErrorKind.Blocked,
             ProviderErrorMapper.Classify(resp, envelope, null, false, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// Ruling E2-g — a 401 with no key sent is a <c>Blocked</c>, exactly like a 403 with no key.
+    /// The free Google endpoint sends no credentials, so a 401 from it is never "the key is wrong":
+    /// it is a captive portal, a corporate proxy or a hiccup. Mapped to <c>AuthFailed</c> it opened
+    /// that provider's gate until <c>ProviderGates.ClearAuthBlock</c> — which for a keyless provider
+    /// has no key-save handler and therefore <b>no reachable caller</b>. One hotel Wi-Fi login page
+    /// and the provider was gone for the life of the process, with the app's own exit table saying
+    /// "restart it". A block is a state the breaker's own probe can leave.
+    /// </summary>
+    [Fact]
+    public void A_401_without_a_key_is_Blocked_and_not_the_user_only_exit()
+    {
+        using var resp = Resp(401, "<html><body>Sign in to continue</body></html>");
+        Assert.Equal(TranslationErrorKind.Blocked,
+            ProviderErrorMapper.Classify(resp, null, null, keyWasSent: false, CancellationToken.None));
     }
 
     /// <summary>TP-MAP-07 — a 403 with a key and no quota wording is the key being rejected.</summary>
@@ -249,7 +268,7 @@ public class ProviderErrorMapperTests
         var fake = new FakeHandler().Respond((HttpStatusCode)status, "nope");
 
         var ex = await Assert.ThrowsAsync<TranslationException>(
-            () => new TranslationService(fake).TranslateAsync("привет", "ru", "en"));
+            () => new GoogleGtxTranslator(fake).TranslateAsync("привет", "ru", "en"));
 
         Assert.Equal(expected, ex.Kind);
         Assert.Equal($"Translation service error (HTTP {status}). Please try again later.", ex.Message);
@@ -257,47 +276,60 @@ public class ProviderErrorMapperTests
     }
 
     /// <summary>
-    /// The E1.S1 deferred item: a transport failure on the LAST attempt used to escape
-    /// <c>RequestAsync</c> raw, which also made the friendly "couldn't reach" line below the loop
-    /// unreachable (E1.S2's deferred item). It is now the mapper's Network, carrying that same
-    /// sentence — and the retry count is unchanged at three.
+    /// The E1.S1 deferred item: a transport failure used to escape <c>RequestAsync</c> raw, which
+    /// also made the friendly "couldn't reach" line below the loop unreachable (E1.S2's deferred
+    /// item). It is the mapper's Network, carrying that same sentence — and since E2.S5 it is
+    /// <b>TP-RET-05</b> as well: a Network failure costs ONE request, not three. The retry that
+    /// used to cover for a dead connection is E3.S3's chain now.
     /// </summary>
     [Fact]
-    public async Task Googles_last_attempt_transport_failure_is_Network_and_keeps_its_sentence()
+    public async Task TP_RET_05_a_transport_failure_is_Network_keeps_its_sentence_and_costs_one_request()
     {
         var fake = new FakeHandler().Throws(new HttpRequestException("no route to host"));
 
         var ex = await Assert.ThrowsAsync<TranslationException>(
-            () => new TranslationService(fake).TranslateAsync("привет", "ru", "en"));
+            () => new GoogleGtxTranslator(fake).TranslateAsync("привет", "ru", "en"));
 
         Assert.Equal(TranslationErrorKind.Network, ex.Kind);
         Assert.Equal("Couldn't reach the translation service. Check your Internet connection.", ex.Message);
-        Assert.Equal(3, fake.Requests);
+        Assert.Equal(1, fake.Requests);
     }
 
     /// <summary>A Google timeout is a Timeout, and it carries the sentence it has always carried.
     /// Since E1.S6 that sentence is the LOG's account only: what the player reads is the Timeout
     /// Kind's copy-deck sentence from <c>UserMessages</c>, pinned in <c>UserMessagesTests</c>. This
-    /// case pins the Kind and the no-retry decision. A timeout is not retried, exactly as before.</summary>
+    /// case pins the Kind and, since E2.S5, <b>TP-RET-04</b>: a <c>TaskCanceledException</c> whose
+    /// token is NOT cancelled costs two requests, comes back a Timeout — never a cancel — and is
+    /// REPORTED as one. All three halves matter: the trap is that an unfiltered catch would turn it
+    /// into a cancel, and a cancel reports nothing, so a gate that never hears about a dead
+    /// provider is the silent second half of the same bug.</summary>
     [Fact]
-    public async Task A_Google_timeout_is_a_Timeout_with_todays_wording()
+    public async Task TP_RET_04_a_Google_timeout_is_a_Timeout_retried_once_and_never_a_cancel()
     {
         var fake = new FakeHandler().TimesOut();
 
         var ex = await Assert.ThrowsAsync<TranslationException>(
-            () => new TranslationService(fake).TranslateAsync("привет", "ru", "en"));
+            () => new GoogleGtxTranslator(fake).TranslateAsync("привет", "ru", "en"));
 
         Assert.Equal(TranslationErrorKind.Timeout, ex.Kind);
         Assert.Equal("the request timed out", ex.Message);
-        Assert.Equal(1, fake.Requests);
+        Assert.Equal(2, fake.Requests);
+        // …and the gate heard about it, once, as a Timeout — §5.6's 5 s soft cooldown is what
+        // stops the next LIVE tick re-hitting the same dead provider 700 ms later.
+        Assert.Equal(TranslationErrorKind.Timeout, ProviderGates.Snapshot(ProviderIds.GoogleGtx)!.LastKind);
     }
 
     /// <summary>
-    /// The E1.S1 deferred item this story closes: the per-line loop's unfiltered
+    /// The E1.S1 deferred item that story closed: the per-line loop's unfiltered
     /// <c>catch (OperationCanceledException) { throw; }</c>. A timeout on line 2 used to rethrow as
     /// if the user had cancelled — throwing away line 1's good translation, which is the exact case
-    /// the comment above that loop exists to protect. It now latches like any other provider
-    /// failure and the successes survive (I3, I16 — the latch and its placeholder are unchanged).
+    /// the comment above that loop exists to protect. It is caught as a provider failure now and
+    /// the successes survive (I3).
+    /// <para><b>E3.S6 / AC 4 changed the second element and nothing else about this case.</b> A
+    /// Timeout no longer borrows the rate-limit sentence: the latch is narrowed to
+    /// <c>RateLimited</c>/<c>Blocked</c>, so a timed-out line is reported as the failure it was.
+    /// The property this case is named for — line 1's translation survives — is untouched, and it
+    /// is the property that mattered.</para>
     /// </summary>
     [Fact]
     public async Task A_timeout_mid_batch_keeps_the_lines_already_translated()
@@ -307,10 +339,76 @@ public class ProviderErrorMapperTests
             .RespondJson(GoogleOk)   // per-line: line 1 translates
             .TimesOut();             // per-line: line 2 times out (the last step repeats)
 
-        var outp = await new TranslationService(fake)
+        var outp = await new GoogleGtxTranslator(fake)
             .TranslateLinesAsync(new[] { "привет", "пока" }, "ru", "en");
 
-        Assert.Equal(new[] { "hello", "(rate-limited — try again shortly)" }, outp);
+        Assert.Equal(new[] { "hello", "(translation failed: the request timed out)" }, outp);
+    }
+
+    // ---- AC 4 (E3.S6): which failure latches the per-line loop ---------------------------------
+
+    /// <summary>
+    /// <b>TP-CHN-12 — the unchanged half.</b> A refusal still latches, and it must: line 3 answers
+    /// 429, lines 4 and 5 are never asked (no request leaves the machine), the two lines already
+    /// translated are kept, and the latched lines read exactly what they always read. This is one
+    /// of the eleven LIVE behaviours (I16) and AC 4 does not touch it — narrowing the catch would
+    /// be worthless if it also let the loop keep hammering a provider that just said stop.
+    /// </summary>
+    [Fact]
+    public async Task A_rate_limit_still_latches_the_per_line_loop_and_keeps_the_successes()
+    {
+        var fake = new FakeHandler()
+            .RespondJson(GoogleOk)                          // batch: one segment for five lines — mismatch
+            .RespondJson(GoogleOk)                          // per-line: line 1
+            .RespondJson(GoogleOk)                          // per-line: line 2
+            .Respond(HttpStatusCode.TooManyRequests, "");   // per-line: line 3 — the refusal
+
+        var outp = await new GoogleGtxTranslator(fake).TranslateLinesAsync(
+            new[] { "привет", "пока", "спасибо", "да", "нет" }, "ru", "en");
+
+        Assert.Equal(new[]
+        {
+            "hello", "hello",
+            "(rate-limited — try again shortly)",
+            "(skipped — rate-limited, try again shortly)",
+            "(skipped — rate-limited, try again shortly)",
+        }, outp);
+        // The batch plus three lines. Lines 4 and 5 cost NO request: that is what latching is for.
+        Assert.Equal(4, fake.Requests);
+    }
+
+    /// <summary>
+    /// <b>AC 4 — the changed half.</b> A <c>BadResponse</c> on line 3 is that line's problem and no
+    /// other line's: lines 4 and 5 are still attempted and still come back translated. Before this
+    /// story a single unparseable body mid-loop latched everything after it into
+    /// "(skipped — rate-limited…)" — eleven translatable lines thrown away to print a sentence that
+    /// was not true. The failed line borrows the generic placeholder rather than a new one: the
+    /// three strings are E7.S1's to reword and E3.S8's to police (ruling E2-d), so this case
+    /// asserts the SHAPE of that line, not its copy.
+    /// </summary>
+    [Fact]
+    public async Task A_bad_response_mid_loop_fails_only_its_own_line()
+    {
+        var fake = new FakeHandler()
+            .RespondJson(GoogleOk)      // batch: one segment for five lines — mismatch
+            .RespondJson(GoogleOk)      // per-line: line 1
+            .RespondJson(GoogleOk)      // per-line: line 2
+            .RespondJson("not json")    // per-line: line 3 — a 200 that is not the provider's shape
+            .RespondJson(GoogleBye)     // per-line: line 4 — reached ONLY because the latch stayed open
+            .RespondJson(GoogleBye);    // per-line: line 5
+
+        var outp = await new GoogleGtxTranslator(fake).TranslateLinesAsync(
+            new[] { "привет", "пока", "спасибо", "да", "нет" }, "ru", "en");
+
+        Assert.Equal(new[] { "hello", "hello" }, outp.Take(2));
+        Assert.StartsWith("(translation failed: ", outp[2]);
+        Assert.DoesNotContain("rate-limited", outp[2]);
+        Assert.Equal(new[] { "bye", "bye" }, outp.Skip(3));
+        // Every line was asked: the batch plus five. A latch here would have made it four.
+        Assert.Equal(6, fake.Requests);
+        // One BadResponse is not three (§5.3's SoftStrike), so the gate stayed open for lines 4-5 —
+        // which is why this case can tell "the latch did not fire" from "the gate refused them".
+        Assert.Equal(GateState.Closed, ProviderGates.Snapshot(ProviderIds.GoogleGtx)!.State);
     }
 
     /// <summary>A genuine cancel still propagates untouched — row 1's contract, at the provider.</summary>
@@ -322,7 +420,7 @@ public class ProviderErrorMapperTests
         var fake = new FakeHandler().RespondJson(GoogleOk);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => new TranslationService(fake).TranslateLinesAsync(
+            () => new GoogleGtxTranslator(fake).TranslateLinesAsync(
                 new[] { "привет", "пока" }, "ru", "en", cts.Token));
         Assert.Equal(0, fake.Requests);
     }
@@ -339,7 +437,7 @@ public class ProviderErrorMapperTests
         var fake = new FakeHandler().RespondJson(GoogleOk);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => new TranslationService(fake).TranslateLinesAsync(
+            () => new GoogleGtxTranslator(fake).TranslateLinesAsync(
                 new[] { "привет" }, "ru", "en", cts.Token));
         Assert.Equal(0, fake.Requests);
     }
@@ -358,12 +456,15 @@ public class ProviderErrorMapperTests
         var fake = new FakeHandler().TimesOut();
 
         var ex = await Assert.ThrowsAsync<TranslationException>(
-            () => new TranslationService(fake).TranslateLinesAsync(
+            () => new GoogleGtxTranslator(fake).TranslateLinesAsync(
                 new[] { "привет", "пока", "спасибо" }, "ru", "en"));
 
         Assert.Equal(TranslationErrorKind.Timeout, ex.Kind);
         Assert.Equal("the request timed out", ex.Message);
-        Assert.Equal(1, fake.Requests);   // the batch, and nothing else
+        // The batch and its one retry, and nothing else: no per-line fan-out. The count is 2 rather
+        // than 1 since E2.S5 gave a Timeout the second attempt — 2 requests, not 2 × the line count,
+        // which is the property this case exists for.
+        Assert.Equal(2, fake.Requests);
     }
 
     /// <summary>
@@ -379,7 +480,7 @@ public class ProviderErrorMapperTests
             .RespondJson(GoogleOk)    // per-line: line 1
             .RespondJson(GoogleBye);  // per-line: line 2
 
-        var outp = await new TranslationService(fake)
+        var outp = await new GoogleGtxTranslator(fake)
             .TranslateLinesAsync(new[] { "привет", "пока" }, "ru", "en");
 
         Assert.Equal(new[] { "hello", "bye" }, outp);
@@ -402,7 +503,7 @@ public class ProviderErrorMapperTests
         var fake = new FakeHandler().RespondJson("not json");
 
         var ex = await Assert.ThrowsAsync<TranslationException>(
-            () => new TranslationService(fake).TranslateLinesAsync(
+            () => new GoogleGtxTranslator(fake).TranslateLinesAsync(
                 new[] { "привет", "пока" }, "ru", "en"));
 
         Assert.Equal(TranslationErrorKind.BadResponse, ex.Kind);
@@ -412,7 +513,7 @@ public class ProviderErrorMapperTests
     /// <summary>
     /// The E1.S1 deferred item on the DeepL side: the timeout mapping wrapped <c>SendAsync</c> but
     /// not the body read, so a timeout while reading the response escaped as a raw
-    /// TaskCanceledException — past the TranslationException contract the FallbackTranslator and
+    /// TaskCanceledException — past the TranslationException contract the provider chain and
     /// the LIVE loop are written against. Both sit in the same try now.
     /// <para>What this case can actually prove is the mapping, not the position: with HttpClient's
     /// default <c>ResponseContentRead</c> the body is buffered inside <c>SendAsync</c>, so a
@@ -693,7 +794,7 @@ public class ProviderErrorMapperTests
     /// throws: a malformed Content-Type has to fall through to the body sniff rather than surface a
     /// parse failure past the TranslationException contract every caller is written against.
     /// <para>The second half pins what row 11 hands back when the caller read <b>no body at all</b>
-    /// — which is exactly TranslationService's non-success branch (it passes <c>bodyHead: null</c>):
+    /// — which is exactly GoogleGtxTranslator's non-success branch (it passes <c>bodyHead: null</c>):
     /// the HTML path really was taken, so the head is <b>empty, not null</b>. E1.S5 must therefore
     /// test the head for emptiness, not just for null, before writing a <c>body=</c> field.</para>
     /// </summary>
@@ -761,7 +862,7 @@ public class ProviderErrorMapperTests
         var fake = new FakeHandler().Respond(HttpStatusCode.OK, Fixture("google-429.html"), "text/html");
 
         var ex = await Assert.ThrowsAsync<TranslationException>(
-            () => new TranslationService(fake).TranslateAsync("привет", "ru", "en"));
+            () => new GoogleGtxTranslator(fake).TranslateAsync("привет", "ru", "en"));
 
         Assert.Equal(TranslationErrorKind.RateLimited, ex.Kind);
         Assert.Equal("The translation service returned an unexpected response (it may be temporarily blocked). Try again shortly.",
@@ -776,7 +877,7 @@ public class ProviderErrorMapperTests
         var fake = new FakeHandler().Respond(HttpStatusCode.OK, Fixture("google-captcha.html"), "text/html");
 
         var ex = await Assert.ThrowsAsync<TranslationException>(
-            () => new TranslationService(fake).TranslateAsync("привет", "ru", "en"));
+            () => new GoogleGtxTranslator(fake).TranslateAsync("привет", "ru", "en"));
 
         Assert.Equal(TranslationErrorKind.Blocked, ex.Kind);
     }
@@ -788,7 +889,7 @@ public class ProviderErrorMapperTests
     {
         var fake = new FakeHandler().Respond(HttpStatusCode.OK, Fixture("gtx-single.json"));
 
-        Assert.Equal("hello", await new TranslationService(fake).TranslateAsync("привет", "ru", "en"));
+        Assert.Equal("hello", await new GoogleGtxTranslator(fake).TranslateAsync("привет", "ru", "en"));
     }
 
     /// <summary>
@@ -798,21 +899,32 @@ public class ProviderErrorMapperTests
     /// and the success path throws in between.
     /// </summary>
     [Fact]
-    public void The_sniff_is_written_above_the_parser_in_TranslationService()
+    public void The_sniff_is_written_above_the_parser_in_the_shared_core()
     {
         // Comments stripped first, and not for tidiness: the sniff's own comment explains what used
         // to "sail into JsonDocument.Parse below", so a plain substring scan finds the parser three
         // lines ABOVE the guard and fails on prose. E1.S3's TP-MAP-17 red was the same shape — a
         // source scan that cannot tell code from commentary is measuring the wrong thing.
-        var src = string.Join("\n", File.ReadAllLines(SourceOf("TranslationService.cs"))
+        //
+        // The file moved with the ordering: since E2.S5 the provider hands its parser to
+        // HttpProviderCore and the core decides when to call it, which is exactly what makes the
+        // rule structural — a provider can no longer parse before the sniff even if it wants to.
+        var src = string.Join("\n", File.ReadAllLines(SourceOf("HttpProviderCore.cs"))
                                         .Where(l => !l.TrimStart().StartsWith("//")));
 
         int sniff = src.IndexOf("LooksLikeHtml", StringComparison.Ordinal);
-        int parse = src.IndexOf("JsonDocument.Parse", StringComparison.Ordinal);
+        int parse = src.IndexOf("value = parse(body)", StringComparison.Ordinal);
 
-        Assert.True(sniff >= 0, "TranslationService no longer sniffs the body — §4.3 step 4 is gone");
-        Assert.True(parse >= 0, "TranslationService no longer parses — this guard is looking at the wrong file");
-        Assert.True(sniff < parse, "the HTML sniff must be written BEFORE JsonDocument.Parse (§4.3, never parse-then-guess)");
+        Assert.True(sniff >= 0, "HttpProviderCore no longer sniffs the body — §4.3 step 4 is gone");
+        Assert.True(parse >= 0, "HttpProviderCore no longer calls the provider's parser — this guard moved");
+        Assert.True(sniff < parse, "the HTML sniff must be written BEFORE the parser runs (§4.3, never parse-then-guess)");
+
+        // …and the provider really has stopped parsing on its own: its JsonDocument.Parse is inside
+        // the callback the core invokes, and nothing else in the file sends a request.
+        var provider = File.ReadAllText(SourceOf("GoogleGtxTranslator.cs"));
+        Assert.Contains("JsonDocument.Parse", provider);
+        Assert.DoesNotContain("_http.GetAsync", provider);
+        Assert.DoesNotContain("_http.SendAsync", provider);
     }
 
     /// <summary>An app source file, found by walking up from the test output — the same walk

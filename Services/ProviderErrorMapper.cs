@@ -96,7 +96,17 @@ internal static class ProviderErrorMapper
             int code = (int)resp.StatusCode;
 
             if (code == 429) return TranslationErrorKind.RateLimited;   // 4
-            if (code == 401) return TranslationErrorKind.AuthFailed;    // 5
+
+            // 5 / 5b — a 401 is guarded on keyWasSent exactly like rows 7/8 below (ruling E2-g).
+            // With a key it is the key: AuthFailed, and the gate stays open until the user re-saves
+            // one. WITHOUT a key it cannot be — the free endpoints send no credentials — so a 401
+            // is a captive portal, a corporate proxy or a hiccup, and mapping it to AuthFailed
+            // opened that provider's gate to DateTimeOffset.MaxValue with no key-save handler and
+            // therefore no reachable ClearAuthBlock caller: one hotel Wi-Fi login page and the
+            // provider was gone until the app restarted. Blocked is the honest row — a state the
+            // breaker's own half-open probe can leave.
+            if (code == 401 && keyWasSent) return TranslationErrorKind.AuthFailed;   // 5
+            if (code == 401) return TranslationErrorKind.Blocked;                    // 5b
 
             // 6, 7, 8 — the split this story exists for, written as three separate rules in the
             // table's own order so the file diffs line by line against §4.2. (A single nested
@@ -160,11 +170,22 @@ internal static class ProviderErrorMapper
         return TranslationErrorKind.Unknown;
     }
 
-    /// <summary>Row 6's envelope test. Case-insensitive because the wording is the provider's, and
-    /// a null head simply means the caller did not read the body — which is not a quota answer.</summary>
+    /// <summary>
+    /// Row 6's envelope test. Case-insensitive because the wording is the provider's, and a null
+    /// head simply means the caller did not read the body — which is not a quota answer.
+    ///
+    /// <para><b>Bounded like every other body reader here</b> (<see cref="MaxScanChars"/>, the
+    /// de-tagger's own input bound). The parameter is called <c>bodyHead</c> and every caller in
+    /// E1 handed it one; E2.S5 made the core hand over what the transport actually returned, which
+    /// can be a whole HTML page. Unbounded, one occurrence of the word "quota" anywhere in a long
+    /// proxy or vendor error page turns a keyed 403 into a <c>QuotaExhausted</c> — a 60-minute
+    /// gate block instead of an <c>AuthFailed</c> — on the strength of prose far below the
+    /// envelope. A real quota envelope says so at the top.</para>
+    /// </summary>
     internal static bool NamesAQuota(string? bodyHead) =>
         bodyHead != null &&
-        QuotaMarkers.Any(m => bodyHead.Contains(m, StringComparison.OrdinalIgnoreCase));
+        QuotaMarkers.Any(m => bodyHead.AsSpan(0, Math.Min(bodyHead.Length, MaxScanChars))
+                                      .Contains(m, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// §4.3 steps 1–2 — is this body an HTML page rather than the provider's JSON? Two signals, in

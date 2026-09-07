@@ -1,0 +1,232 @@
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
+using System.Web;
+
+namespace PWRUHelper.Services;
+
+// TranslationException moved to Services/TranslationErrors.cs, where it carries a Kind.
+
+/// <summary>Anything that can translate text. Kept as an interface so the app depends on
+/// the capability, not on Google specifically — a different backend (or a test double) can
+/// be dropped in without touching the UI.
+///
+/// <para><b>It stays in this file on purpose (E3.S6, invariant I1).</b> E3.S6 renamed the file
+/// and the provider class around it, and the obvious tidy-up — "give the interface its own file"
+/// — is exactly what must not happen: I1 says the interface is untouched, E1.S1's identity check
+/// is on this declaration, and moving it would turn a rename nobody has to read into a diff
+/// everybody does. Move it only in a story that says so.</para></summary>
+public interface ITranslator
+{
+    Task<string> TranslateAsync(string text, string source, string target, CancellationToken ct = default);
+    Task<List<string>> TranslateLinesAsync(IReadOnlyList<string> lines, string source, string target,
+        CancellationToken ct = default);
+}
+
+/// <summary>
+/// Translates text using Google's free (unofficial) translate endpoint — the same
+/// one translate.google.com uses. No API key, no cost. All work happens on Google's
+/// servers, so this uses no local CPU/GPU.
+/// </summary>
+public class GoogleGtxTranslator : ITranslator
+{
+    /// <summary>How this endpoint names itself in the diagnostic log — and, from E2.S5, which gate
+    /// it consults. Deliberately `google-gtx` and not `google`: it is the id this provider KEEPS
+    /// once E3 adds the other Google endpoints, so a field report from today still reads correctly
+    /// after the rename. It is <b>not spelled here</b>: E2.S2 moved the spelling to
+    /// <see cref="ProviderIds"/>, because a second spelling of an id is not a typo that fails
+    /// loudly — it is a silently duplicated gate.</summary>
+    private const string ProviderId = ProviderIds.GoogleGtx;
+
+    private static readonly HttpClient Http = CreateClient();
+
+    /// <summary>The browser-like User-Agent this endpoint has always sent: it avoids the endpoint
+    /// occasionally rejecting the request. Frozen and NOT rotated (§7.0), and provider-specific —
+    /// <c>DeepLTranslator</c> sends none, and the shared client factory must not give it one.</summary>
+    private const string UserAgent =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
+
+    private readonly HttpClient _http;
+
+    /// <summary>§7.0's shared pipeline: gate admission, the ≤ 2 attempts with full jitter, one body
+    /// read, classification, <c>Retry-After</c>, the §10.1 line and the outcome report. What is left
+    /// in this file is what is Google's: the URL, the batch join/split and the parser — the chunker
+    /// left with E3.S6, to <see cref="TextChunker"/>, because a second query-string provider needs
+    /// it too.</summary>
+    private readonly HttpProviderCore _core;
+
+    /// <summary>§5.4's reserve, per INSTANCE — the same field, for the same reason, as
+    /// <see cref="GoogleDictTranslator"/>'s: <see cref="ITranslator"/> has no channel for a priority
+    /// (I1), and E3.S7 needs the LIVE read chain to say <c>Background</c> while the Translator tab
+    /// and read-once say <c>Interactive</c>. The instances that answer to those chains share
+    /// <b>one</b> gate (I9). Defaults to <c>Interactive</c>, so the write path is unchanged.</summary>
+    private readonly RequestPriority _priority;
+
+    public GoogleGtxTranslator() : this((HttpMessageHandler?)null) { }
+
+    /// <summary>Test seam: a handler builds a private client — configured exactly like the shared
+    /// one, so a test sees the same timeout and the same User-Agent — and the retry policy and the
+    /// response parsing become reachable offline; the app passes nothing and keeps the shared
+    /// static client. Nothing disposes the private client: production never takes this path, and a
+    /// test handler owns no sockets. <paramref name="gate"/> is the same idea for E2's registry: a
+    /// case that wants to watch the admission hands in its own gate instead of the shared one.</summary>
+    internal GoogleGtxTranslator(HttpMessageHandler? handler = null, ProviderGate? gate = null,
+        RequestPriority priority = RequestPriority.Interactive)
+    {
+        _http = handler == null ? Http : CreateClient(handler);
+        _core = new HttpProviderCore(Options, _http, gate);
+        _priority = priority;
+    }
+
+    /// <summary>What this provider tells the core about itself (§7.0). The sentences are the LOG's
+    /// account of what the endpoint said — what the player reads is the Kind's sentence from
+    /// <see cref="UserMessages"/> (E1.S6) — and folding them into that table is E7.S1's.</summary>
+    private static readonly ProviderOptions Options = new(
+        ProviderId,
+        KeyWasSent: false,          // the keyless endpoint: its 403 is a block, never a rejected key
+        StatusMessage: code => code switch
+        {
+            // A 2xx that reached here is the §4.3 abuse page served with a success status.
+            >= 200 and < 300 => "The translation service returned an unexpected response (it may be temporarily blocked). Try again shortly.",
+            429 => "Google is limiting translations right now — wait a minute and try again.",
+            >= 500 => $"Translation service is unavailable (HTTP {code}). Try again shortly.",
+            // Every other non-transient status, HTTP code included: §4.4 wants Unknown to say what
+            // the provider said, because hiding it is what would make it unreportable.
+            _ => $"Translation service error (HTTP {code}). Please try again later.",
+        },
+        TransportMessage: kind => kind == TranslationErrorKind.Timeout
+            ? "the request timed out"
+            : "Couldn't reach the translation service. Check your Internet connection.",
+        PausedMessage: "The translation service is paused after a recent refusal.",
+        UserAgent: UserAgent);
+
+    // One factory for both paths, so a test client differs from the production one by its handler
+    // and nothing else. The factory itself is the core's since E2.S5: it was byte-identical here
+    // and in DeepLTranslator apart from this provider's User-Agent.
+    private static HttpClient CreateClient(HttpMessageHandler? handler = null) =>
+        HttpProviderCore.CreateClient(handler, UserAgent);
+
+    /// <summary>
+    /// Translate a single piece of text. Language codes are ISO ("en", "ru").
+    /// Use "auto" for source to auto-detect. Long text is split into chunks so it
+    /// never overflows the GET query.
+    /// </summary>
+    public async Task<string> TranslateAsync(string text, string source, string target,
+        CancellationToken ct = default)
+    {
+        text = text.Trim();
+        if (text.Length == 0) return "";
+
+        if (Encoding.UTF8.GetByteCount(text) <= TranslationPolicy.MaxQueryBytes)
+            return await RequestAsync(text, source, target, ct).ConfigureAwait(false);
+
+        // Too long for one request: translate sentence-sized chunks and stitch back.
+        var sb = new StringBuilder();
+        foreach (var chunk in TextChunker.ChunkText(text, TranslationPolicy.MaxQueryBytes))
+            sb.Append(await RequestAsync(chunk, source, target, ct).ConfigureAwait(false));
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Translate several lines. Tries a single batched request (lines joined by newlines)
+    /// and falls back to one request per line if the batch fails or the line count doesn't
+    /// line up. Returns a list the same length as <paramref name="lines"/>; a line that
+    /// can't be translated comes back as "(translation failed: …)".
+    ///
+    /// <para><b>The loop below the batch is not here any more</b> (E3.S8): it, <c>SafeOne</c>, the
+    /// latch and the three placeholder strings moved to <see cref="PerLineFallback"/>, which
+    /// <see cref="GoogleDictTranslator"/> shares — they were byte-identical in the two files and the
+    /// Rule of Three was reached. What stays here is what is gtx's: the join, the split and the
+    /// count comparison (§6.3). <c>afterFailedBatch: true</c> is what arms
+    /// <see cref="TranslationPolicy.PerLineCap"/>: this fan-out IS the amplifier E3.S8 bounds.</para>
+    /// </summary>
+    public async Task<List<string>> TranslateLinesAsync(IReadOnlyList<string> lines,
+        string source, string target, CancellationToken ct = default)
+    {
+        if (lines.Count == 0) return new List<string>();
+        if (lines.Count == 1)
+            return new List<string>
+            {
+                await PerLineFallback.SafeOneAsync(lines[0], One, ct).ConfigureAwait(false),
+            };
+
+        // Whether a batch was really tried and really failed — which is the ONLY thing that arms the
+        // cap (ruling E3-e). A group too long for one query never had a batch to fail: it takes the
+        // same loop as its PRIMARY strategy, and capping it would drop lines from a big LIVE tick
+        // that nothing had gone wrong with. The rate ceiling and the gate bound that one.
+        bool batchFailed = false;
+
+        var joined = string.Join("\n", lines);
+        if (Encoding.UTF8.GetByteCount(joined) <= TranslationPolicy.MaxQueryBytes)
+        {
+            try
+            {
+                var full = await RequestAsync(joined, source, target, ct).ConfigureAwait(false);
+                var parts = full.Split('\n');
+                if (parts.Length == lines.Count)
+                    return parts.Select(p => p.Trim()).ToList();
+                // else: segmentation didn't line up — fall through to per-line. NEVER padded (I5).
+                batchFailed = true;
+            }
+            catch (TranslationException) { throw; }  // rate-limit etc. — let the caller show it
+            // A genuine Stop must not be spent on a per-line retry of a batch the user abandoned.
+            // The bare catch below is an OCE catch too, and I3 asks every one of them to say so.
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch { batchFailed = true; /* fall through to per-line */ }
+        }
+
+        // The per-line fallback, capped: PerLineFallback owns the loop, the latch, the placeholders
+        // and ruling E3-f's throw. This file owns the join and the split above it, and nothing else.
+        return await PerLineFallback
+            .RunAsync(lines, One, ProviderId, batchFailed, ct).ConfigureAwait(false);
+
+        // The provider's own one-line call, with the source and target closed over — the whole of
+        // what the shared loop needs to know about gtx.
+        Task<string> One(string line, CancellationToken token)
+            => TranslateAsync(line, source, target, token);
+    }
+
+    /// <summary>One logical call: this method owns the URL and the parser, and hands everything
+    /// else to <see cref="HttpProviderCore"/> (§7.0). The priority is the INSTANCE's since E3.S7 —
+    /// the read chain builds this provider <c>Background</c> and every other caller keeps the
+    /// <c>Interactive</c> default — which is where E2.S3's reserve stopped being inert.</summary>
+    private Task<string> RequestAsync(string text, string source, string target, CancellationToken ct)
+    {
+        var url = "https://translate.googleapis.com/translate_a/single?client=gtx" +
+                  $"&sl={source}&tl={target}&dt=t&q={HttpUtility.UrlEncode(text)}";
+
+        // The address travels as a Uri because RequestLog renders host + path and cannot render a
+        // query, and the text is handed over only to be MEASURED (I11).
+        return _core.SendAsync(new Uri(url), () => new HttpRequestMessage(HttpMethod.Get, url),
+            Parse, source, target, text, _priority, ct);
+    }
+
+    /// <summary>Pull the translated segments out of a gtx response:
+    /// <c>[[["translated","original",…], …], …]</c>. Called by the core INSIDE the admission, so a
+    /// body that is not this shape reaches the gate as the <c>BadResponse</c> it is (§5.3).</summary>
+    internal static string Parse(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var sb = new StringBuilder();
+            var segments = doc.RootElement[0];
+            foreach (var seg in segments.EnumerateArray())
+            {
+                var piece = seg[0].GetString();
+                if (piece != null) sb.Append(piece);
+            }
+            return sb.ToString();
+        }
+        catch (Exception ex) when (ex is JsonException or IndexOutOfRangeException
+                                         or InvalidOperationException)
+        {
+            // §4.2 row 12: a success whose body is not the provider's shape. It is no longer how a
+            // block page is discovered — the core's §4.3 sniff classifies an HTML body before this
+            // method can see it — so what lands here is a body that claimed to be JSON, did not
+            // start with '<', and still is not gtx's shape.
+            throw new TranslationException(TranslationErrorKind.BadResponse,
+                "The translation service returned an unexpected response (it may be temporarily blocked). Try again shortly.");
+        }
+    }
+}

@@ -13,7 +13,8 @@ namespace PWRUHelper.Tests;
 /// carry only a sentence now carries a machine-readable <see cref="TranslationErrorKind"/> in front
 /// of it, so the mapper, the breaker and the user-facing message stop being derived from a string.
 /// </summary>
-public class TranslationErrorsTests
+[Collection("Gates")]
+public class TranslationErrorsTests : GatesTestBase
 {
     // architecture-cible.md §4.1, verbatim and in order. Pinned as text because three later pieces
     // are written against this exact vocabulary: the mapper's classification table, the breaker's
@@ -110,7 +111,7 @@ public class TranslationErrorsTests
     [Fact]
     public async Task Googles_non_transient_status_is_Unknown_when_no_row_names_it()
     {
-        var google = new TranslationService(new FakeHandler().Respond(HttpStatusCode.BadRequest, "nope"));
+        var google = new GoogleGtxTranslator(new FakeHandler().Respond(HttpStatusCode.BadRequest, "nope"));
 
         var ex = await Assert.ThrowsAsync<TranslationException>(
             () => google.TranslateAsync("привет", "ru", "en"));
@@ -141,7 +142,7 @@ public class TranslationErrorsTests
         var throwers = files.Where(f => File.ReadAllText(f).Contains("throw new TranslationException("))
                             .Select(Path.GetFileName)
                             .ToList();
-        Assert.Contains("TranslationService.cs", throwers);
+        Assert.Contains("GoogleGtxTranslator.cs", throwers);
         Assert.Contains("DeepLTranslator.cs", throwers);
 
         foreach (var file in files)

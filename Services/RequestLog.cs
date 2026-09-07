@@ -7,7 +7,7 @@ namespace PWRUHelper.Services;
 /// The per-request diagnostic line of <c>architecture-cible.md</c> §10.1, built here and written
 /// through <see cref="Logging"/>.
 ///
-/// It exists because <c>TranslationService</c> logs <b>nothing</b> today, so the About tab's "Copy
+/// It exists because <c>GoogleGtxTranslator</c> logs <b>nothing</b> today, so the About tab's "Copy
 /// error report" (<c>MainWindow.xaml.cs:312-322</c>) is empty for exactly the failure players
 /// report. One line per <b>non-success or exceptional</b> attempt turns the next incident into a
 /// measurement instead of an argument; successes are counted into <c>burst60</c> and never logged,
@@ -47,9 +47,12 @@ internal static class RequestLog
     /// prefix, so a dual-stack machine silently switching families looks like a block that "cleared
     /// itself"). <b>Not obtainable on this path today</b> — <see cref="HttpClient"/> does not expose
     /// the socket, and the only cheap way in is a <c>ConnectCallback</c> on the production handler,
-    /// which is a hot-path change this story is not allowed to make. §10.1's own instruction for
-    /// that case is to log <c>?</c> rather than to guess. <b>E2.S5</b>'s <c>HttpProviderCore</c>
-    /// owns the handler and is where the real value arrives.
+    /// which <b>E2.S5's review deliberately refused to install</b> (Winston's ruling): a connect
+    /// callback replaces the runtime's own connect path — DNS, dual-stack Happy Eyeballs, proxy
+    /// tunnelling, connect-timeout semantics — on a tool that runs on arbitrary home and corporate
+    /// networks with no way to diagnose one remotely, and no diagnostic field is worth that. .NET 8
+    /// exposes the peer address on no other public per-request API, so this is what every line
+    /// says, and §10.1's own instruction for that case is to log <c>?</c> rather than to guess.
     /// </summary>
     internal const string UnknownAddressFamily = "?";
 
@@ -309,22 +312,46 @@ internal static class RequestLog
 
     // ---- emission ------------------------------------------------------------------------------
 
+    // The three doors. None of them carries an address family: E2.S5's review refused the
+    // ConnectCallback that was the only way to learn one (see UnknownAddressFamily), so `ipv=`
+    // renders Line's own `?` default and there is no parameter for a caller to get wrong. An
+    // optional argument nobody can supply is not a seam — it is a promise the code cannot keep.
+    //
+    // What they DO carry is `scrub` (I11). This class is UI-free and cannot know a key's VALUE,
+    // only the parameter names it stops at (EchoMarkers); a keyed provider hands its own scrubber
+    // in. It is applied to the FINISHED line and to nothing earlier, which is the only placement
+    // that holds: BodyHead de-tags the body AFTER any caller could have scrubbed it, so a page
+    // rendering `KEY-<b>PART</b>-2` reassembles the credential inside this class, past a scrub
+    // that ran on the raw body. The last thing before the write is the last chance.
+
     /// <summary>One line for an attempt that ended on a real response.</summary>
     internal static void Emit(Call call, int attempt, TimeSpan elapsed, int burst60,
-        HttpResponseMessage resp, string? body) =>
+        HttpResponseMessage resp, string? body, Func<string, string>? scrub = null) =>
         Write(call, StatusOf(resp),
-            () => Line(call, attempt, ResponseFacts.Of(resp, body), elapsed, burst60));
+            () => Scrubbed(Line(call, attempt, ResponseFacts.Of(resp, body), elapsed, burst60), scrub));
 
     /// <summary>One line for an attempt that ended in a transport exception.</summary>
-    internal static void Emit(Call call, int attempt, TimeSpan elapsed, int burst60, Exception transport) =>
+    internal static void Emit(Call call, int attempt, TimeSpan elapsed, int burst60,
+        Exception transport, Func<string, string>? scrub = null) =>
         Write(call, transport == null ? Nothing : transport.GetType().Name,
-            () => Line(call, attempt, ResponseFacts.OfTransport(transport), elapsed, burst60));
+            () => Scrubbed(Line(call, attempt, ResponseFacts.OfTransport(transport), elapsed, burst60), scrub));
 
     /// <summary>One line for an attempt whose response is already gone — the parse failure.</summary>
     internal static void EmitStatus(Call call, int attempt, TimeSpan elapsed, int burst60,
-        int status, string? body) =>
+        int status, string? body, Func<string, string>? scrub = null) =>
         Write(call, status <= 0 ? Nothing : status.ToString(),
-            () => Line(call, attempt, ResponseFacts.OfStatus(status, body), elapsed, burst60));
+            () => Scrubbed(Line(call, attempt, ResponseFacts.OfStatus(status, body), elapsed, burst60), scrub));
+
+    /// <summary>A keyless provider pays nothing; a keyed one pays one ordinal scan of a line that
+    /// is bounded at a few hundred characters, on the failure path only. A scrubber that throws is
+    /// a diagnostic problem, never a translation problem — but it must not be allowed to write the
+    /// UNSCRUBBED line either, so a failure drops the body rather than risking the secret.</summary>
+    private static string Scrubbed(string line, Func<string, string>? scrub)
+    {
+        if (scrub == null) return line;
+        try { return scrub(line); }
+        catch { return Nothing; }
+    }
 
     /// <summary>The status the suppressor keys on, read without building the rest of the line —
     /// a suppressed attempt must not pay for the line it is not going to write.</summary>
@@ -364,7 +391,10 @@ internal static class RequestLog
     /// never blocks the failure it is describing: an unreadable body simply has no <c>body=</c>.</summary>
     internal static async Task<string?> SafeBodyAsync(HttpResponseMessage resp, CancellationToken ct)
     {
-        try { return await resp.Content.ReadAsStringAsync(ct); }
+        // ConfigureAwait(false) for the same reason the core's awaits carry it: this runs on the
+        // request path, whose callers await from UI-thread methods, and Services/ must never
+        // assume a dispatcher (I2).
+        try { return await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false); }
         catch { return null; }
     }
 
@@ -482,23 +512,35 @@ internal sealed class LogSuppressor
     private readonly object _gate = new();
     private readonly TimeSpan _window;
     private readonly int _threshold;
+    private readonly string _prefix;
+    private readonly string _separator;
 
     private string? _signature;     // provider + status of the run in progress
     private int _run;               // how many lines that run has seen, written or not
     private int _held;              // how many of them were not written
     private DateTimeOffset _since;  // when the current summary window opened
 
+    /// <param name="prefix">The family the summary line belongs to — <c>"tr "</c> for E1.S5's
+    /// per-request lines, <c>"gate "</c> for E2.S6's transition lines. A summary that announced
+    /// itself as another family's line would be a report that reads as two streams.</param>
+    /// <param name="separator">What sits between the provider and the second half of the key, so
+    /// the summary is spelled in the grammar of the lines it replaces: <c>" status="</c> for a
+    /// request line, a plain space for a gate line, whose second half is already an edge
+    /// (<c>OPEN-&gt;HALF-OPEN</c>).</param>
     internal LogSuppressor(int threshold = Threshold,
-        int windowSeconds = RequestLog.BurstWindowSeconds)
+        int windowSeconds = RequestLog.BurstWindowSeconds,
+        string prefix = "tr ", string separator = " status=")
     {
         _threshold = threshold;
         _window = TimeSpan.FromSeconds(windowSeconds);
+        _prefix = prefix;
+        _separator = separator;
     }
 
     /// <summary>Records one line about to be emitted and answers whether to write it.</summary>
     internal Decision Note(string provider, string status, DateTimeOffset now)
     {
-        var signature = provider + " status=" + status;
+        var signature = provider + _separator + status;
         lock (_gate)
         {
             if (signature != _signature)
@@ -535,7 +577,7 @@ internal sealed class LogSuppressor
     {
         if (_held == 0) return null;
         var seconds = (long)Math.Max(0, (now - _since).TotalSeconds);
-        var line = $"tr provider={_signature} suppressed={_held} in={seconds}s " +
+        var line = $"{_prefix}provider={_signature} suppressed={_held} in={seconds}s " +
                    "(identical lines not written)";
         _held = 0;
         _since = now;

@@ -29,7 +29,8 @@ internal sealed class FakeHandler : HttpMessageHandler
         public Exception? Thrown;
     }
 
-    private sealed record Step(HttpStatusCode Status, string Body, string ContentType, Exception? Throw);
+    private sealed record Step(HttpStatusCode Status, string Body, string ContentType, Exception? Throw,
+        IReadOnlyList<KeyValuePair<string, string>>? Headers = null, TimeSpan Delay = default);
 
     // Guards both lists: a provider that ever sends two requests at once must still get a
     // deterministic script step and an intact recording.
@@ -48,6 +49,43 @@ internal sealed class FakeHandler : HttpMessageHandler
     public FakeHandler Respond(HttpStatusCode status, string body = "", string contentType = "application/json")
     {
         lock (_gate) _steps.Add(new Step(status, body, contentType, null));
+        return this;
+    }
+
+    /// <summary>
+    /// One response header on the step just scripted — <c>Retry-After</c> above all: §5.5 cannot be
+    /// tested at all without it, and neither can the allow-list <c>ResponseFacts</c> renders
+    /// (<c>Via</c>, <c>Server</c>, <c>X-RateLimit-*</c>, <c>Set-Cookie</c>). Added without
+    /// validation, because a header a real server sends malformed is exactly the shape the log's
+    /// sanitiser exists for.
+    /// </summary>
+    public FakeHandler WithHeader(string name, string value)
+    {
+        lock (_gate)
+        {
+            if (_steps.Count == 0)
+                throw new InvalidOperationException("WithHeader needs a Respond/Throws step in front of it.");
+            var last = _steps[^1];
+            var headers = new List<KeyValuePair<string, string>>(last.Headers ?? Array.Empty<KeyValuePair<string, string>>())
+            {
+                new(name, value),
+            };
+            _steps[^1] = last with { Headers = headers };
+        }
+        return this;
+    }
+
+    /// <summary>Artificial latency on the step just scripted, so attempt 1 can be slow and attempt 2
+    /// fast — which the single global <see cref="Delay"/> cannot express, because it applies to
+    /// both.</summary>
+    public FakeHandler After(TimeSpan delay)
+    {
+        lock (_gate)
+        {
+            if (_steps.Count == 0)
+                throw new InvalidOperationException("After needs a Respond/Throws step in front of it.");
+            _steps[^1] = _steps[^1] with { Delay = delay };
+        }
         return this;
     }
 
@@ -104,6 +142,7 @@ internal sealed class FakeHandler : HttpMessageHandler
         }
 
         if (Delay > TimeSpan.Zero) await Task.Delay(Delay, ct);
+        if (step.Delay > TimeSpan.Zero) await Task.Delay(step.Delay, ct);
 
         if (step.Throw != null)
         {
@@ -113,9 +152,12 @@ internal sealed class FakeHandler : HttpMessageHandler
 
         call.Status = step.Status;
         call.ResponseBody = step.Body;
-        return new HttpResponseMessage(step.Status)
+        var response = new HttpResponseMessage(step.Status)
         {
             Content = new StringContent(step.Body, Encoding.UTF8, step.ContentType),
         };
+        foreach (var header in step.Headers ?? Enumerable.Empty<KeyValuePair<string, string>>())
+            response.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        return response;
     }
 }

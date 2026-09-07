@@ -9,7 +9,7 @@
     extra headers, system proxy, HTTP/1.1 - and records status, every response header
     (Retry-After above all), body shape and elapsed time.
 
-    Request built from Services/TranslationService.cs:
+    Request built from Services/GoogleGtxTranslator.cs (Services/TranslationService.cs until E3.S6):
       GET https://translate.googleapis.com/translate_a/single?client=gtx&sl=..&tl=..&dt=t&q=..
       User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36
       no Accept, no Accept-Language, no cookies, 12 s timeout.
@@ -68,7 +68,7 @@ Add-Type -AssemblyName System.Web | Out-Null
 # PS 5.1 can still default to TLS 1.0 on older boxes; Google requires 1.2+.
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
 
-# The exact UA from Services/TranslationService.cs:41-42. Do not "modernise" it.
+# The exact UA from Services/GoogleGtxTranslator.cs:46-47. Do not "modernise" it.
 $AppUa = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36'
 
 # Short Russian chat-like lines, rotated so consecutive requests are not identical strings

@@ -82,9 +82,10 @@ internal sealed class LogWriter
             {
                 Directory.CreateDirectory(_dir);
                 RollIfTooBig();
-                // Milliseconds, not seconds: the retry spacing this log exists to evidence is
-                // 300 ms then 600 ms, and a second-resolution stamp renders both as "the same
-                // second" (architecture-cible.md §10.1).
+                // Milliseconds, not seconds: the retry spacing this log exists to evidence is a
+                // full-jitter draw below 500 ms (TranslationPolicy.BackoffBaseMs, E2.S5 — it was
+                // a fixed 300 ms then 600 ms), and a second-resolution stamp renders both attempts
+                // as "the same second" (architecture-cible.md §10.1).
                 var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] {message}{Environment.NewLine}";
                 File.AppendAllText(_logPath, line, Utf8NoBom);
             }

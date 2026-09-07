@@ -17,7 +17,12 @@ namespace PWRUHelper.Tests;
 /// </summary>
 public class TranslationPolicyTests
 {
-    private static readonly string[] Grades = { "[CONFIRMED]", "[MEASURED]", "[ASSUMED]" };
+    /// <summary>The vocabulary the table is graded in. <c>[UNKNOWN]</c> joined it with E3.S4: a
+    /// value that ships at the safe end of an open question is neither confirmed, nor measured, nor
+    /// calibrated to a reported range — and grading it <c>[ASSUMED]</c> to satisfy the scan would
+    /// have been the scan lying about the evidence, which is the one thing this file exists to stop.
+    /// A fourth word is cheap; a mis-graded number is not.</summary>
+    private static readonly string[] Grades = { "[CONFIRMED]", "[MEASURED]", "[ASSUMED]", "[UNKNOWN]" };
 
     // ---- AC 1: internal static, every member const or static readonly, nothing else ----------
 
@@ -79,14 +84,28 @@ public class TranslationPolicyTests
     [Fact]
     public void The_numbers_are_the_ones_the_code_uses_today()
     {
-        // If a single one of these changes value, this story was wrong: increment 0 is
-        // behaviour-neutral by definition. The §5.6 targets (MaxAttempts 2, 500 ms spacing,
-        // cache 2000 …) are deliberately absent until the code that reads them exists.
+        // The numbers the code really runs on. The remaining §5.6 targets (cache 2000 …) are
+        // deliberately absent until the code that reads them exists.
         Assert.Equal(12, TranslationPolicy.RequestTimeoutSeconds);
-        Assert.Equal(3, TranslationPolicy.MaxAttemptsToday);
-        Assert.Equal(300, TranslationPolicy.RetrySpacingBaseMs);
+        // E2.S5 replaced MaxAttemptsToday = 3 / RetrySpacingBaseMs = 300 with §5.6's targets, in
+        // the same commit that changed the loop — E1.S1 said it would. The literals are the point
+        // HERE and only here: everywhere else the assertions are on relationships (one request on
+        // a 429, two on a 503), so E2.S7's tuning commit touches this line and no other.
+        Assert.Equal(2, TranslationPolicy.MaxAttempts);
+        Assert.Equal(500, TranslationPolicy.BackoffBaseMs);
         Assert.Equal(500, TranslationPolicy.CacheCapacityToday);
         Assert.Equal(1500, TranslationPolicy.MaxQueryBytes);
+
+        // E3.S8's cap, and the literal belongs HERE and nowhere else (U9): PerLineFallbackTests
+        // asserts the RELATIONSHIPS — at the cap every line is asked, one past it exactly one is
+        // not — so a tuning commit that moves this number touches this line alone.
+        Assert.Equal(8, TranslationPolicy.PerLineCap);
+
+        // OQ-A's shipped answer, pinned so that turning it on is a deliberate act with a red test
+        // in front of it rather than a one-character edit nobody reviews. E3.S1's capture flips
+        // this line and TP-PRV-04 together, or neither.
+        Assert.False(TranslationPolicy.GoogleDictBatchJoinEnabled,
+            "the \\n-joined batch stays off until U1 is settled by a capture (OQ-A, architecture-cible §7.1)");
     }
 
     [Fact]
@@ -95,7 +114,7 @@ public class TranslationPolicyTests
         // The constants that replaced a literal, checked where they land rather than where they are
         // declared — a wrong reference would be invisible in the assertions above.
         var timeout = TimeSpan.FromSeconds(TranslationPolicy.RequestTimeoutSeconds);
-        Assert.Equal(timeout, ClientOf(new TranslationService(new FakeHandler())).Timeout);
+        Assert.Equal(timeout, ClientOf(new GoogleGtxTranslator(new FakeHandler())).Timeout);
         Assert.Equal(timeout, ClientOf(new DeepLTranslator("k:fx", new FakeHandler())).Timeout);
 
         var capacity = typeof(CachingTranslator).GetConstructors().Single()
