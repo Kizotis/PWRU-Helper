@@ -196,6 +196,12 @@ public partial class MainWindow
     /// bounced out to the full window and back, which looked exactly as bad as it sounds.</summary>
     internal async Task SelectAreaAndReadOnceAsync()
     {
+        // A8's first mandatory condition, and it is FIRST for a reason the deck spells out: while a
+        // read is in flight this button says "Cancel read", so the press has to mean cancel BEFORE
+        // StopLive() and SelectRegionAsync() — otherwise cancelling a read would drop the player
+        // into a region drag over the game. ReadRegionOnceAsync keeps its own copy of this guard for
+        // the Ctrl+Alt+R path, which never comes through here (TP-ONCE-06).
+        if (_readingOnce) { CancelReadOnce(); return; }
         if (_selectingRegion) return;
         StopLive();
         var region = await SelectRegionAsync();
@@ -237,7 +243,9 @@ public partial class MainWindow
         // that back typed, and ReadOnceSummary turns it into the paused sentence with {n} in it.
         // Zero requests either way — that half of AC 3 is unchanged and is what TP-ONCE-04 asserts.
         MainTabs.SelectedIndex = TabTranslator;   // results show on the Translator page
-        SetReadOnceEnabled(false);
+        // A8: the button is not greyed — it becomes "Cancel read" and stays pressable, which is the
+        // only reason the second press below can ever reach the guard at the top of this method.
+        SetReadOnceCancelMode(reading: true);
         LiveButton.IsEnabled = false;        // don't let live start mid-read (shared OCR engine)
         // NOT _ocrItems.Clear(): the result is appended to the feed and framed instead (see
         // TranslateSentencesInto). Wiping the history to show one answer threw away the live lines
@@ -326,7 +334,7 @@ public partial class MainWindow
         }
         finally
         {
-            SetReadOnceEnabled(true);
+            SetReadOnceCancelMode(reading: false);
             LiveButton.IsEnabled = true;
             _readingOnce = false;
             // Clear the field only if it is still ours — a second press has already cancelled and
@@ -388,12 +396,25 @@ public partial class MainWindow
         => new(TranslationErrorKind.Timeout,
                $"the read-once budget of {TranslationPolicy.ReadOnceBudgetSeconds} s elapsed");
 
-    /// <summary>Grey out BOTH read-once buttons while a read is in flight. Ctrl+Alt+R can start one
-    /// without ever leaving compact mode, so the overlay's copy has to follow the main window's.</summary>
-    private void SetReadOnceEnabled(bool enabled)
+    /// <summary>
+    /// <b>Amendment A8 — the read-once button becomes the cancel, and it is never disabled.</b>
+    /// This replaces <c>SetReadOnceEnabled</c>, which greyed both buttons for the length of a read:
+    /// a disabled WPF button raises no <c>Click</c>, which is why two of E5.S4's three cancel routes
+    /// were unreachable from the UI and why "only Ctrl+Alt+R can stop a read" was true. A greyed
+    /// button through a 30 s wait is also precisely what makes a player press it again (amplifier
+    /// A7) — so the press is given a meaning instead, at the cost of one label and zero controls.
+    ///
+    /// <para>BOTH surfaces, because Ctrl+Alt+R can start a read without ever leaving compact mode,
+    /// and the copy is the deck's (GAP-4): the two buttons have no <c>Content</c> in their XAML at
+    /// all, so an idle label and a cancel label cannot come to be two different spellings of the
+    /// same control. The genuine disable paths — <c>ShowOcrPackNeeded</c>, the OCR-pack install —
+    /// are untouched: this method never writes <c>IsEnabled</c>.</para></summary>
+    /// <param name="reading">Whether a read-once is in flight — the state the button describes.</param>
+    internal void SetReadOnceCancelMode(bool reading)
     {
-        SelectAreaButton.IsEnabled = enabled;
-        _overlay?.SetReadOnceEnabled(enabled);
+        SelectAreaButton.Content = reading ? UserMessages.CancelReadLabel() : UserMessages.ReadOnceLabel();
+        SelectAreaButton.ToolTip = reading ? UserMessages.CancelReadTooltip() : UserMessages.ReadOnceTooltip();
+        _overlay?.SetReadOnceCancelMode(reading);
     }
 
     /// <summary>Fill the reading list with each Russian message and its translation. Only the

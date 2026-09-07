@@ -915,6 +915,38 @@ public class UserMessagesTests : GatesTestBase
             }
     }
 
+    // ---- A8: the read-once button's two states, both in the deck (E7.S5) ----------------------
+
+    /// <summary>
+    /// <b>Amendment A8's copy.</b> Six strings, and the reason they are in the deck rather than in
+    /// two XAML attributes is the reason every other pair in this file is: a control whose label
+    /// CHANGES needs both forms written down in one place, or the restore becomes a second spelling
+    /// of the idle one (UX-DR19). The idle wording is the SHIPPED one and not A8's paraphrase
+    /// ("Read the area once") — the README walks a new player through this button by name, and
+    /// renaming it is E7.S8's call.
+    /// </summary>
+    [Fact]
+    public void A8_the_read_once_button_has_two_labels_and_both_are_the_decks()
+    {
+        Assert.Equal("Select area & read once", UserMessages.ReadOnceLabel());
+        Assert.Equal("Cancel read", UserMessages.CancelReadLabel());
+        Assert.Equal("👁 Read once", UserMessages.ReadOnceOverlayLabel());
+        Assert.Equal("■", UserMessages.CancelReadOverlayLabel());
+
+        // The tooltip is where the hotkey belongs — on the control it duplicates, never on a status
+        // line describing a state (principle 1). That is option (a) of the story's T8: the deck
+        // chose the button over "Reading… Ctrl+Alt+R to stop.", so no status sentence names it.
+        Assert.Contains("Ctrl+Alt+R", UserMessages.CancelReadTooltip(), StringComparison.Ordinal);
+        Assert.Contains("Ctrl+Alt+R", UserMessages.ReadOnceTooltip(), StringComparison.Ordinal);
+        Assert.DoesNotContain("Ctrl+Alt+R", UserMessages.ReadingStatus(), StringComparison.Ordinal);
+
+        // The overlay is 360 px: its idle label and both tooltips have to be readable there, and the
+        // cancel form is one glyph.
+        Assert.True(UserMessages.ReadOnceOverlayLabel().Length <= 20);
+        Assert.True(UserMessages.CancelReadTooltip().Length <= 60,
+                    $"the cancel tooltip is {UserMessages.CancelReadTooltip().Length} chars");
+    }
+
     // ---- ruling E7-a: the coarse {t}, and m:ss only on the lines that tick ---------------------
 
     /// <summary>
@@ -1099,6 +1131,14 @@ public class UserMessagesTests : GatesTestBase
             "Could not translate", "\"No internet\"", "see About.",
             // §3.7's cleared row, now written for both key boxes from one string.
             " key — using the free engines (Google)",
+            // A8's button copy (E7.S5). The XAML no longer carries any of it — a label that changes
+            // cannot live in an attribute, and these fragments are what would catch it coming back.
+            "Cancel read", "👁 Read once", "Draw a box over Russian text and read it once",
+            // ("Select area & read once" is deliberately NOT scanned: the Translator tab's
+            //  empty-state hint QUOTES the button by name — "Use “Select area & read once” above…" —
+            //  and that paragraph is tab copy no deck section owns. E7.S8's README/About pass is
+            //  where the two are reconciled; a scan here would only force the quote out of a
+            //  sentence it belongs in.)
         };
 
         foreach (var fragment in fragments)

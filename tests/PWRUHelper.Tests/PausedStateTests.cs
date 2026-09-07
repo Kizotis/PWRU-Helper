@@ -608,6 +608,71 @@ public class PausedStateTests
     }
 
     /// <summary>
+    /// <b>§3.2's S3 row — the decision E7.S5 had to make, pinned as behaviour.</b> The deck writes
+    /// it as a status line: <c>🔴 Live — {P} paused ({t}), using {P2}.</c> It is <b>not</b> written,
+    /// and the three reasons are all invariants this epic already holds:
+    ///
+    /// <list type="number">
+    /// <item><b>One clock per window</b> (E7.S2 AC 4). In S3 nothing is fully paused, so the LIVE
+    ///       status line does not own the clock and the CHIP does — <c>Google paused 0:58</c>,
+    ///       stepping at 1 Hz. A second <c>({t})</c> on the status line is a second clock; a coarse
+    ///       one (E7-a) is worse — two renderings of one countdown, disagreeing.</item>
+    /// <item><b>One message per state</b> (§1 principle 1). §3.5's notice already carries S3's two
+    ///       names on this very line, once per switch, with the cause: they are the same fact.</item>
+    /// <item>In S3 requests really are flowing — E7.S4 keeps the heartbeat blinking for exactly that
+    ///       reason — so replacing the progress row with a pause-shaped sentence would read as a
+    ///       loop that has stopped.</item>
+    /// </list>
+    ///
+    /// <para>And the copy is not written EITHER: a sentence in the deck that nothing renders is
+    /// UX-DR19's failure the other way round, which is the argument E7.S4 made when it declined
+    /// §3.2's "⚠ one read is retrying" overlay column.</para>
+    /// </summary>
+    [Fact]
+    public void S3_is_said_by_the_chip_and_the_one_time_notice_and_never_by_a_second_clock()
+    {
+        var s3 = FellBackFrom(pausedPreferred: true);
+        var chip = MainWindow.ChipFor(s3);
+
+        // The persistent half: the paused engine's name AND the countdown, on the chip.
+        Assert.Equal("Google paused 0:58", chip.Text);
+        Assert.True(chip.HasClock);
+        Assert.False(chip.IsHealthy);
+
+        // The explaining half: both names, once per switch, on the status line the loop writes.
+        Assert.Equal("Translated by Google (backup) — Google is paused.",
+                     MainWindow.StateNotice(s3, chip, wasDegraded: false));
+
+        // …so there is no second S3 sentence anywhere, and nothing to render one from.
+        foreach (var file in new[] { "MainWindow.Live.cs", Path.Combine("Services", "UserMessages.cs") })
+            Assert.Equal(0, Occurrences(Code(File.ReadAllText(RepoFile(file))), ", using "));
+    }
+
+    /// <summary>
+    /// <b>D2's free-chain pair, and it is kept exactly as the names table writes it</b> (E7.S5).
+    /// <c>Translated by Google (backup) — Google is paused.</c> reads oddly at a glance — the same
+    /// vendor twice — and it is still the right sentence: §3.0 rule 1 forbids inventing a name,
+    /// rule 2's "drop the suffix the name already carries" is about the chip's <c>· backup</c> and
+    /// not about the vendor, and a same-vendor special case would be a fourth spelling of a provider
+    /// name (UX-DR19) that hid the one fact making the notice useful — the fallback is the same
+    /// vendor's second door, so the player should expect the same quality and no action of theirs.
+    ///
+    /// <para>It is also the only pair reachable today (E3-d: Edge is not shipped), which is why it
+    /// is pinned as the rendered sentence rather than as a template.</para>
+    /// </summary>
+    [Fact]
+    public void The_free_chains_own_fallback_pair_names_both_engines_of_the_one_vendor()
+    {
+        var notice = UserMessages.TranslatedBy(ProviderIds.GoogleGtx, ProviderIds.GoogleDict);
+
+        Assert.Equal("Translated by Google (backup) — Google is paused.", notice);
+        // Both halves come from the table and neither is edited at the join.
+        Assert.Contains(ProviderNames.Display(ProviderIds.GoogleGtx)!, notice, StringComparison.Ordinal);
+        Assert.Contains(ProviderNames.Display(ProviderIds.GoogleDict)!, notice, StringComparison.Ordinal);
+        Assert.True(notice!.Length <= MainWindow.MainStatusBudget);
+    }
+
+    /// <summary>
     /// <b>Two toasts that overlap keep ONE hold, and the last one wins</b> (review): the hold is a
     /// flag rather than a counter, and its lifetime is the single <c>_toastTimer</c> restart the
     /// main window does on every toast — so the second toast does not leave a hold behind that the

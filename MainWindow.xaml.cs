@@ -210,6 +210,10 @@ public partial class MainWindow : Window
         // in-flight finally is about to restore. Nothing persisted, so _restoringSettings does not
         // apply — but it must run after InitializeComponent, because the buttons exist only then.
         SetKeyTestLabels();
+        // …and A8's read-once button, from the deck for the same reason (GAP-4): its copy CHANGES —
+        // it becomes "Cancel read" while a read is in flight — so a XAML Content attribute would be
+        // a second spelling of it. Idle at construction; the read path owns every write after that.
+        SetReadOnceCancelMode(reading: false);
 
         OcrResults.ItemsSource = _ocrItems;
         OcrCommandBox.Text = $"Add-WindowsCapability -Online -Name \"{OcrCapability}\"";

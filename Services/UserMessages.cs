@@ -524,6 +524,51 @@ internal static class UserMessages
     /// must not pick these up.</para></summary>
     public static string ReadCancelledRow() => "not translated — read cancelled";
 
+    // ---- A8: the read-once button IS the cancel (ux-mode-degrade.md §3.3, §4.3) ------------------
+    //
+    // Six strings, and they are in the deck rather than in the two XAML files for the reason the
+    // "Test key" labels are (E6.S5, GAP-4): a control whose copy CHANGES cannot keep it in a XAML
+    // attribute — restoring the idle form would be a second spelling of it, which is UX-DR19's
+    // failure exactly. MainWindow.SetReadOnceCancelMode writes both surfaces from here.
+    //
+    // Why a label swap at all: E5.S4 shipped three cancel routes and none of them reachable, because
+    // a DISABLED WPF button raises no Click. Greying the button for the length of a 30 s read is
+    // also what makes a player press it again (amplifier A7), so the press is given a meaning
+    // instead — one label, one tooltip, zero new controls.
+
+    /// <summary>The main window's read-once button while nothing is reading. The shipped wording is
+    /// kept rather than taking A8's paraphrase ("Read the area once"): it is the phrase the README
+    /// walks a new player through by name, and renaming it is E7.S8's call, not this pass's.</summary>
+    public static string ReadOnceLabel() => "Select area & read once";
+
+    public static string ReadOnceTooltip()
+        => DrawABox + ". Ctrl+Alt+R re-reads the same area while in game.";
+
+    /// <summary>What both read-once tooltips open with, written once: the two surfaces differ in
+    /// what they add (the hotkey here, "stays in compact mode" there), not in what the gesture
+    /// is.</summary>
+    private const string DrawABox = "Draw a box over Russian text and read it once";
+
+    /// <summary>The same button while a read is in flight — <b>still enabled</b>, and the press
+    /// cancels (A8). It is the affordance E5-g asked for: a gesture that exists only in a status
+    /// sentence is one nobody makes mid-raid.</summary>
+    public static string CancelReadLabel() => "Cancel read";
+
+    /// <summary>…and the tooltip names the second way, which is where the hotkey belongs — on the
+    /// control it duplicates, not on a status line describing a state (principle 1).</summary>
+    public static string CancelReadTooltip() => "Stop this read — Ctrl+Alt+R does the same.";
+
+    /// <summary>The compact overlay's read-once button, which is icon-first: 360 px has no room for
+    /// a sentence, so the tooltip carries what the main window's label says.</summary>
+    public static string ReadOnceOverlayLabel() => "👁 Read once";
+
+    public static string ReadOnceOverlayTooltip()
+        => DrawABox + " — the result appears framed in the feed below. Stays in compact mode.";
+
+    /// <summary>A8's overlay column, verbatim: the glyph becomes <c>■</c> and the tooltip becomes
+    /// <see cref="CancelReadLabel"/>, which on an icon-only button is its label.</summary>
+    public static string CancelReadOverlayLabel() => "■";
+
     // ---- what a row says between two attempts, and when there is no attempt left (§9.3, §2.2) ----
     //
     // Methods for the same reason the read-once statuses are: they are ROW text, not rows of the
@@ -534,7 +579,7 @@ internal static class UserMessages
     /// <summary>
     /// <b>A row waiting for the next drain, and it is the ellipsis it already was</b> (E5.S3, T2).
     ///
-    /// <para>§9.3 sketches «Sally: retrying…» and <c>ux-mode-degrade.md</c> §2.2's S5 row says
+    /// <para>§9.3 sketched an unwritten "retrying…" row and <c>ux-mode-degrade.md</c> §2.2's S5 row says
     /// pending rows keep the existing "…". The two are reconciled in favour of §2.2, and the reason
     /// is UX principle 5 rather than economy: <b>a row never carries a countdown</b> and, by the same
     /// argument, never carries a status — there is exactly one explanation per window and it lives on
@@ -546,8 +591,9 @@ internal static class UserMessages
     /// "("-prefixed, so it reads as pending rather than terminal — a "(" here would be I4's failure
     /// marker on a row that has not failed yet. It is safe for the identical reason the marker exists:
     /// this string is written by the UI onto a row and is never a translator's return value, so it
-    /// cannot reach <c>CachingTranslator.IsCacheable</c>. <b>E7.S1</b> owns the final copy, together
-    /// with the retry badge (E7.S6) that is the honest place for "retrying".</para>
+    /// cannot reach <c>CachingTranslator.IsCacheable</c>. The copy pass has since been made and the
+    /// row is confirmed as written (amendment <b>A5</b>, E7.S1/E7.S5); the retry badge (E7.S6) is
+    /// still the honest place for "retrying".</para>
     /// </summary>
     public static string PendingRetryRow() => "…";
 

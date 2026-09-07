@@ -301,9 +301,12 @@
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                             <!-- Moved here from the Screen OCR tab: this is where the lines it reads
                                  actually appear, so the button now sits with its own output. -->
+                            <!-- No Content and no ToolTip here: A8 makes this button the CANCEL while
+                                 a read is in flight, so its copy changes and therefore lives in the
+                                 deck (UserMessages, GAP-4) — MainWindow.SetReadOnceCancelMode writes
+                                 both forms, exactly as SetKeyTestLabels does for the key boxes. -->
                             <Button x:Name="SelectAreaButton" Style="{StaticResource AccentButton}"
-                                    Padding="10,3" Content="Select area &amp; read once" Click="SelectArea_Click"
-                                    ToolTip="Draw a box over Russian text and read it once. Ctrl+Alt+R re-reads the same area while in game."/>
+                                    Padding="10,3" Click="SelectArea_Click"/>
                             <!-- The provider chip, read path. It sits BESIDE LiveIndicator and not
                                  inside it: LiveIndicator is Collapsed unless LIVE is running, and
                                  the chip is the app's only always-on indicator (§2.2). -->

@@ -32,8 +32,14 @@ namespace PWRUHelper.Tests;
 /// sleeps (CI-3, IS-6). The loop-level facts a headless suite cannot execute are pinned in the
 /// source, the shape <c>LivePauseTests</c> and <c>ChainCompositionTests</c> already use.</para>
 /// </summary>
+[Collection("WPF")]
 public class ReadOnceStatusTests
 {
+    /// <summary>Enough settings to build a <c>MainWindow</c> without touching the developer's own
+    /// %AppData% (the trap <c>TempSettings</c> exists for). A8's half of this file renders real
+    /// controls, so the class joins the WPF collection — one STA thread, never in parallel.</summary>
+    private const string NoSettings = """{ "SettingsVersion": 3 }""";
+
     private sealed class FakeClock
     {
         public DateTimeOffset Now { get; private set; } = new(2026, 9, 7, 12, 0, 0, TimeSpan.Zero);
@@ -366,7 +372,10 @@ public class ReadOnceStatusTests
         // the Ctrl+Alt+R path returns at its own guard and never reaches ReadRegionOnceAsync's.
         Assert.Contains("CancelReadOnce();", BracedBlock(live, live.IndexOf("private void StopLive()", StringComparison.Ordinal)));
         Assert.Contains("CancelReadOnce();", BracedBlock(main, main.IndexOf("protected override void OnClosing(", StringComparison.Ordinal)));
-        Assert.Equal(2, Occurrences(ocr, "if (_readingOnce) { CancelReadOnce(); return; }"));
+        // THREE now, not two: amendment A8 (E7.S5) put the same guard at the top of
+        // SelectAreaAndReadOnceAsync, because the button that reaches it says "Cancel read" while a
+        // read is in flight and the press has to mean cancel BEFORE StopLive()/SelectRegionAsync().
+        Assert.Equal(3, Occurrences(ocr, "if (_readingOnce) { CancelReadOnce(); return; }"));
     }
 
     /// <summary>
@@ -567,6 +576,174 @@ public class ReadOnceStatusTests
             .ToList();
 
         Assert.Equal(new[] { "UserMessages.cs" }, holders);
+    }
+
+    // =============================================================================================
+    //  A8 / ruling E5-g — the cancel affordance: the read-once button IS the cancel (E7.S5)
+    // =============================================================================================
+
+    /// <summary>
+    /// <b>The gesture, on both surfaces.</b> E5.S4 wired three cancel routes and shipped none of them
+    /// reachable from the UI: <c>SetReadOnceEnabled(false)</c> greyed both read-once buttons and a
+    /// disabled WPF button raises no <c>Click</c>, so "only Ctrl+Alt+R can stop a read" was literally
+    /// true and the story's own manual check could not be performed. Amendment <b>A8</b> is the
+    /// answer and it adds no control: the button stays enabled and becomes the cancel.
+    ///
+    /// <para>Asserted on the real controls, because the whole defect was a property nobody looked
+    /// at: <c>IsEnabled</c> must be true in BOTH states, or the press this affordance is made of
+    /// never happens.</para>
+    /// </summary>
+    [Fact]
+    public void A8_the_read_once_button_becomes_the_cancel_and_is_never_disabled()
+    {
+        using var temp = new TempSettings(NoSettings);
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+
+            // Idle — and the copy comes from the deck, not from the XAML that no longer holds it.
+            Assert.Equal(UserMessages.ReadOnceLabel(), window.SelectAreaButton.Content);
+            Assert.Equal(UserMessages.ReadOnceTooltip(), window.SelectAreaButton.ToolTip);
+            Assert.True(window.SelectAreaButton.IsEnabled);
+
+            window.SetReadOnceCancelMode(reading: true);
+            Assert.Equal("Cancel read", window.SelectAreaButton.Content);
+            Assert.Equal(UserMessages.CancelReadTooltip(), window.SelectAreaButton.ToolTip);
+            Assert.True(window.SelectAreaButton.IsEnabled);      // the whole point of A8
+
+            window.SetReadOnceCancelMode(reading: false);
+            Assert.Equal(UserMessages.ReadOnceLabel(), window.SelectAreaButton.Content);
+            Assert.True(window.SelectAreaButton.IsEnabled);
+
+            // The overlay's column of A8's table: the glyph becomes ■ and the tooltip becomes the
+            // label, because at 360 px the button is icon-only and the tooltip is all it can say.
+            var overlay = new CompactOverlay(new MainWindow());
+            Assert.Equal(UserMessages.ReadOnceOverlayLabel(), overlay.ReadOnceButton.Content);
+
+            overlay.SetReadOnceCancelMode(reading: true);
+            Assert.Equal("■", overlay.ReadOnceButton.Content);
+            Assert.Equal("Cancel read", overlay.ReadOnceButton.ToolTip);
+            Assert.Equal("Cancel read",
+                         System.Windows.Automation.AutomationProperties.GetName(overlay.ReadOnceButton));
+            Assert.True(overlay.ReadOnceButton.IsEnabled);
+
+            overlay.SetReadOnceCancelMode(reading: false);
+            Assert.Equal(UserMessages.ReadOnceOverlayLabel(), overlay.ReadOnceButton.Content);
+            Assert.Equal(UserMessages.ReadOnceOverlayTooltip(), overlay.ReadOnceButton.ToolTip);
+            Assert.True(overlay.ReadOnceButton.IsEnabled);
+        });
+    }
+
+    /// <summary>
+    /// <b>A8's first mandatory condition</b> (deck §3.3, from the E5.S4 review): the
+    /// <c>_readingOnce</c> guard is the FIRST line of <c>SelectAreaAndReadOnceAsync</c> — ahead of
+    /// <c>StopLive()</c> and <c>SelectRegionAsync()</c> — or a press meant as "cancel" starts a
+    /// region drag over the game instead. The button path is the one that changed; the hotkey path
+    /// (<c>ReadLastAreaOnce</c>) and the engine guard inside <c>ReadRegionOnceAsync</c> keep theirs,
+    /// which is why the guard is written three times and not moved.
+    /// </summary>
+    [Fact]
+    public void A8_the_cancel_guard_is_the_first_line_of_the_button_path()
+    {
+        var ocr = Code(File.ReadAllText(RepoFile("MainWindow.Ocr.cs")));
+        var body = BracedBlock(ocr, ocr.IndexOf("internal async Task SelectAreaAndReadOnceAsync()",
+                                                StringComparison.Ordinal));
+
+        var first = body.Split('\n').Select(l => l.Trim()).First(l => l.Length > 0 && l != "{");
+        Assert.Equal("if (_readingOnce) { CancelReadOnce(); return; }", first);
+
+        // …and it really is ahead of the two calls that would otherwise run for a cancel.
+        int guard = body.IndexOf("CancelReadOnce();", StringComparison.Ordinal);
+        Assert.True(guard < body.IndexOf("StopLive();", StringComparison.Ordinal));
+        Assert.True(guard < body.IndexOf("SelectRegionAsync()", StringComparison.Ordinal));
+
+        // The overlay's button reaches the same method, so ■ cancels a read from compact mode too —
+        // one entry point for both surfaces, which is what stops them drifting apart.
+        var overlay = Code(File.ReadAllText(RepoFile("CompactOverlay.xaml.cs")));
+        Assert.Contains("await _owner.SelectAreaAndReadOnceAsync();", overlay, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <b>A8's second mandatory condition: it never disables.</b> <c>SetReadOnceEnabled</c> is gone
+    /// from the app — the name as much as the behaviour, so a later edit cannot bring the grey back
+    /// by calling something that sounds harmless — and neither writer touches <c>IsEnabled</c>. The
+    /// genuine disable paths (the OCR-pack install) are untouched and are not these buttons.
+    ///
+    /// <para>The copy is the deck's on both surfaces (GAP-4): neither XAML file gives these buttons
+    /// a <c>Content</c>, because a control whose label CHANGES cannot keep it in an attribute — the
+    /// restore would be a second spelling of it, which is UX-DR19's failure exactly.</para>
+    /// </summary>
+    [Fact]
+    public void A8_the_cancel_mode_never_disables_and_the_copy_lives_in_the_deck()
+    {
+        var ocr = Code(File.ReadAllText(RepoFile("MainWindow.Ocr.cs")));
+        var overlay = Code(File.ReadAllText(RepoFile("CompactOverlay.xaml.cs")));
+
+        foreach (var (name, source) in new[] { ("MainWindow.Ocr.cs", ocr), ("CompactOverlay.xaml.cs", overlay) })
+        {
+            var body = BracedBlock(source, source.IndexOf("SetReadOnceCancelMode(bool reading)",
+                                                          StringComparison.Ordinal));
+            Assert.DoesNotContain("IsEnabled", body, StringComparison.Ordinal);
+            Assert.False(body.Contains("SetReadOnceEnabled", StringComparison.Ordinal), name);
+        }
+
+        Assert.Empty(ProductionSources()
+            .Where(f => Code(File.ReadAllText(f)).Contains("SetReadOnceEnabled(", StringComparison.Ordinal))
+            .Select(Path.GetFileName));
+
+        foreach (var xaml in new[] { "MainWindow.xaml", "CompactOverlay.xaml" })
+        {
+            var text = File.ReadAllText(RepoFile(xaml));
+            int button = text.IndexOf(xaml == "MainWindow.xaml" ? "x:Name=\"SelectAreaButton\""
+                                                                : "x:Name=\"ReadOnceButton\"",
+                                      StringComparison.Ordinal);
+            Assert.True(button > 0, $"{xaml} no longer declares the read-once button");
+            var element = text[button..text.IndexOf("/>", button, StringComparison.Ordinal)];
+            Assert.DoesNotContain("Content=", element, StringComparison.Ordinal);
+            Assert.DoesNotContain("ToolTip=", element, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// <b>§3.3 as a copy pass (AC 2, AC 5).</b> Every read-once status the deck writes, composed
+    /// through the seam that actually ships and compared with the deck verbatim — the five outcomes,
+    /// the paused fork amendment A7 added, the two in-flight rows and the cancel. E5.S4 shipped the
+    /// shapes; what E7.S5 owes is that they still say what §3.3 says, character for character.
+    ///
+    /// <para>AC 5's join rule is visible in the last two: the COLON join lower-cases the §3.1
+    /// sentence, and a second capital ("GDI+") is left alone (A11).</para>
+    /// </summary>
+    [Fact]
+    public void The_read_once_statuses_are_the_decks_own_words()
+    {
+        Assert.Equal("Done — 12 line(s) translated.", ReadOnceSummary.Status(12, 12, null));
+        Assert.Equal("Read 12 line(s) — 8 translated, 4 could not be. " + OfflineReason,
+                     ReadOnceSummary.Status(12, 8, Offline()));
+        Assert.Equal("Read 12 line(s) — none could be translated. " + OfflineReason,
+                     ReadOnceSummary.Status(12, 0, Offline()));
+
+        // The paused fork (A7), with the count ruling E5-g restored — and a coarse {t} (E7-a): this
+        // sentence is written once and never repainted, so it may not show a stopwatch.
+        var paused = new TranslationException(TranslationErrorKind.AllProvidersPaused, "raw");
+        Assert.Equal("Read 12 line(s) — every engine is paused, they fill in when one is back.",
+                     ReadOnceSummary.Status(12, 0, paused, "about 4 min", liveIsRunning: true));
+        Assert.Equal("Read 12 line(s) — every engine is paused, try again in about 4 min.",
+                     ReadOnceSummary.Status(12, 0, paused, "about 4 min", liveIsRunning: false));
+        Assert.Equal("Read 12 line(s) — every engine is paused, try again shortly.",
+                     ReadOnceSummary.Status(12, 0, paused, null, liveIsRunning: false));
+
+        // In flight, and the end of a read a person stopped — which A8 has just made pressable.
+        Assert.Equal("Reading…", UserMessages.ReadingStatus());
+        Assert.Equal("Read 12 line(s). Translating…", UserMessages.ReadTranslatingStatus(12));
+        Assert.Equal("Read cancelled.", UserMessages.ReadCancelledStatus());
+
+        // AC 5: the colon join lower-cases (the one join that does), and "GDI+" keeps its capital
+        // because the guard looks at the SECOND letter — the argument E5.S4's review settled.
+        Assert.Equal("Could not read the screen: no internet connection — nothing can be translated "
+                   + "until it is back.", UserMessages.ReadFailed(Offline()));
+        Assert.Equal("Could not read the screen: GDI+ capture failed.",
+                     UserMessages.ReadFailed(new InvalidOperationException("GDI+ capture failed")));
     }
 
     // ---- helpers ---------------------------------------------------------------------------------

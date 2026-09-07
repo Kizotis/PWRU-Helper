@@ -48,6 +48,10 @@ public partial class MainWindow
         // sending nothing, which is R-02 reached through the one door that does not go through the
         // countdown tick. After Show(), so the visibility change it answers has already happened.
         _overlay.SetPaused(_livePaused);
+        // …and A8's button state, for the same reason and through the same door: Ctrl+Alt+R can be
+        // reading while the player goes compact, and a "👁 Read once" button over a read in flight
+        // is the second press doing nothing all over again.
+        SetReadOnceCancelMode(_readingOnce);
         _overlay.Activate();
         Hide();
     }

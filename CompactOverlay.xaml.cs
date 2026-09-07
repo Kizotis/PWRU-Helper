@@ -64,6 +64,11 @@ public partial class CompactOverlay : Window
             if (IsVisible) { UpdateLiveIndicator(); UpdateReplyHint(); }
         };
         UpdateReplyHint();
+        // The read-once button has no Content in the XAML at all (A8, GAP-4): its copy changes, so
+        // it lives in the deck. Written here so the button is never blank between construction and
+        // the owner's first push — MainWindow.EnterCompactMode then hands it the real state, which
+        // is not always "idle": Ctrl+Alt+R can start a read and the player can go compact during it.
+        SetReadOnceCancelMode(reading: false);
     }
 
     private void Feed_Changed(object? sender, NotifyCollectionChangedEventArgs e)
@@ -234,8 +239,22 @@ public partial class CompactOverlay : Window
         => await _owner.SelectAreaAndReadOnceAsync();
 
     /// <summary>Follow the main window's read-once button state (a Ctrl+Alt+R read can be running
-    /// while the overlay is the only thing on screen).</summary>
-    internal void SetReadOnceEnabled(bool enabled) => ReadOnceButton.IsEnabled = enabled;
+    /// while the overlay is the only thing on screen) — <b>amendment A8</b>: the button is never
+    /// disabled, it becomes the cancel. Icon-only at 360 px, so the tooltip carries what the main
+    /// window's label says, and the automation name says it out loud.
+    ///
+    /// <para><c>MainWindow</c> decides and this window renders (I2), the way <see cref="SetStatus"/>
+    /// and <see cref="SetPaused"/> already do: the flag that owns "a read is in flight" is
+    /// <c>_readingOnce</c>, and it is not this window's.</para></summary>
+    internal void SetReadOnceCancelMode(bool reading)
+    {
+        ReadOnceButton.Content = reading
+            ? UserMessages.CancelReadOverlayLabel() : UserMessages.ReadOnceOverlayLabel();
+        ReadOnceButton.ToolTip = reading
+            ? UserMessages.CancelReadLabel() : UserMessages.ReadOnceOverlayTooltip();
+        System.Windows.Automation.AutomationProperties.SetName(ReadOnceButton,
+            reading ? UserMessages.CancelReadLabel() : UserMessages.ReadOnceLabel());
+    }
 
     private void Expand_Click(object sender, RoutedEventArgs e) => _owner.ExitCompactMode();
 
