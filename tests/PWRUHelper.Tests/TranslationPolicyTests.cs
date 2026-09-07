@@ -112,6 +112,13 @@ public class TranslationPolicyTests
         // not — so a tuning commit that moves this number touches this line alone.
         Assert.Equal(8, TranslationPolicy.PerLineCap);
 
+        // E5.S2's auto-stop. Pinned — unlike the rate-ceiling four — because these two decide WHEN
+        // LIVE stops itself, which is behaviour a player watches and already knows: five is the
+        // literal that shipped at Live.cs:301 and the two minutes are §9.2's window. Moving either
+        // should have to be a deliberate act with a red test in front of it.
+        Assert.Equal(5, TranslationPolicy.LiveAutoStopThreshold);
+        Assert.Equal(120, TranslationPolicy.LiveAutoStopWindowSeconds);
+
         // OQ-A's shipped answer, pinned so that turning it on is a deliberate act with a red test
         // in front of it rather than a one-character edit nobody reviews. E3.S1's capture flips
         // this line and TP-PRV-04 together, or neither.

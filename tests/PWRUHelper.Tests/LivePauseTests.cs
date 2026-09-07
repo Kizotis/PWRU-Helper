@@ -378,7 +378,12 @@ public class LivePauseTests
                  {
                      "ScreenCapture.Capture", "ApplyOcrFilter", "ReadLinesAsync",
                      "_dedup.Next", "AppendLinesToHistory", "TranslateBodiesAsync",
-                     "_readTranslator", "consecutiveErrors",
+                     "_readTranslator",
+                     // E5.S2 renamed the counter this line used to say (`consecutiveErrors`) into a
+                     // tracker object. The reading is unchanged and it is now structural: the
+                     // skipped branch cannot reach the auto-stop at all, which is ruling E5-c
+                     // enforced by the shape of the code rather than by the value of a flag.
+                     "errors.Record", "LiveTickPolicy.Classify",
                  })
             Assert.False(body.Contains(forbidden, StringComparison.Ordinal),
                 $"a skipped tick must not reach {forbidden} — it does nothing at all (OQ-B)");
@@ -507,6 +512,73 @@ public class LivePauseTests
         for (int i = 0; i < 20; i++) kept.Next(Array.Empty<string>(), match, confirm);
         kept.Next(new[] { line }, match, confirm);
         Assert.Single(kept.Next(new[] { line }, match, confirm));         // burned again
+    }
+
+    // ---- E5.S2: the loop half of the honest auto-stop -------------------------------------------
+
+    /// <summary>
+    /// <b>The one line E5.S2 exists to delete.</b> <c>consecutiveErrors = 0</c> ran on every
+    /// non-throwing tick, empty ones included, so a calm chat forgave a real failure streak between
+    /// two failures and the auto-stop never reached two (<c>analyse…</c> A2, S4c). The counter is
+    /// gone from the loop entirely: what the loop keeps is one <c>LiveErrorTracker</c>, fed the same
+    /// <c>LiveTickOutcome</c> that drives E5.S1's back-off — two independent notions of "a good
+    /// tick" is precisely how that line became a bug.
+    /// </summary>
+    [Fact]
+    public void The_reset_that_forgave_every_calm_tick_is_gone()
+    {
+        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+
+        Assert.DoesNotContain("consecutiveErrors", live);
+        Assert.Contains("var errors = new LiveErrorTracker();", live, StringComparison.Ordinal);
+        // ONE outcome, read by both counters, on adjacent lines.
+        Assert.Contains("errors.Record(outcome, DateTimeOffset.UtcNow);", live, StringComparison.Ordinal);
+        Assert.Contains("backoffSteps = LiveTickPolicy.NextBackoffSteps(backoffSteps, outcome);",
+                        live, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <b>Ruling E5-c at the loop.</b> The generic <c>catch</c> no longer decides anything about the
+    /// exception itself: it hands it to <see cref="LiveTickPolicy.Classify"/>, which is where "this
+    /// failure cost a request" is written down once, and reads the tracker's verdict instead of
+    /// running its own <c>++n &gt;= 5</c>. Without this the auto-stop counts refusals — a dead cable
+    /// with a busy chat would stop LIVE for the system working correctly (R-02 / R6).
+    /// </summary>
+    [Fact]
+    public void The_catch_classifies_the_failure_before_it_counts_it()
+    {
+        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+
+        Assert.Contains("if (errors.Record(LiveTickPolicy.Classify(ex), DateTimeOffset.UtcNow))",
+                        live, StringComparison.Ordinal);
+        // The old hard-coded trigger is gone with it: five is a graded constant now, read inside
+        // LiveErrorTracker and nowhere else.
+        Assert.DoesNotContain(">= 5", live);
+        // I3 is untouched — a timeout must still fall through to the counted handler.
+        Assert.Contains("catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }",
+                        live, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The stop path itself is unchanged and deliberately so: <c>StopLive()</c> first (it writes
+    /// "Live stopped.") and then the real reason over it, composed from the last failure's own
+    /// sentence. E7.S1 owns the copy pass — §3.2's <c>Live stopped — {n} reads in a row failed.
+    /// Press ▶ to try again.</c> and the sentence the deck still has no row for (the window stop) —
+    /// so this story adds no new user-facing string and moves none.
+    /// </summary>
+    [Fact]
+    public void The_stop_still_names_the_reason_and_leaves_the_ui_cleaned_up()
+    {
+        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+
+        int reason = live.IndexOf("SetScreenStatus($\"Live stopped after repeated errors",
+                                  StringComparison.Ordinal);
+        Assert.True(reason > 0, "the auto-stop must still name the reason it stopped for");
+
+        int stop = live.LastIndexOf("StopLive();", reason, StringComparison.Ordinal);
+        Assert.True(stop > 0 && reason - stop < 200,
+                    "StopLive() must run immediately before the reason is written over its \"Live stopped.\"");
+        Assert.Contains("Services.Logging.Error(", live, StringComparison.Ordinal);
     }
 
     // ---- helpers --------------------------------------------------------------------------------

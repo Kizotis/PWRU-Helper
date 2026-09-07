@@ -174,7 +174,10 @@ public partial class MainWindow
 
     private async Task LiveLoop(System.Drawing.Rectangle rect, CancellationToken ct)
     {
-        int consecutiveErrors = 0;
+        // Both counters are LOCALS, so a session that ended — auto-stopped or stopped by the player
+        // — leaves nothing behind for the next one: pressing ▶ after an auto-stop gets a clean five
+        // and not one. StartLive builds a new loop, and a new loop builds these two.
+        var errors = new LiveErrorTracker();   // §9.2's auto-stop, over its own 2-minute window (E5.S2)
         int backoffSteps = 0;                  // how many ticks in a row have been SKIPPED (E5.S1)
         var sw = new System.Diagnostics.Stopwatch();
         while (!ct.IsCancellationRequested)
@@ -227,19 +230,19 @@ public partial class MainWindow
                     SetScreenStatus(LivePausedStatus(
                         LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now)));
 
-                    // consecutiveErrors is untouched: a SKIPPED tick is neither a success nor a
-                    // failure (§9.2's table), so it may not feed the auto-stop. That is precisely
-                    // E2.S5's accepted escalation retired — "no network ⇒ 5 REFUSED ticks inside the
-                    // 5 s cooldown ⇒ LIVE auto-stops after ~3 s": those five ticks are now skipped
-                    // and reach no counter at all.
+                    // The auto-stop is not reached from this branch AT ALL, and that is ruling E5-c
+                    // made structural rather than kept true by a value: a SKIPPED tick is neither a
+                    // success nor a failure (§9.2's table), so it may not feed the counter — and it
+                    // cannot, because the tracker is only named in the other branch and in the
+                    // catch. LivePauseTests scans this block for exactly that.
                     //
-                    // It is NOT the whole of the auto-stop, and the difference is E5.S2's (review,
-                    // E5.S1): a tick that runs because the window has just elapsed, tries and fails,
-                    // still counts — as does one refused INSIDE the tick for a reason that sets no
-                    // BlockedUntil (the 1 s Background probe deferral, a rate-ceiling refusal),
-                    // which arrives here as an AllProvidersPaused throw. With a busy chat a dead
-                    // cable therefore still auto-stops LIVE, after ~25-30 s instead of ~3 s. §9.2's
-                    // table (gate-open ⇒ unchanged) and its 2-minute error window finish the job.
+                    // E5.S2 finished the job E2.S5's escalation started ("no network ⇒ 5 REFUSED
+                    // ticks inside the 5 s cooldown ⇒ LIVE auto-stops after ~3 s"): those ticks are
+                    // skipped here, and the refusals that still arrive as a throw — a tick refused
+                    // INSIDE itself for a reason that sets no BlockedUntil (the 1 s Background probe
+                    // deferral, a rate-ceiling refusal), which reaches the catch as an
+                    // AllProvidersPaused — now classify as Refused and reach no counter either. What
+                    // counts is a request that was sent and failed, five of them inside two minutes.
                 }
                 else
                 {
@@ -262,9 +265,11 @@ public partial class MainWindow
                     // slider tunes "same message" strictness; Stability tunes the confirmation frame.
                     var confirmed = _dedup.Next(lines, SensitivityThreshold(), StabilityThreshold());
 
-                    // AC 4: only a tick that actually TRANSLATED clears the back-off. An empty tick
-                    // asked the providers nothing, so it is no evidence that they are back — the same
-                    // distinction E5.S2 owes consecutiveErrors, expressed once in LiveTickOutcome.
+                    // Only a tick that actually TRANSLATED clears the back-off (E5.S1 AC 4) or the
+                    // error window (E5.S2 / §9.2). An empty tick asked the providers nothing, so it
+                    // is no evidence that they are back — one distinction, named once here and read
+                    // by both counters below, because two notions of "a good tick" is how the line
+                    // this story deleted became a bug in the first place.
                     var outcome = LiveTickOutcome.Empty;
 
                     if (confirmed.Count > 0)
@@ -284,7 +289,14 @@ public partial class MainWindow
                             ? $"🔴 Live — watching (check #{_liveTicks}, sees {lines.Count} line(s), waiting for new text)…"
                             : $"🔴 Live — {_ocrItems.Count} message(s) so far (check #{_liveTicks}).");
                     }
-                    consecutiveErrors = 0;
+                    // ONE outcome, both counters. `consecutiveErrors = 0` used to sit here (and,
+                    // before E5.S1, at the end of the whole try) and ran on every non-throwing tick
+                    // — empty ones included — so a calm chat forgave a real failure streak between
+                    // two failures and the auto-stop never reached two: the app trickled failing
+                    // requests all evening (analyse… A2, S4c). It is deleted, not moved: the tracker
+                    // resets on Translated and leaves an Empty tick exactly where it was, which is
+                    // §9.2's table and the same distinction backoffSteps already made.
+                    errors.Record(outcome, DateTimeOffset.UtcNow);
                     backoffSteps = LiveTickPolicy.NextBackoffSteps(backoffSteps, outcome);
                 }
             }
@@ -298,9 +310,19 @@ public partial class MainWindow
             catch (Exception ex)
             {
                 if (ct.IsCancellationRequested) break;
-                if (++consecutiveErrors >= 5)
+
+                // What kind of failure this was is LiveTickPolicy.Classify's to say (ruling E5-c):
+                // a refusal that cost no request — AllProvidersPaused, or a NotSent refusal from
+                // inside a tier — is a pause wearing an exception's clothes and may not feed the
+                // auto-stop, or an app that was correctly waiting would stop itself (R-02/R6).
+                // Everything else was a request that left the machine and failed, a timeout very
+                // much included: it is counted here, and the filtered catch above is what keeps a
+                // genuine Stop out of this handler (I3).
+                if (errors.Record(LiveTickPolicy.Classify(ex), DateTimeOffset.UtcNow))
                 {
-                    Services.Logging.Error("Live translation auto-stopped after 5 consecutive errors", ex);
+                    Services.Logging.Error(
+                        $"Live translation auto-stopped — {errors.RecentFailures} failed reads inside " +
+                        $"{TranslationPolicy.LiveAutoStopWindowSeconds}s (refusals and pauses do not count)", ex);
                     StopLive();   // this sets "Live stopped." first…
                     SetScreenStatus($"Live stopped after repeated errors ({Friendly(ex)}).");   // …then the real reason
                     break;

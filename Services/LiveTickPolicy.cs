@@ -2,12 +2,13 @@ namespace PWRUHelper.Services;
 
 /// <summary>What a LIVE tick did, as one value both counters read.
 ///
-/// <para>It exists because <c>MainWindow.Live.cs</c> has historically held <b>two</b> independent
-/// notions of "a good tick": <c>consecutiveErrors = 0</c> runs on every non-throwing tick, empty
-/// ones included, so a silent chat quietly forgives a real failure streak. E5.S1 needs the same
-/// distinction for <c>backoffSteps</c> (AC 4 — reset only on a tick that <b>translated</b>, never on
-/// an empty one), so the outcome is named once here rather than derived twice at the call site.
-/// <b>E5.S2 points the error counter at the same enum.</b></para></summary>
+/// <para>It exists because <c>MainWindow.Live.cs</c> held <b>two</b> independent notions of "a good
+/// tick": <c>consecutiveErrors = 0</c> ran on every non-throwing tick, empty ones included, so a
+/// silent chat quietly forgave a real failure streak. E5.S1 needed the same distinction for
+/// <c>backoffSteps</c> (AC 4 — reset only on a tick that <b>translated</b>, never on an empty one),
+/// so the outcome is named once here rather than derived twice at the call site. <b>E5.S2 deleted
+/// that line and pointed the error counter at this enum</b>, which is why the two error arms below
+/// are part of the same vocabulary and not a second one.</para></summary>
 internal enum LiveTickOutcome
 {
     /// <summary>Lines were confirmed AND translated — the only outcome that clears the back-off.</summary>
@@ -22,8 +23,19 @@ internal enum LiveTickOutcome
     /// error</b>: pausing may never feed the auto-stop counter.</summary>
     Paused,
 
-    /// <summary>The tick threw. E5.S2's counter, not this one's: the back-off is untouched.</summary>
-    Threw,
+    /// <summary>The tick ran and was refused from <b>inside</b> itself: a gate said no before
+    /// anything left the machine (<see cref="TranslationException.NotSent"/> — a probe deferral, a
+    /// rate-ceiling refusal), or the chain answered <c>AllProvidersPaused</c> because a window
+    /// closed between E5.S1's pre-tick check and the request.
+    ///
+    /// <para><b>Ruling E5-c</b>: that is a pause wearing an exception's clothes, so it counts
+    /// exactly as much as one does — not at all. It is not <see cref="Paused"/> either: the tick
+    /// really did capture and OCR, so it does not advance the back-off.</para></summary>
+    Refused,
+
+    /// <summary>A request left the machine and failed. <b>The only outcome the auto-stop counts</b>
+    /// (E5-c), and the back-off is untouched — that one is E5.S1's.</summary>
+    SentFailure,
 }
 
 /// <summary>
@@ -52,6 +64,15 @@ internal static class LiveTickPolicy
     /// <see cref="DateTimeOffset.MaxValue"/> sentinel a gate stores for <c>AuthFailed</c>, whose
     /// real exit is re-saving the key and not a timer.</summary>
     internal const int MaxCountdownSeconds = 3600;
+
+    /// <summary>Hard bound on the auto-stop's stamp queue. Five stamps decide the question
+    /// (<see cref="TranslationPolicy.LiveAutoStopThreshold"/>) and the trim by time normally keeps
+    /// it far below that; this is the guard for the pathological shape the trim cannot help with —
+    /// a burst of failures inside one window, which would otherwise grow the queue for as long as
+    /// the burst lasts. Structural and not tunable, so it lives here rather than in the graded
+    /// table: moving it changes nothing a player can see until it drops below the threshold, which
+    /// is what the bound is asserted against.</summary>
+    internal const int MaxErrorStamps = 8;
 
     /// <summary>Floor on the wait, mirroring the one the WORKING path keeps
     /// (<c>Math.Max(150, …)</c> at the loop's own <c>Task.Delay</c>). The doubling can only ever
@@ -109,5 +130,108 @@ internal static class LiveTickPolicy
         if (left <= TimeSpan.Zero) return null;
         if (left.TotalSeconds > MaxCountdownSeconds) return null;
         return (int)Math.Ceiling(left.TotalSeconds);
+    }
+
+    /// <summary>
+    /// <b>Ruling E5-c, written down exactly once.</b> What a failing tick was: a request that was
+    /// sent and failed (<see cref="LiveTickOutcome.SentFailure"/>), or a refusal that cost nothing
+    /// (<see cref="LiveTickOutcome.Refused"/>). Only the first may feed the auto-stop — "a pause or
+    /// a gate refusal is never an error", and an app that stops itself because it was correctly
+    /// waiting is failure mode R-02/R6.
+    ///
+    /// <para>Two shapes reach here even though E5.S1's pre-tick <c>PauseNow()</c> skip normally
+    /// prevents them, because a gate can open between that check and the request:
+    /// <see cref="TranslationErrorKind.AllProvidersPaused"/> (the chain found every tier blocked)
+    /// and <see cref="TranslationException.NotSent"/> (one tier refused from inside the core, with
+    /// the gate's LAST kind on it — a 429 that was never re-sent still reads as
+    /// <c>RateLimited</c>, which is why the flag and not the kind is what decides).</para>
+    ///
+    /// <para><b>I3 lives in the default arm.</b> A 12 s HttpClient timeout arrives as a
+    /// <c>TaskCanceledException</c> with the loop's token NOT cancelled; it is a request that was
+    /// sent and did not come back, and it must count. Nothing here filters on cancellation — the
+    /// loop's own <c>catch … when (ct.IsCancellationRequested)</c> has already taken the genuine
+    /// Stop, and re-testing it here is how a timeout becomes a phantom user-cancel.</para>
+    /// </summary>
+    internal static LiveTickOutcome Classify(Exception ex) => ex switch
+    {
+        TranslationException { NotSent: true } => LiveTickOutcome.Refused,
+        TranslationException { Kind: TranslationErrorKind.AllProvidersPaused } => LiveTickOutcome.Refused,
+        _ => LiveTickOutcome.SentFailure,
+    };
+}
+
+/// <summary>
+/// <c>architecture-cible.md</c> §9.2 — <b>when LIVE stops itself</b>, as a pure object over an
+/// injected clock. It replaces <c>MainWindow.Live.cs</c>' <c>int consecutiveErrors</c>, whose
+/// <c>= 0</c> at the end of every non-throwing tick — an EMPTY one included — is why the auto-stop
+/// never fired in a calm chat: the loop alternated "empty tick, failing tick" and the counter never
+/// reached two while the app trickled failing requests all evening (<c>analyse…</c> A2, S4c).
+///
+/// <para><b>The rule:</b> <see cref="TranslationPolicy.LiveAutoStopThreshold"/> failures that cost a
+/// request, inside <see cref="TranslationPolicy.LiveAutoStopWindowSeconds"/>. One queue answers both
+/// of §9.2's triggers, because a translated tick clears it: what the queue holds is "the sent
+/// failures since the last success", and the window is what stops a streak from outliving the
+/// outage that produced it.</para>
+///
+/// <para><b>An instance, not a static</b> — two LIVE sessions in one test run must not share a
+/// counter, and <c>StartLive</c> gets a clean five for free by building a new one (which is exactly
+/// what a player pressing ▶ after an auto-stop must get).</para>
+///
+/// <para><b>I2 / IS-6 / CI-3</b>: the caller passes <c>now</c>, so the two-minute window is asserted
+/// without a <c>Task.Delay</c> and without a wall clock. <see cref="DateTimeOffset"/> and not
+/// <c>DateTime</c> — everything else on this path already speaks it.</para>
+/// </summary>
+internal sealed class LiveErrorTracker
+{
+    private readonly Queue<DateTimeOffset> _stamps = new();
+
+    /// <summary>Sent failures still inside the window — which is also the length of the current
+    /// streak, since a translated tick empties the queue. For the diagnostic log line and for the
+    /// tests; nothing decides on it but <see cref="Record"/>.</summary>
+    internal int RecentFailures => _stamps.Count;
+
+    /// <summary>
+    /// Record what a tick did and answer <b>whether LIVE must stop</b>. §9.2's table, in four arms:
+    /// a tick that translated clears everything, an empty one changes nothing, a pause or a refusal
+    /// changes nothing (E5-c), and a sent failure is stamped.
+    ///
+    /// <para>The trim runs on <b>every</b> record and not only on a failure, so the verdict never
+    /// depends on when it was last asked: a session that fails four times, runs clean for an hour
+    /// and fails once more sees one failure, not five.</para>
+    /// </summary>
+    internal bool Record(LiveTickOutcome outcome, DateTimeOffset now)
+    {
+        switch (outcome)
+        {
+            // The only evidence that the providers are actually working — and the only thing that
+            // forgives a streak. Not an empty tick: a calm chat asked them nothing.
+            case LiveTickOutcome.Translated:
+                Reset();
+                break;
+
+            case LiveTickOutcome.SentFailure:
+                _stamps.Enqueue(now);
+                break;
+
+            // Empty, Paused, Refused: neither a success nor a failure. Written as a comment rather
+            // than as empty arms because "nothing happens here" is the ruling, not an omission.
+        }
+
+        Trim(now);
+        return _stamps.Count >= TranslationPolicy.LiveAutoStopThreshold;
+    }
+
+    /// <summary>Forget everything — a fresh session, or a tick that translated.</summary>
+    internal void Reset() => _stamps.Clear();
+
+    private static readonly TimeSpan Window =
+        TimeSpan.FromSeconds(TranslationPolicy.LiveAutoStopWindowSeconds);
+
+    /// <summary>Drop what can no longer count: stamps older than the window (the edge itself is
+    /// inside it), and anything past the queue's hard bound.</summary>
+    private void Trim(DateTimeOffset now)
+    {
+        while (_stamps.Count > 0 && now - _stamps.Peek() > Window) _stamps.Dequeue();
+        while (_stamps.Count > LiveTickPolicy.MaxErrorStamps) _stamps.Dequeue();
     }
 }
