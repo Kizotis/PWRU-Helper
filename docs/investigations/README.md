@@ -300,7 +300,7 @@ Continuous execution, story by story: Amelia **DS** (test-first, one commit) the
 ### Release C — epic E8 Bergamot offline (branch `feature/p2-c-offline`, stacked on B)
 | Story | Commit | Tests | Notes |
 |---|---|---|---|
-| E8.S1 spike U6/U7 | (running on the dev box) | — | Five thresholds (init ≤ 500 ms · ≤ 15 ms/line · RAM ≤ 150 MiB active, ≈ 0 at rest · exe +0 MB with download-on-demand · U7); any miss closes the branch. Downloads authorised by E8-d (temp dir, deleted after). |
+| E8.S1 spike U6/U7 | `ca1db0a` | 1213 (spike hidden) | **GO** — init 82.5 ms · 8.3 ms/line (3.8 batched) · +121 MiB working set active, +6 MiB after `Dispose` (pool returned) · exe +0 B (`ExcludeAssets="native"` + `SetDllImportResolver`, `%TEMP%\.net` still 5 files) · U7 settled. **Findings:** committed private bytes +367 MiB (E8.S7 must read that column on low-RAM machines); **`Data/slang.json` has `full` forms for only 4/46 entries** → offline quality is gated on the glossary, not the engine (owner task: fill `full` forms he is sure of); Remote Settings serves zstd → take bytes from the gzip GCS mirror, integrity from Remote Settings (E8.S3). Doc: `03-stories/spikes/U6-U7-bergamot.md`. |
 | E6.S1 / E6.S6 spikes | — | — | — | **Owner-blocked** (U4 real Azure F0 account; U5 an already-issued DeepL `:fx` key). Copy only; code not gated. |
 
 _Process note (2026-09-07): an agent reverted this README's working-copy edits during A.2 (rulings E4-a…E5-g and both tables were lost and re-entered here). Orchestrator edits are now committed immediately after each ruling._
