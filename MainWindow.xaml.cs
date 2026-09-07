@@ -1094,8 +1094,10 @@ public partial class MainWindow : Window
                 "TextMutedBrush", HasClock: t is not null);
         }
 
-        // S4 — the offline engine answered. E8 has not shipped, so this is unreachable today; the
-        // mapping is total over ProviderIds.All all the same, and a synthetic outcome proves it.
+        // S4 — the offline engine answered. Reachable since E8.S5 put the rung last in both chains,
+        // so this arm is now a state a player really lands in rather than a synthetic outcome; the
+        // name is ProviderNames' SHORT form, which for this one provider is not the display name
+        // (§3.0 rule 3: "Offline engine is the name; Offline is the chip").
         if (string.Equals(serving, ProviderIds.Bergamot, StringComparison.Ordinal))
             return new EngineChip(ChipServingGlyph, UserMessages.EngineChipServing(serving), "TealBrush");
 

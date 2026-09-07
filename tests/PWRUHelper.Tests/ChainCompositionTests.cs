@@ -868,6 +868,60 @@ public class ChainCompositionTests : GatesTestBase
         Assert.True(OfflineEnabledOf(TranslationChains.Cache));
     }
 
+    /// <summary>
+    /// <b>And nothing in the app can build the store before a builder does</b> — the review pin for
+    /// the shape the parameterless accessor leaves open. <c>TranslationChains.Cache</c> constructs
+    /// with <c>offlineEnabled: false</c>, which is the SAFE direction (a <c>"p":"bergamot"</c> row
+    /// is dropped rather than served to a session nobody told about the offline engine) but is still
+    /// the wrong answer for a user who has the engine on — and because the load is lazy and
+    /// one-shot, whichever door opens first decides for the whole session.
+    ///
+    /// <para>So the door is pinned rather than trusted: outside <c>Services/</c> nothing names it at
+    /// all (that is <c>TranslationCachePersistenceTests</c>' rule, one level up), and inside
+    /// <c>TranslationChains</c> the only reader of the parameterless property is
+    /// <see cref="TranslationChains.ClearCache"/> — the About tab's button, which cannot run before
+    /// the constructor's first <c>Build…</c> because it needs a window that does not exist until
+    /// after it. <c>FlushCache</c> deliberately uses <c>?.</c> and builds nothing.</para>
+    /// </summary>
+    [Fact]
+    public void Nothing_in_the_app_reaches_the_shared_store_before_a_builder_does()
+    {
+        var root = RepoRoot();
+
+        // Outside Services/TranslationChains.cs: not one reference, so no startup path, no handler
+        // and no future facade can be the thing that decides the drop rule.
+        var outside = ProductionSources(root)
+            .Where(f => !Path.GetFileName(f).Equals("TranslationChains.cs", StringComparison.Ordinal))
+            .SelectMany(f => Code(File.ReadAllText(f)).Split('\n')
+                .Where(l => l.Contains("TranslationChains.Cache", StringComparison.Ordinal))
+                .Select(l => Path.GetFileName(f) + ": " + l.Trim()))
+            .ToList();
+        Assert.Empty(outside);
+
+        // Inside it: the accessor is declared once, in terms of CacheFor…
+        var chains = Code(File.ReadAllText(Path.Combine(root, "Services", "TranslationChains.cs")));
+        Assert.Equal(1, Occurrences(chains,
+            "internal static TranslationCacheStore Cache => CacheFor(offlineEnabled: false);"));
+
+        // …and exactly one line in the class READS it, which is the About tab's Clear-cache button.
+        // A second reader is a second decision about when the process store is built, and it has to
+        // be a deliberate one rather than a convenience.
+        var readers = chains.Split('\n')
+            .Select(l => l.Trim())
+            .Where(l => l.Contains(" Cache.", StringComparison.Ordinal)
+                        || l.Contains("(Cache.", StringComparison.Ordinal)
+                        || l.StartsWith("Cache.", StringComparison.Ordinal))
+            .ToList();
+        Assert.Equal(new[] { "internal static int ClearCache() => Cache.Clear();" }, readers);
+
+        // …and the builders really are what the constructor reaches first: the three Build… calls
+        // sit above InitializeComponent, so the first store of the session is CacheFor's.
+        var main = Code(File.ReadAllText(Path.Combine(root, "MainWindow.xaml.cs")));
+        Assert.True(main.IndexOf("BuildWriteChain();", StringComparison.Ordinal)
+                    < main.IndexOf("InitializeComponent()", StringComparison.Ordinal),
+            "the write chain is built before InitializeComponent, so it owns the store's flag");
+    }
+
     // =============================================================================================
     //  I9 / I10 — one gate per provider, and nothing read at startup
     // =============================================================================================
