@@ -111,19 +111,24 @@ development_status:
   epic-3-retrospective: optional
 
   # ---- Release A.2 · increment 3 ------------------------------------------------
-  epic-4: backlog
-  e4-s1-extract-translation-cache-store: backlog
-  e4-s2-persist-cache-debounced: backlog
-  e4-s3-measure-cache-load-spike-u8: backlog             # spike
-  e4-s4-share-one-store-both-decorators: backlog
+  epic-4: in-progress
+  # A.2 ORDER (2026-09-07, Amelia CS): E4 before E5 — E4 is invisible, low-risk infrastructure and it
+  # makes E5.S3's pending-retry drain nearly free (arch §9.3). Within E4: s1 -> s2 -> s4 -> s3.
+  e4-s1-extract-translation-cache-store: ready-for-dev    # order 1 — DoD: CachingTranslatorTests green with ZERO edits
+  e4-s2-persist-cache-debounced: ready-for-dev            # order 2 — lands IS-2/IS-3 (TempCache + redirect) FIRST
+  e4-s3-measure-cache-load-spike-u8: ready-for-dev        # spike (U8); order 4 — runs after s2, blocks nothing
+  e4-s4-share-one-store-both-decorators: ready-for-dev    # order 3 — ONE store, THREE decorators (E3.S7 added a 3rd)
   epic-4-retrospective: optional
 
   # ---- Release A.2 · increment 4 ------------------------------------------------
-  epic-5: backlog
-  e5-s1-skip-tick-and-back-off-while-paused: backlog
-  e5-s2-honest-auto-stop: backlog
-  e5-s3-retry-failed-rows-after-recovery: backlog
-  e5-s4-honest-cancellable-read-once: backlog
+  epic-5: in-progress
+  # A.2 ORDER (2026-09-07, Amelia CS): s1 -> s2 -> s4 -> s3. s1 lands the pause seam
+  # (ChainTranslator.PauseNow + _readChain) that s2, s3 and s4 all read; s3 is LAST because it is the
+  # riskiest story of the release (a duplicated feed row is worse than the failure it replaces).
+  e5-s1-skip-tick-and-back-off-while-paused: ready-for-dev   # order 1 — retires E2.S5's no-network auto-stop
+  e5-s2-honest-auto-stop: ready-for-dev                      # order 2 — deletes Live.cs:219; S4c finally auto-stops
+  e5-s3-retry-failed-rows-after-recovery: ready-for-dev      # order 4 — RISKIEST; LiveDedup must stay byte-identical
+  e5-s4-honest-cancellable-read-once: ready-for-dev          # order 3 — also depends on e5-s1 (PauseNow for AC 3)
   epic-5-retrospective: optional
 
   # ---- Release B.1 · increment 5 ------------------------------------------------
