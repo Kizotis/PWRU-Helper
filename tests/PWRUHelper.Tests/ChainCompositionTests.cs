@@ -275,7 +275,21 @@ public class ChainCompositionTests : GatesTestBase
     public void Building_the_chains_touches_no_gate_state_file()
     {
         using var temp = new TempGateState();
-        File.WriteAllText(temp.Path, """{"version":1,"providers":[]}""");
+        // A file that WOULD be noticed if it were read: google-dict paused 30 s from now, in the
+        // schema the store actually parses — `providers` is a MAP, and the empty ARRAY this case
+        // used to write made the second assertion vacuous twice over (it would not have parsed, and
+        // it named no provider to seed). The window is inside OpenCapMinutes so the seed needs no
+        // clamping and therefore queues no corrective write of its own.
+        var until = ProviderGates.Clock() + TimeSpan.FromSeconds(30);
+        File.WriteAllText(temp.Path, $$"""
+            { "version": 1, "providers": { "google-dict": {
+                "blockedUntil": "{{until:o}}",
+                "keyBlockedUntil": null,
+                "strikes": 1,
+                "lastKind": "RateLimited",
+                "lastAt": null,
+                "cleanSince": null } } }
+            """);
         var before = File.GetLastWriteTimeUtc(temp.Path);
 
         var settings = new AppSettings { DeepLApiKey = "abc-123:fx" };
@@ -283,8 +297,15 @@ public class ChainCompositionTests : GatesTestBase
         TranslationChains.BuildRead(settings, RequestPriority.Interactive);
         TranslationChains.BuildWrite(settings);
 
+        // Not written — and, the half that actually is I10, not READ: had a builder loaded the file,
+        // the gate it resolved through the registry would be carrying that pause right now.
         Assert.Equal(before, File.GetLastWriteTimeUtc(temp.Path));
         Assert.Null(ProviderGates.Snapshot(ProviderIds.GoogleDict)?.BlockedUntil);
+
+        // Non-vacuity, and it is the whole point of the rewrite: that file really does seed that
+        // gate the moment something asks for it to be read (the first TryEnter, after first paint).
+        ProviderGates.EnsureLoaded();
+        Assert.NotNull(ProviderGates.Snapshot(ProviderIds.GoogleDict)?.BlockedUntil);
     }
 
     // =============================================================================================

@@ -305,7 +305,7 @@ internal sealed class ProviderGate
     /// A test (and later a field experiment) passes <see cref="GatePolicy.Parse"/>'s result here.</param>
     /// <param name="ensureLoaded">E2.S4: read <c>provider-state.json</c> if this process has not yet
     /// (AC 2 / I10). Called at the top of <see cref="TryEnter"/> and nowhere else — the trigger
-    /// cannot be <c>ProviderGates.For</c>, which runs inside <c>MainWindow</c>'s field initializer,
+    /// cannot be <c>ProviderGates.For</c>, which runs inside <c>MainWindow</c>'s constructor (E3.S7),
     /// before first paint.</param>
     /// <param name="onTransition">E2.S4: "this gate just changed state, from X to this snapshot" —
     /// the registry turns it into a debounced write and E2.S6 will turn it into a log line. Raised

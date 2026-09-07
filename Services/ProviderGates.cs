@@ -120,7 +120,7 @@ internal static class ProviderGates
         Registry.GetOrAdd(providerId, id => new ProviderGate(
             Now, null,
             // E2.S4's two seams. The load hangs off TryEnter and NOT off this factory: For runs
-            // inside MainWindow's field initializer (MainWindow.xaml.cs:43), before first paint, so
+            // while MainWindow's constructor builds the three chains (E3.S7), before first paint, so
             // reading the file here would break I10 and TP-START-01. The transition callback closes
             // over the id because a gate does not know its own — the registry is the only thing that
             // does.
@@ -178,7 +178,7 @@ internal static class ProviderGates
             var normalisedAny = false;
             foreach (var pair in state.Providers)
             {
-                // For(id), not a fresh gate: MainWindow's field initializer may already have handed
+                // For(id), not a fresh gate: MainWindow's constructor may already have handed
                 // this id's gate to a chain, and seeding a different instance would restore the pause
                 // into an object nobody consults. TrySeedState declines a gate that has already
                 // recorded something in this process — live evidence beats a file.

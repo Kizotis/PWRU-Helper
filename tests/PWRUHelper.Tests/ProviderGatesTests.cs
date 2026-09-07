@@ -40,9 +40,9 @@ public class ProviderGatesTests : GatesTestBase
     [Fact]
     public void For_hands_the_same_gate_to_every_caller_of_an_id()
     {
-        // This identity IS invariant I9. The read chain is a field initializer
-        // (MainWindow.xaml.cs:43) and the write chain is rebuilt on every key save
-        // (MainWindow.Translate.cs:239); before this registry they held two independent gates, so
+        // This identity IS invariant I9. The two read chains are built in MainWindow's constructor
+        // (E3.S7) and the write chain is rebuilt there and on every key save
+        // (MainWindow.Translate.cs); before this registry they held independent gates, so
         // the Translator tab kept hammering the provider LIVE had already been told to leave alone.
         var first = ProviderGates.For(ProviderIds.GoogleDict);
         var second = ProviderGates.For(ProviderIds.GoogleDict);

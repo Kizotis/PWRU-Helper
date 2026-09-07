@@ -406,6 +406,31 @@ public class PerLineFallbackTests : GatesTestBase
         Assert.Equal(2, fake.Requests);
     }
 
+    /// <summary>
+    /// <b>E3-g's other boundary: "nothing was translated" is not "something went wrong".</b> A group
+    /// of nothing but blanks — the shape a truncated OCR row produces, and the one the guard above
+    /// answers with <c>""</c> before any provider is asked — translates no line AND records no
+    /// failure, so the predicate has nothing to rethrow and must not invent one. It returns the
+    /// blanks, and the chain reading that as a success is the truth: nothing was asked of the
+    /// provider, and nothing failed. An empty group is the same case with no rows at all.
+    ///
+    /// <para>Driven straight at the loop, with a <c>translateOne</c> that fails the case if it is
+    /// ever called — no provider may be reached by a line the guard is supposed to answer.</para>
+    /// </summary>
+    [Fact]
+    public async Task E3_g_a_blank_only_batch_returns_blanks_and_throws_nothing()
+    {
+        Task<string> NeverCalled(string line, CancellationToken token)
+            => throw new InvalidOperationException("a blank line must never reach a provider");
+
+        var outp = await PerLineFallback.RunAsync(new[] { "", "   ", "\t" }, NeverCalled,
+            ProviderIds.GoogleGtx, afterFailedBatch: true, CancellationToken.None);
+        Assert.Equal(new[] { "", "", "" }, outp);
+
+        Assert.Empty(await PerLineFallback.RunAsync(Array.Empty<string>(), NeverCalled,
+            ProviderIds.GoogleGtx, afterFailedBatch: true, CancellationToken.None));
+    }
+
     /// <summary>The partial case, which is the common one: two lines fail softly, one succeeds, and
     /// nothing is thrown — throwing here would discard a translation the user can read.</summary>
     [Fact]

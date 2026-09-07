@@ -92,7 +92,7 @@ internal sealed class HttpProviderCore
 
     /// <summary>The gate for this provider. Resolved through the registry on every call rather than
     /// captured at construction, because <b>I10</b> forbids touching the registry before the first
-    /// request — a provider is built in <c>MainWindow</c>'s field initializer, before first paint.
+    /// request — a provider is built in <c>MainWindow</c>'s constructor (E3.S7), before first paint.
     /// A test may hand in its own gate, exactly as it hands in its own handler.</summary>
     private ProviderGate Gate => _gate ?? ProviderGates.For(_options.ProviderId);
 
