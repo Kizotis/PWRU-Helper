@@ -598,8 +598,11 @@ public partial class MainWindow
         try
         {
             var result = await probe(cts.Token);
+            // CountdownJoinText: §3.7's paused row joins "Try again in {t}.", so under §2.4's floor
+            // there is no duration to join and the clause is dropped instead (E7.S2 — the same rule
+            // read-once's PausedTryAgainIn follows, for the same grammatical reason).
             status.Text = UserMessages.KeyTestSentence(providerId, result, region,
-                CountdownText(result.SecondsUntilRetry));
+                CountdownJoinText(result.SecondsUntilRetry));
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {

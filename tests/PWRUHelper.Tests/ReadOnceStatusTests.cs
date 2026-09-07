@@ -213,7 +213,12 @@ public class ReadOnceStatusTests
         var status = ReadOnceSummary.Status(lines, 0, error,
             MainWindow.CountdownText(LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now)));
 
-        Assert.Equal($"Read {lines} line(s) — all engines are paused. Try again in {TranslationPolicy.SoftCooldownSecs} s.",
+        // The "{t}" moved with E7.S2's bands (§2.4 / amendment A9): a soft cooldown is inside the
+        // m:ss band, so it now reads "0:05" rather than "5 s". Updated deliberately — the sentence
+        // itself is untouched, only the countdown it joins.
+        var softCooldown = MainWindow.CountdownText(TranslationPolicy.SoftCooldownSecs);
+        Assert.Equal("0:05", softCooldown);
+        Assert.Equal($"Read {lines} line(s) — all engines are paused. Try again in {softCooldown}.",
                      status);
         Assert.DoesNotContain("Done", status, StringComparison.Ordinal);
     }

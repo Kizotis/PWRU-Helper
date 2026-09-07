@@ -114,6 +114,20 @@ public partial class MainWindow : Window
 
     private readonly DispatcherTimer _toastTimer = new() { Interval = TimeSpan.FromSeconds(1.6) };
 
+    /// <summary>The app's ONE countdown timer (ux-mode-degrade §2.4, ruling OQ-c/R-2 — "poll at
+    /// 1 Hz, no event out of <c>Services/</c>"). It is a performance object as much as a UI one:
+    /// NFR7 allows one 1 Hz repaint while something is paused and nothing at all while nothing is,
+    /// and the 600 ms heartbeat stays the fastest thing on screen.
+    ///
+    /// <para>Constructed, never started: it runs only between <see cref="EnsureCountdownRunning"/>
+    /// and the first tick that finds nothing paused, which is why <b>a healthy app has no countdown
+    /// timer running at all</b> — and why nothing here happens before the first paint (I10).</para>
+    ///
+    /// <para>It is not the overlay's 600 ms blink (a different window, a different rate, a different
+    /// owner — E7.S4) and not <see cref="_toastTimer"/>; §2.4's "one <c>DispatcherTimer</c> for the
+    /// whole app" means one COUNTDOWN, not one timer in the process.</para></summary>
+    private readonly DispatcherTimer _countdownTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+
     // Tab indices (order must match the TabControl in XAML):
     // Phrasebook(0) · Squad(1) · Translator(2) · Screen OCR(3) · About(4).
     private const int TabTranslator = 2, TabScreenOcr = 3;
@@ -168,6 +182,10 @@ public partial class MainWindow : Window
         _readOnceTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Interactive);
         InitializeComponent();                  // fires change handlers — _restoringSettings guards them
         _toastTimer.Tick += (_, _) => { Toast.Visibility = Visibility.Collapsed; _toastTimer.Stop(); };
+        // Subscribing is not starting (I10): the countdown ticks for the first time only when
+        // something tells it a pause has begun, which cannot happen before the first request and so
+        // cannot happen before the first paint.
+        _countdownTimer.Tick += (_, _) => CountdownTick(_readChain.PauseNow());
 
         // E6.S5 — the two "Test key" labels, from the copy deck, once. Not in the XAML (GAP-4) and
         // not in UpdateEngineStatusUi: a refresh landing mid-test would rewrite a label the
@@ -347,6 +365,10 @@ public partial class MainWindow : Window
         // ProviderGates.Flush() below, so nothing is still racing to report a gate outcome into a
         // registry that has already been written to disk.
         CancelKeyTests();
+
+        // …and the 1 Hz countdown, for a reason of its own: a DispatcherTimer roots its handler,
+        // and this one's handler closes over the window that is going away (E7.S2).
+        StopCountdown();
 
         // Write out any provider pause that is still inside its 1-second debounce, so a block the
         // user is waiting out survives the restart instead of being re-earned on the first request
@@ -538,6 +560,88 @@ public partial class MainWindow : Window
         // Give longer messages more time to be read.
         _toastTimer.Interval = TimeSpan.FromSeconds(message.Length > 40 ? 3.5 : 1.6);
         _toastTimer.Start();
+    }
+
+    // ============================================================
+    //  THE COUNTDOWN (ux-mode-degrade §2.4 / amendment A9, E7.S2)
+    // ============================================================
+    //
+    // One 1 Hz poll for the whole app, and it is the poll ruling OQ-c chose over a state-changed
+    // event: Services/ stays passive, ChainTranslator.PauseNow() is side-effect free by contract
+    // (R-2), and the repaint budget is a single text assignment a second — only when the rendered
+    // string actually changed. E7.S3's chip is the second consumer of this same tick.
+
+    /// <summary>Whether the countdown is running. Exposed for the tests that pin AC 1's
+    /// "never runs idle": asserting the flag is how a countdown is tested without waiting for a
+    /// real second (CI-3), which would be the first flaky test in the suite.</summary>
+    internal bool CountdownRunning => _countdownTimer.IsEnabled;
+
+    /// <summary>Called by anything that LEARNS of a pause — today the LIVE loop's skipped tick,
+    /// tomorrow E7.S3's chip. It starts the countdown if it is not already running and repaints at
+    /// once from the pause it was handed, so the first paused second is not a second of stale text.
+    ///
+    /// <para>Idempotent on purpose: <c>Start()</c> on a running <c>DispatcherTimer</c> is a no-op,
+    /// so no site has to own the timer and no site has to ask whether another one already started
+    /// it. The <paramref name="pause"/> is passed in rather than re-read because the caller has just
+    /// asked for it, and asking twice would compare two instants of the gates' clock (IS-6).</para>
+    ///
+    /// <para><b>I10, and the honest limit on TP-START-04.</b> Nothing calls this before the window
+    /// is up, because nothing issues a request before it: <c>ProviderGates</c> constructs its gates
+    /// at startup and loads <c>provider-state.json</c> on the first <c>TryEnter</c>. So a saved pause
+    /// becomes visible on the first tick AFTER the first request, not literally at first paint —
+    /// making it literally true would mean reading the file before the window is visible, which is
+    /// what I10 forbids and what P1 exists to protect. Flagged in the story for Winston.</para></summary>
+    internal void EnsureCountdownRunning(ChainPause pause)
+    {
+        if (!_countdownTimer.IsEnabled) _countdownTimer.Start();
+        CountdownTick(pause);
+    }
+
+    /// <summary>Stop it. Called when the surface it paints goes away — <c>StopLive</c> — and when
+    /// the window does: a <c>DispatcherTimer</c> roots its handler, and this one's handler closes
+    /// over the window.</summary>
+    internal void StopCountdown() => _countdownTimer.Stop();
+
+    /// <summary>One tick, with the pause it is about.
+    ///
+    /// <para><b>The tick is what stops the timer</b> (AC 1). "Is anything still paused?" is
+    /// <c>PauseNow()</c>'s <c>BlockedUntil &gt; Now()</c> and never <c>State == Open</c>, which
+    /// deliberately outlives its window (ruling E3-a) — a state test here would leave this running
+    /// for ever. A rate-ceiling <c>Wait</c> sets no <c>BlockedUntil</c> and is not a pause either
+    /// (rulings E5-a/E5-b), so the countdown never starts for one.</para>
+    ///
+    /// <para><b>At most one countdown per window</b> (AC 4): the main window's is on its status line
+    /// and the overlay's is its single status line, of which the chip is a prefix — so there is
+    /// structurally one clock on each, and no row is written from here at all (TP-RENDER-06).
+    /// Both go through the repaint guard.</para>
+    ///
+    /// <para>It repaints only while LIVE owns those lines. A read-once's own paused summary is a
+    /// past-tense report of a finished read on the very same <c>TextBlock</c>; stepping a countdown
+    /// over it would be a second clock on one window and would overwrite a sentence about something
+    /// else.</para>
+    ///
+    /// <para>Internal so the tests can drive it with a <c>ChainPause</c> of their own: nothing in
+    /// this story may sleep (CI-3), and nothing in it may reach the process-global gates.</para></summary>
+    internal void CountdownTick(ChainPause pause)
+    {
+        if (!pause.AllPaused) { _countdownTimer.Stop(); return; }
+        if (_liveCts == null) return;
+
+        int? left = LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now);
+        SetIfChanged(ScreenReadStatus, LivePausedStatus(left));
+        _overlay?.SetStatusIfChanged(LivePausedOverlayStatus(left));
+    }
+
+    /// <summary>The repaint guard (AC 3, UX hint 7): assign <c>.Text</c> only when the rendered
+    /// string differs from what the surface already shows. Above 90 s the band changes only on a
+    /// minute boundary, so that is one assignment a minute rather than sixty.
+    ///
+    /// <para>It compares the control's OWN text rather than a cached field — one source of truth,
+    /// and it stays correct when something else writes the same surface, which
+    /// <c>SetScreenStatus</c> does on both windows.</para></summary>
+    internal static void SetIfChanged(TextBlock target, string text)
+    {
+        if (!string.Equals(target.Text, text, StringComparison.Ordinal)) target.Text = text;
     }
 
     /// <summary>

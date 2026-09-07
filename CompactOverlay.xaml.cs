@@ -71,6 +71,20 @@ public partial class CompactOverlay : Window
         UpdateEmptyHint();
     }
 
+    /// <summary>The same status line, through E7.S2's repaint guard: the 1 Hz countdown writes this
+    /// window once a second while something is paused, and above 90 s the rendered string only
+    /// changes on a minute boundary. Comparing the <c>TextBlock</c>'s own text — rather than a field
+    /// this window would have to keep in step with <see cref="SetStatus"/>' other callers — is what
+    /// makes it one source of truth; the saving is the visibility flip and the empty-hint refresh
+    /// <see cref="SetStatus"/> does on every call.
+    ///
+    /// <para>The overlay is handed the FORMATTED string and never learns what a countdown is:
+    /// <c>MainWindow</c> formats, this window renders (I2).</para></summary>
+    internal void SetStatusIfChanged(string msg)
+    {
+        if (!string.Equals(OverlayStatus.Text, msg, StringComparison.Ordinal)) SetStatus(msg);
+    }
+
     public void ApplyFontScale(double scale)
         => FeedItems.LayoutTransform = new System.Windows.Media.ScaleTransform(scale, scale);
 

@@ -367,7 +367,11 @@ public partial class MainWindow
     {
         if (!ReadOnceSummary.IsAllPaused(error)) return null;
         var pause = _readChain.PauseNow();
-        return CountdownText(LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now));
+        // CountdownJoinText and not CountdownText: this "{t}" is JOINED into "Try again in {t}.",
+        // and under §2.4's floor the band renders a clause ("about to retry") rather than a
+        // duration. There is nothing left to join, so it answers null and the sentence's own
+        // no-number form — amendment A12's "in {t}" → "shortly" — is what the player reads (E7.S2).
+        return CountdownJoinText(LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now));
     }
 
     /// <summary>The read-once budget, as the failure it is. A budget expiry is a <b>timeout</b> and

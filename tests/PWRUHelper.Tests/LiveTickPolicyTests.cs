@@ -167,11 +167,17 @@ public class LiveTickPolicyTests
     [Fact]
     public void The_paused_status_names_the_pause_and_promises_the_recovery()
     {
-        Assert.Equal("○ Live — paused, next try in 4 s. It resumes on its own; nothing is lost.",
+        // E7.S2 replaced A.2's two coarse bands with §2.4's four (amendment A9), so these three
+        // strings moved DELIBERATELY — the precedent is E5.S4 updating ChainCompositionTests:315.
+        // Four seconds is now §2.4's floor, which renders a CLAUSE and not a duration, so the deck
+        // gives it its own §3.2 row rather than substituting "about to retry" into "next try in
+        // {t}". Sixty is inside the m:ss band. Eighteen hundred is the display cap. CountdownTests
+        // owns the bands themselves; what is pinned here is that this sentence renders them.
+        Assert.Equal("○ Live — paused, about to retry.",
                      MainWindow.LivePausedStatus(4));
-        Assert.Equal("○ Live — paused, next try in 1 min. It resumes on its own; nothing is lost.",
+        Assert.Equal("○ Live — paused, next try in 1:00. It resumes on its own; nothing is lost.",
                      MainWindow.LivePausedStatus(60));
-        Assert.Equal("○ Live — paused, next try in 30 min. It resumes on its own; nothing is lost.",
+        Assert.Equal("○ Live — paused, next try in about 30 min. It resumes on its own; nothing is lost.",
                      MainWindow.LivePausedStatus(1800));
         // No number to promise → no number invented, and the reassurance still stands.
         Assert.Equal("○ Live — paused. It resumes on its own; nothing is lost.",
