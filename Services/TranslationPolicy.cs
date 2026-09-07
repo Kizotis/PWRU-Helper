@@ -23,9 +23,10 @@ namespace PWRUHelper.Services;
 /// landed — the six breaker numbers arrived with <c>ProviderGate</c> (E2.S1), the four rate-ceiling
 /// numbers with its token bucket (E2.S3), and the two retry numbers with <c>HttpProviderCore</c>
 /// (E2.S5), which is also where the two "…Today" retry constants stopped describing today and were
-/// retired, and <c>PerLineCap</c> arrived with E3.S8's shared per-line loop. The rest
-/// (<c>CacheCapacity = 2000</c> …) still arrive with the code that reads them — E4 for the cache,
-/// E5 for LIVE — because an unused constant is a constant nobody grades.
+/// retired, and <c>PerLineCap</c> arrived with E3.S8's shared per-line loop. <c>CacheCapacity</c>
+/// arrived with E4.S1's <c>TranslationCacheStore</c>, whose default it is. The rest (the LIVE
+/// numbers, the cache's save debounce …) still arrive with the code that reads them — E4.S2 for the
+/// cache file, E5 for LIVE — because an unused constant is a constant nobody grades.
 /// Source: <c>docs/investigations/02-traduction/architecture-cible.md</c> §5.6 (the target table),
 /// §4.3 (the HTML markers).
 /// </summary>
@@ -39,9 +40,18 @@ internal static class TranslationPolicy
     /// <summary>HttpClient timeout for every provider request, Google and DeepL alike.</summary>
     public const int RequestTimeoutSeconds = 12;    // [CONFIRMED] now read once, at HttpProviderCore.CreateClient
 
-    /// <summary>Entries kept by the in-memory LRU translation cache. §5.6 raises it to 2000 and
-    /// persists it (E4); today it is memory-only and dies with the process.</summary>
-    public const int CacheCapacityToday = 500;      // [CONFIRMED] now the ctor default at CachingTranslator.cs:24
+    /// <summary>The <b>legacy decorator default</b>: what a <c>CachingTranslator</c> built without a
+    /// store gives its own private one. No longer "today's cache" — since E4.S1 the shared store's
+    /// capacity is <see cref="CacheCapacity"/>, and this number survives only as the parameter default
+    /// of the constructor that has no store to read a capacity from.</summary>
+    public const int CacheCapacityToday = 500;      // [CONFIRMED] now the ctor default at CachingTranslator.cs:25
+
+    /// <summary>Entries kept by the shared LRU translation cache — §5.6's number, and the default of
+    /// <see cref="TranslationCacheStore"/>. At ~150 B an entry that is ≈300 KB in memory and, from
+    /// E4.S2, on disk.</summary>
+    // [ASSUMED] architecture-cible.md §8.2, whose own sentence is "the capacity is the knob": what
+    // settles it is U8 (E4.S3) measuring the load cost of a full file against G6's startup budget.
+    public const int CacheCapacity = 2000;
 
     /// <summary>The text travels in a GET query string, so it is chunked to stay well under
     /// typical URL limits.</summary>

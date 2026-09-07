@@ -11,21 +11,35 @@ namespace PWRUHelper.Services;
 /// least-recently-used evicted first — so memory stays flat over a long session. Only genuine
 /// successes are cached; the inner translator's failure placeholders (which start with "(")
 /// are never stored, so a transient rate-limit can't get stuck on screen forever.
+///
+/// <para>Since E4.S1 the LRU itself lives in <see cref="TranslationCacheStore"/> and this class is
+/// the decorator over it: the key format and the "(" rule are its (§3.1), storage and eviction are
+/// the store's. Built without a store it keeps a private one, exactly as before; built WITH one it
+/// shares it — which is how one cache ends up behind three chains (§8.2, E4.S4).</para>
 /// </summary>
 public class CachingTranslator : ITranslator
 {
     private readonly ITranslator _inner;
-    private readonly int _capacity;
-
-    private readonly object _gate = new();
-    private readonly Dictionary<string, LinkedListNode<KeyValuePair<string, string>>> _map;
-    private readonly LinkedList<KeyValuePair<string, string>> _order = new();   // front = most-recently-used
+    private readonly TranslationCacheStore _store;
 
     public CachingTranslator(ITranslator inner, int capacity = TranslationPolicy.CacheCapacityToday)
     {
         _inner = inner;
-        _capacity = Math.Max(1, capacity);
-        _map = new Dictionary<string, LinkedListNode<KeyValuePair<string, string>>>(_capacity);
+        _store = new TranslationCacheStore(capacity);   // private, and 500 deep unless told otherwise
+    }
+
+    /// <summary>Shares an existing store instead of owning one — E4.S4's constructor, and the whole
+    /// reason the LRU moved out.
+    ///
+    /// <para><c>internal</c> rather than public, and not by taste:
+    /// <c>TranslationPolicyTests.The_call_sites_that_now_read_the_policy_still_behave_identically</c>
+    /// pins the capacity default through <c>GetConstructors().Single()</c>, which throws the moment a
+    /// second PUBLIC constructor exists. <c>InternalsVisibleTo PWRUHelper.Tests</c> keeps it reachable
+    /// from the suite, and every call site that will pass a store is in this assembly.</para></summary>
+    internal CachingTranslator(ITranslator inner, TranslationCacheStore store)
+    {
+        _inner = inner;
+        _store = store;
     }
 
     public async Task<string> TranslateAsync(string text, string source, string target,
@@ -84,44 +98,9 @@ public class CachingTranslator : ITranslator
            && !string.IsNullOrEmpty(value)
            && !value.StartsWith('(');
 
-    private bool TryGet(string key, out string value)
-    {
-        lock (_gate)
-        {
-            if (_map.TryGetValue(key, out var node))
-            {
-                _order.Remove(node);
-                _order.AddFirst(node);        // touch → most-recently-used
-                value = node.Value.Value;
-                return true;
-            }
-        }
-        value = "";
-        return false;
-    }
+    // The LRU, the lock and the eviction are TranslationCacheStore's; these two lines are all that
+    // is left of them here, so the call sites above read the same as they always did.
+    private bool TryGet(string key, out string value) => _store.TryGet(key, out value);
 
-    private void Store(string key, string value)
-    {
-        lock (_gate)
-        {
-            if (_map.TryGetValue(key, out var existing))
-            {
-                existing.Value = new KeyValuePair<string, string>(key, value);
-                _order.Remove(existing);
-                _order.AddFirst(existing);
-                return;
-            }
-
-            var node = new LinkedListNode<KeyValuePair<string, string>>(new KeyValuePair<string, string>(key, value));
-            _order.AddFirst(node);
-            _map[key] = node;
-
-            if (_map.Count > _capacity)
-            {
-                var lru = _order.Last!;       // least-recently-used
-                _order.RemoveLast();
-                _map.Remove(lru.Value.Key);
-            }
-        }
-    }
+    private void Store(string key, string value) => _store.Store(key, value);
 }
