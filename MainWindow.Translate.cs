@@ -121,6 +121,13 @@ public partial class MainWindow
         finally
         {
             TranslateButton.IsEnabled = true;
+            // The chip, on an event that already exists rather than on a timer (E7.S3 T5). A call
+            // has just finished, so ChainTranslator.LastOutcome is fresh and this is the cheapest
+            // honest moment to read it — success or failure, which is why it is in the finally: a
+            // failed attempt is exactly when the chip has something new to say. It runs AFTER the
+            // two status writes above, so §3.5's one-time "Back on Google." lands on top of them
+            // rather than under them.
+            UpdateEngineChip();
         }
     }
 
@@ -656,6 +663,12 @@ public partial class MainWindow
     private void UpdateEngineStatusUi()
     {
         UpdateDeepLStatus();
+
+        // A key save adds or removes a tier, so the chip's tooltip has a different chain to list
+        // and a keyed provider may have just stopped being "— not set" (E7.S3 T5: repaint on the
+        // events that already exist). ClearAuthBlock has run by now on the save paths, so a
+        // corrected key stops reading "⚠ DeepL key refused" here rather than after a translation.
+        UpdateEngineChip();
 
         var region = (_settings.AzureRegion ?? "").Trim();
         var hasKey = (_settings.AzureApiKey ?? "").Trim().Length > 0;

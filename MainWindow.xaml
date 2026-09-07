@@ -277,6 +277,14 @@
                                   ToolTip="Copy the translation automatically so you can paste it in game with Ctrl+V."/>
                         <TextBlock x:Name="TranslateStatus" VerticalAlignment="Center" Margin="12,0,0,0"
                                    Foreground="{StaticResource TextMutedBrush}"/>
+                        <!-- The provider chip, write path (E7.S3 / ux-mode-degrade §2.3): ONE
+                             TextBlock, glyph + name + optional countdown. No border, no background,
+                             no animation (UX-DR3) — resist the Border. Text, foreground and tooltip
+                             are all written from code (RefreshEngineChip): a Run.Text binding here
+                             would be TwoWay by default and would need an STA render case (I15). -->
+                        <TextBlock x:Name="WriteChip" VerticalAlignment="Center" Margin="12,0,0,0"
+                                   Foreground="{StaticResource TextMutedBrush}"
+                                   AutomationProperties.Name="Translation engine status"/>
                     </StackPanel>
 
                     <!-- A RichTextBox, not a TextBox, so the 78-character game-chat blocks can be
@@ -296,6 +304,12 @@
                             <Button x:Name="SelectAreaButton" Style="{StaticResource AccentButton}"
                                     Padding="10,3" Content="Select area &amp; read once" Click="SelectArea_Click"
                                     ToolTip="Draw a box over Russian text and read it once. Ctrl+Alt+R re-reads the same area while in game."/>
+                            <!-- The provider chip, read path. It sits BESIDE LiveIndicator and not
+                                 inside it: LiveIndicator is Collapsed unless LIVE is running, and
+                                 the chip is the app's only always-on indicator (§2.2). -->
+                            <TextBlock x:Name="ReadChip" VerticalAlignment="Center" Margin="12,0,0,0"
+                                       Foreground="{StaticResource TextMutedBrush}"
+                                       AutomationProperties.Name="Translation engine status"/>
                             <TextBlock x:Name="LiveIndicator" Text="● LIVE" Foreground="{StaticResource AccentBrush}"
                                        FontWeight="Bold" VerticalAlignment="Center" Margin="12,0,0,0" Visibility="Collapsed"/>
                             <Button x:Name="StopLiveButton" Content="■ Stop" Style="{StaticResource GhostButton}"

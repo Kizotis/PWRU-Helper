@@ -1,12 +1,16 @@
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Threading;
 using PWRUHelper;
+using PWRUHelper.Services;
 using Xunit;
 
 namespace PWRUHelper.Tests;
@@ -114,6 +118,250 @@ public class TemplateRenderTests
     }
 
     // ----- helpers -----
+
+    /// <summary>
+    /// <b>TP-RENDER-03</b> — the provider chip, in each of its main-window placements, in every one
+    /// of §2.1's eight states, with no WPF binding error and no missing text.
+    ///
+    /// <para><b>Three renders with a state loop, not twenty-four windows</b> (CI-4: this collection
+    /// is one STA thread with a &lt; 15 s budget). One <c>MainWindow</c>, one layout pass per state,
+    /// and the surfaces are the REAL <c>WriteChip</c> and <c>ReadChip</c> from the XAML — a chip
+    /// renamed or dropped fails here rather than at the user.</para>
+    ///
+    /// <para><b>I15, satisfied by construction and asserted anyway.</b> The chip is a plain
+    /// <c>TextBlock.Text</c> assignment with no binding at all — that is the deliberate choice, and
+    /// the v0.11.2 lesson is why: a <c>Run.Text</c> binding is TwoWay by default and throws once per
+    /// render against a get-only property. The binding-error listener is here to prove nothing was
+    /// quietly turned into one.</para>
+    /// </summary>
+    [Fact]
+    public void TP_RENDER_03_the_chip_renders_in_every_state_on_both_main_window_placements()
+    {
+        using var _ = new TempSettings("""{ "SettingsVersion": 3 }""");
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+
+            var errors = new BindingErrorListener();
+            PresentationTraceSources.Refresh();
+            PresentationTraceSources.DataBindingSource.Listeners.Add(errors);
+            PresentationTraceSources.DataBindingSource.Switch.Level = SourceLevels.Warning;
+            try
+            {
+                foreach (var chip in EveryState())
+                {
+                    window.PaintEngineChip(chip, "Google  ● ready");
+
+                    foreach (var surface in new[] { window.WriteChip, window.ReadChip })
+                    {
+                        surface.Measure(new Size(1000, 1000));
+                        surface.Arrange(new Rect(0, 0, 1000, 1000));
+                        surface.UpdateLayout();
+
+                        Assert.Equal(chip.Label, surface.Text);
+                        // AC 4: a STRING, so the dark ToolTip style in Theme.xaml applies untouched.
+                        Assert.IsType<string>(surface.ToolTip);
+                        // AC 5, matching the icon-only buttons beside them.
+                        Assert.Equal("Translation engine status",
+                                     AutomationProperties.GetName(surface));
+                        // The foreground follows the state and comes from the theme, never from a
+                        // literal colour (UX-DR18) — a resource reference, resolved.
+                        Assert.Equal(Application.Current.Resources[chip.BrushKey], surface.Foreground);
+                    }
+                }
+                Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.Background);
+            }
+            finally
+            {
+                PresentationTraceSources.DataBindingSource.Listeners.Remove(errors);
+            }
+
+            Assert.True(errors.Messages.Count == 0,
+                "WPF reported binding errors while rendering the chip:\n" + errors.Dump());
+        });
+    }
+
+    /// <summary>
+    /// The third placement (AC 1): the compact overlay has no chip control — the window is 360 px
+    /// wide — so <c>MainWindow</c> composes <c>"{chip}  {status}"</c> and the overlay renders it.
+    /// Shown <b>only when not healthy</b>, and not at all while the chip is carrying a countdown,
+    /// because the overlay's ONE line is already stepping LIVE's clock then (E7.S2's AC 4).
+    /// </summary>
+    [Fact]
+    public void The_overlay_prefixes_its_one_status_line_only_when_the_chain_is_not_healthy()
+    {
+        var states = EveryState().ToList();      // S1..S8, in §2.1's order
+        var healthy = states[0];
+        var backup = states[1];
+        var allPaused = states[4];
+        Assert.True(healthy.IsHealthy && backup.Text.Contains("(backup)") && allPaused.HasClock,
+                    "EveryState() no longer yields S1, S2 and S5 where this case expects them");
+
+        Assert.Equal("Reading…", MainWindow.OverlayLine(healthy, "Reading…"));
+        Assert.Equal("● Google (backup)  Reading…", MainWindow.OverlayLine(backup, "Reading…"));
+        // One clock per window: the status line already has one.
+        Assert.Equal("○ Live paused — back in 0:58",
+                     MainWindow.OverlayLine(allPaused, "○ Live paused — back in 0:58"));
+        // An empty status stays empty — SetStatus collapses the line on it, and a chip prefix must
+        // not resurrect a line the overlay had deliberately hidden.
+        Assert.Equal("", MainWindow.OverlayLine(backup, ""));
+    }
+
+    /// <summary>
+    /// The overlay end of the same rule, through the real <c>SetStatus</c>: a prefixed line is
+    /// visible and carries both halves, and the visibility contract is untouched.
+    /// </summary>
+    [Fact]
+    public void The_overlay_renders_the_composed_line_it_is_handed()
+    {
+        using var _ = new TempSettings("""{ "SettingsVersion": 3 }""");
+
+        StaTestHost.Run(() =>
+        {
+            var overlay = new CompactOverlay(new MainWindow());
+            var backup = EveryState().ToList()[1];      // S2 — a fallback is not healthy
+
+            overlay.SetStatus(MainWindow.OverlayLine(backup, "🔴 Live — watching…"));
+            Assert.Equal("● Google (backup)  🔴 Live — watching…", overlay.OverlayStatus.Text);
+            Assert.Equal(Visibility.Visible, overlay.OverlayStatus.Visibility);
+
+            overlay.SetStatus(MainWindow.OverlayLine(backup, ""));
+            Assert.Equal(Visibility.Collapsed, overlay.OverlayStatus.Visibility);
+        });
+    }
+
+    /// <summary>
+    /// <b>Ruling E6-a, at the surface it is about.</b> A freshly constructed window has not read
+    /// <c>provider-state.json</c> — I10 forbids it before first paint — so both chips say
+    /// "checking…" rather than claiming a health nothing has verified. The warm-up runs from
+    /// <c>OnWindowLoaded</c>, which has not fired here.
+    ///
+    /// <para>The second assertion is I10's own: <b>constructing the window starts no countdown</b>,
+    /// and it cannot, because "checking…" asks for no tick (there is nothing to count down to yet).
+    /// That is the invariant E7.S2 pinned and this story had to keep while adding a second start
+    /// site.</para>
+    /// </summary>
+    [Fact]
+    public void A_window_that_has_not_warmed_the_gate_state_says_it_is_checking()
+    {
+        using var _ = new TempSettings("""{ "SettingsVersion": 3 }""");
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+
+            Assert.Equal("○ checking…", window.WriteChip.Text);
+            Assert.Equal("○ checking…", window.ReadChip.Text);
+            Assert.False(window.CountdownRunning,
+                         "a window that has not painted yet must not be running a countdown (I10)");
+        });
+    }
+
+    /// <summary>
+    /// <b>The repaint guard, on the chip</b> (AC 3 of E7.S2, hint 7). At 1 Hz above the ninety-second
+    /// band the rendered string changes once a minute, and on the other fifty-nine ticks this method
+    /// must assign NOTHING — not the text, and not the foreground either, because a resource
+    /// reference re-applied every second is the same cost wearing a different name.
+    ///
+    /// <para>Asserted through <c>ReadLocalValue</c> and not by counting changes: WPF drops a
+    /// dependency-property change whose value is equal, so a guardless implementation would raise
+    /// nothing either and the two would be indistinguishable. A local value is set by an assignment
+    /// and by nothing else — which makes <c>ClearValue</c> a tripwire only a real write can trip.
+    /// (Mutation-verified: deleting the <c>if</c> around <c>SetResourceReference</c> fails this.)</para>
+    /// </summary>
+    [Fact]
+    public void The_chip_is_not_repainted_when_the_rendered_string_has_not_changed()
+    {
+        using var _ = new TempSettings("""{ "SettingsVersion": 3 }""");
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+            var states = EveryState().ToList();
+
+            window.PaintEngineChip(states[0], "tooltip");
+            Assert.NotEqual(DependencyProperty.UnsetValue,
+                            window.WriteChip.ReadLocalValue(TextBlock.ForegroundProperty));
+
+            // The tripwire: only PaintEngineChip writes this back.
+            window.WriteChip.ClearValue(TextBlock.ForegroundProperty);
+            window.ReadChip.ClearValue(TextBlock.ForegroundProperty);
+
+            // The same second, re-rendered — fifty-nine of every sixty ticks above 90 s.
+            window.PaintEngineChip(states[0], "tooltip");
+            Assert.Equal(DependencyProperty.UnsetValue,
+                         window.WriteChip.ReadLocalValue(TextBlock.ForegroundProperty));
+            Assert.Equal(DependencyProperty.UnsetValue,
+                         window.ReadChip.ReadLocalValue(TextBlock.ForegroundProperty));
+            Assert.Equal(states[0].Label, window.WriteChip.Text);
+
+            // …and a state that really did change goes through, on both surfaces, in full.
+            window.PaintEngineChip(states[5], "tooltip");
+            Assert.Equal(states[5].Label, window.WriteChip.Text);
+            Assert.Equal(states[5].Label, window.ReadChip.Text);
+            Assert.NotEqual(DependencyProperty.UnsetValue,
+                            window.WriteChip.ReadLocalValue(TextBlock.ForegroundProperty));
+            Assert.NotEqual(DependencyProperty.UnsetValue,
+                            window.ReadChip.ReadLocalValue(TextBlock.ForegroundProperty));
+        });
+    }
+
+    /// <summary>§2.1's eight states as eight chips, built through the real pure function so this
+    /// file cannot drift from <c>ProviderChipTests</c>' expectations — that file owns WHAT each
+    /// state says; this one owns whether it renders.</summary>
+    private static IEnumerable<EngineChip> EveryState()
+    {
+        var now = new DateTimeOffset(2026, 9, 7, 12, 0, 0, TimeSpan.Zero);
+        var free = new[] { ProviderIds.GoogleDict, ProviderIds.GoogleGtx };
+
+        EngineStatus Of(Dictionary<string, GateSnapshot> gates, string[] configured,
+                        ChainTranslator.Outcome? outcome)
+            => EngineStatus.Of(free, gates, configured, outcome, stateKnown: true, now);
+
+        GateSnapshot Blocked(int seconds, TranslationErrorKind kind)
+            => new(GateState.Open, seconds < 0 ? DateTimeOffset.MaxValue
+                                               : now + TimeSpan.FromSeconds(seconds), 1, kind);
+
+        ChainTranslator.Outcome Answered(string id, params string[] skipped)
+            => new(id, skipped.Select(s => (ProviderId: s, Reason: "Paused")).ToList(), null, null);
+
+        var none = new Dictionary<string, GateSnapshot>(StringComparer.Ordinal);
+        var keys = new[] { ProviderIds.GoogleDict, ProviderIds.GoogleGtx,
+                           ProviderIds.DeepL, ProviderIds.Azure };
+
+        yield return MainWindow.ChipFor(Of(none, free, Answered(ProviderIds.GoogleDict)));   // S1
+        yield return MainWindow.ChipFor(Of(none, free,
+            Answered(ProviderIds.GoogleGtx, ProviderIds.GoogleDict)));                        // S2
+        yield return MainWindow.ChipFor(Of(
+            new(StringComparer.Ordinal)
+            { [ProviderIds.GoogleDict] = Blocked(58, TranslationErrorKind.RateLimited) },
+            free, Answered(ProviderIds.GoogleGtx, ProviderIds.GoogleDict)));                  // S3
+        yield return MainWindow.ChipFor(EngineStatus.Of(
+            new[] { ProviderIds.GoogleDict, ProviderIds.Bergamot }, none,
+            new[] { ProviderIds.GoogleDict, ProviderIds.Bergamot },
+            Answered(ProviderIds.Bergamot, ProviderIds.GoogleDict), true, now));              // S4
+        yield return MainWindow.ChipFor(Of(
+            new(StringComparer.Ordinal)
+            {
+                [ProviderIds.GoogleDict] = Blocked(200, TranslationErrorKind.RateLimited),
+                [ProviderIds.GoogleGtx] = Blocked(260, TranslationErrorKind.Blocked),
+            }, free, null));                                                                   // S5
+        yield return MainWindow.ChipFor(Of(
+            new(StringComparer.Ordinal)
+            {
+                [ProviderIds.GoogleDict] = Blocked(30, TranslationErrorKind.Network),
+                [ProviderIds.GoogleGtx] = Blocked(30, TranslationErrorKind.Network),
+            }, free, null));                                                                   // S6
+        yield return MainWindow.ChipFor(Of(
+            new(StringComparer.Ordinal)
+            { [ProviderIds.DeepL] = Blocked(-1, TranslationErrorKind.AuthFailed) },
+            keys, Answered(ProviderIds.GoogleDict)));                                          // S7
+        yield return MainWindow.ChipFor(Of(
+            new(StringComparer.Ordinal)
+            { [ProviderIds.Azure] = Blocked(3600, TranslationErrorKind.QuotaExhausted) },
+            keys, Answered(ProviderIds.GoogleDict, ProviderIds.Azure)));                       // S8
+    }
 
     // Render one DataTemplate against a real item via a ContentControl (which applies its template
     // synchronously during Measure — unlike an ItemsControl, whose container generation is deferred

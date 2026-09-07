@@ -301,6 +301,92 @@ internal static class TranslationChains
         ProviderGates.ClearAuthBlock(providerId);
     }
 
+    // =============================================================================================
+    //  What the status chip reads — E7.S3, rulings E6-a / R-2 / R-3 / OQ-c
+    // =============================================================================================
+
+    /// <summary>
+    /// <b>Ruling E6-a, and the whole of it.</b> Read <c>provider-state.json</c> now, so a pause the
+    /// user is already inside reaches the chip about a second after the window rather than after
+    /// their first translation. <c>TP-START-04</c>'s "at first paint" becomes "within about a
+    /// second of it", which is the closest an honest implementation gets.
+    ///
+    /// <para><b>Called from <c>OnWindowLoaded</c>, on a pool thread, AFTER first paint</b> — never
+    /// from the constructor, never from <c>ApplySettings</c>. That ordering is <b>I10</b> and it is
+    /// not negotiable: the file is what P1 protects the first paint from. This method does not
+    /// enforce it (a method cannot), the caller does, and <c>StartupSettingsTests</c> pins the
+    /// caller.</para>
+    ///
+    /// <para><b>Why it is a line of this class</b> and not of the code-behind: exactly the reason
+    /// <see cref="OnKeySaved"/> is (ruling E3-c). <c>ProviderStateStoreTests.No_startup_path_mentions_ProviderGates</c>
+    /// asserts, as an exact-equality assert on a ONE-element array, that <c>ProviderGates.Flush();</c>
+    /// is the only reference to the registry outside <c>Services/</c> — and E7.S2's own review
+    /// recorded that <c>ProviderGates.EnsureLoaded</c>'s comment rejects "warming it from
+    /// <c>OnWindowLoaded</c>" precisely because that would put the registry on a startup path.
+    /// E6-a routes AROUND that comment rather than overruling it: the code-behind names this class,
+    /// this class names the registry, and the allow-list stays one line long.</para>
+    ///
+    /// <para><b>Exception-safe by contract.</b> <c>ProviderStateStore.Load</c> never throws and
+    /// answers empty on any failure, so there is nothing here to catch — but a status warm-up may
+    /// not be able to fail a launch, so the guard is written rather than assumed. A failed load
+    /// simply leaves every gate unseeded, which is what the app did before E2.S4.</para>
+    /// </summary>
+    /// <param name="readChain">The chain whose tiers are warmed — the one the code-behind already
+    /// holds. It asks the CHAIN and not the registry for the same reason every other line of this
+    /// section does; <see cref="ChainTranslator.EnsureStateLoaded"/> then walks its own gates
+    /// through the seam E5.S1 added for <see cref="ChainTranslator.PauseNow"/>. The file is read
+    /// whole, so the tiers this chain does not have (the user's keys) are seeded with it and the
+    /// tooltip's other rows are honest too.</param>
+    internal static void EnsureGateStateLoaded(ChainTranslator readChain)
+    {
+        ArgumentNullException.ThrowIfNull(readChain);
+        try { readChain.EnsureStateLoaded(); }
+        catch (Exception ex) { Logging.Warn("gate state warm-up failed: " + ex.Message); }
+    }
+
+    /// <summary>
+    /// <b>The chip's whole picture, at one instant</b> (<c>ux-mode-degrade.md</c> §2.1–§2.3). The
+    /// impure half of <see cref="Services.EngineStatus"/>: it resolves who the read tiers are, what
+    /// their gates say right now, which keyed tiers the user actually has, and who answered the last
+    /// call — then hands all of it to the pure builder, which the eight-state unit test drives with
+    /// literals instead.
+    ///
+    /// <para><b>Side-effect free</b> (ruling R-2): <see cref="ProviderGates.All"/> and
+    /// <see cref="ChainTranslator.Now"/> only, never <c>TryEnter</c> — a status read that took the
+    /// half-open probe would leave a gate half-open for a whole window with nobody to report the
+    /// result. It does not load the file either: that is <see cref="EnsureGateStateLoaded"/>'s, once,
+    /// after first paint, and until it has run the chip says "checking…" rather than claiming a
+    /// health it has not verified.</para>
+    ///
+    /// <para><b>Here and not in the code-behind</b> for the third time in this file (ruling E3-c):
+    /// <c>ProviderGates.All()</c> from <c>MainWindow</c> fails TP-START-02 by construction.</para>
+    ///
+    /// <para><b>One <c>LastOutcome</c> read</b>, into a local, handed on as a value — it is
+    /// <c>Volatile</c>-read because a second call may be in flight on a pool thread, and reading it
+    /// twice in one repaint can mix two calls' accounts.</para>
+    /// </summary>
+    /// <param name="settings">Which keyed tiers the user has. The SAME predicates the two builders
+    /// apply, so a tooltip cannot claim a key the chain would refuse to build a tier from.</param>
+    /// <param name="readChain">The chain the code-behind already holds (<c>_readChain</c>) — its
+    /// tier order, its gates' clock and its last outcome.</param>
+    /// <param name="stateKnown">Whether <see cref="EnsureGateStateLoaded"/> has run (ruling E6-a).</param>
+    internal static EngineStatus EngineStatus(AppSettings settings, ChainTranslator readChain,
+        bool stateKnown)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(readChain);
+
+        // Read tiers first, then the keyed tiers the WRITE chain would really build — the union is
+        // "engines this user has". Azure can be in both; a set, not a list, so it is asked once.
+        var configured = new HashSet<string>(readChain.TierIds, StringComparer.Ordinal);
+        if ((settings.DeepLApiKey ?? "").Trim().Length > 0) configured.Add(ProviderIds.DeepL);
+        if (IsSendableAzureCredential((settings.AzureApiKey ?? "").Trim(),
+                                      (settings.AzureRegion ?? "").Trim())) configured.Add(ProviderIds.Azure);
+
+        return Services.EngineStatus.Of(readChain.TierIds, ProviderGates.All(), configured,
+            readChain.LastOutcome, stateKnown, readChain.Now());
+    }
+
     /// <summary>
     /// Is this pair one <see cref="BuildWrite"/> would actually build a tier from? One predicate,
     /// so the builder and the About tab's Save button cannot drift: the UI must refuse exactly what

@@ -359,6 +359,87 @@ public class CountdownTests
         });
     }
 
+    // ---- AC 1, widened by E7.S3: the chip is the tick's second consumer --------------------------
+
+    /// <summary>
+    /// <b>The stop rule E7.S2's code note asked E7.S3 to widen.</b> It used to be the single
+    /// condition <c>!AllPaused</c>, with a <c>_liveCts</c> guard that returned WITHOUT stopping —
+    /// safe only while <c>StopLive</c> was the sole writer of <c>_liveCts</c>. The chip is the
+    /// second start site and it needs this tick with LIVE OFF: a provider inside a window keeps
+    /// counting down whether or not anything is reading the screen.
+    ///
+    /// <para>So the tick now stops when BOTH surfaces say there is nothing left to paint, and this
+    /// window has no LIVE loop at all — which is exactly the state the old rule could not leave.</para>
+    /// </summary>
+    [Fact]
+    public void The_tick_keeps_running_for_the_chip_alone_and_stops_when_the_chip_is_done()
+    {
+        using var temp = new TempSettings("""{ "SettingsVersion": 3 }""");
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();          // no loop: _liveCts is null
+            Assert.False(window.CountdownRunning);
+
+            window.EnsureCountdownRunning(Paused(120));
+            Assert.True(window.CountdownRunning, "a pause starts it");
+
+            // The chain comes back for LIVE's purposes but ONE provider is still inside its window,
+            // which is the chip's whole subject — and this window has no LIVE loop at all. Before
+            // this story the tick would have stopped here (the old rule was `!AllPaused` alone) and
+            // the chip would have frozen on a stale second.
+            window.CountdownTick(Healthy(), chipNeedsIt: true);
+            Assert.True(window.CountdownRunning,
+                        "the chip's own countdown keeps the tick alive with LIVE off");
+
+            // …and the pause ends. Nothing paused on either surface ⇒ the tick stops itself.
+            window.CountdownTick(Healthy(), chipNeedsIt: false);
+            Assert.False(window.CountdownRunning, "nothing left to paint ⇒ the tick stops (AC 1)");
+        });
+    }
+
+    /// <summary>
+    /// The other three corners of the same rule, so neither half can be deleted without a failure:
+    /// LIVE paused alone keeps it, the chip alone keeps it, both keep it, and only both-quiet stops
+    /// it. A <c>&amp;&amp;</c> that became a <c>||</c> moves exactly one of these.
+    /// </summary>
+    [Theory]
+    [InlineData(true, true, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(false, false, false)]
+    public void The_tick_stops_only_when_both_the_chip_and_live_have_nothing_left(
+        bool chipNeedsIt, bool livePaused, bool stillRunning)
+    {
+        using var temp = new TempSettings("""{ "SettingsVersion": 3 }""");
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+            window.EnsureCountdownRunning(Paused(120));
+            window.CountdownTick(livePaused ? Paused(119) : Healthy(), chipNeedsIt);
+            Assert.Equal(stillRunning, window.CountdownRunning);
+        });
+    }
+
+    /// <summary>
+    /// <b>The chip is repainted by the tick, and by the tick alone among the things that move.</b>
+    /// The one-argument form the <c>DispatcherTimer</c> actually calls is a forwarder whose argument
+    /// IS the repaint — so a refactor that dropped the chip from the tick would leave a countdown
+    /// stepping on a status line while the chip beside it showed a stale second.
+    /// </summary>
+    [Fact]
+    public void The_timers_own_tick_repaints_the_chip_before_it_decides_anything()
+    {
+        var main = Code(File.ReadAllText(RepoFile("MainWindow.xaml.cs")));
+
+        Assert.Contains("internal void CountdownTick(ChainPause pause) => CountdownTick(pause, RefreshEngineChip());",
+                        main, StringComparison.Ordinal);
+        // …and the timer is still wired to that one-argument form.
+        Assert.Contains("_countdownTimer.Tick += (_, _) => CountdownTick(_readChain.PauseNow());",
+                        main, StringComparison.Ordinal);
+    }
+
     // ---- §3.2: the two paused lines the countdown feeds ------------------------------------------
 
     /// <summary>
@@ -453,8 +534,11 @@ public class CountdownTests
     public void The_tick_paints_one_status_line_per_window_and_no_row()
     {
         var main = Code(File.ReadAllText(RepoFile("MainWindow.xaml.cs")));
-        var body = BracedBlock(main, main.IndexOf("internal void CountdownTick(ChainPause pause)",
-                                                 StringComparison.Ordinal));
+        // The TWO-argument overload: E7.S3 split the tick so AC 1's stop rule could be driven
+        // without a paused registry, and the one-argument form is now a forwarder that evaluates
+        // the chip's answer. This is the body that paints.
+        var body = BracedBlock(main, main.IndexOf(
+            "internal void CountdownTick(ChainPause pause, bool chipNeedsIt)", StringComparison.Ordinal));
 
         Assert.Contains("SetIfChanged(ScreenReadStatus, LivePausedStatus(", body, StringComparison.Ordinal);
         Assert.Contains("SetStatusIfChanged(LivePausedOverlayStatus(", body, StringComparison.Ordinal);

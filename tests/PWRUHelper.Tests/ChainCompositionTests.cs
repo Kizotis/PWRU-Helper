@@ -741,6 +741,131 @@ public class ChainCompositionTests : GatesTestBase
     }
 
     // =============================================================================================
+    //  Ruling E6-a — the gate state, warmed AFTER first paint (E7.S3)
+    // =============================================================================================
+
+    /// <summary>
+    /// <b>TP-START-04, as far as I10 allows it to go.</b> The chip needs a saved pause to be visible
+    /// about a second after the window instead of after the user's first translation — and the file
+    /// may not be read before first paint. <c>EnsureGateStateLoaded</c> is the settlement: it is the
+    /// same read <c>TryEnter</c> would have done, asked for deliberately, from a caller that runs
+    /// after the window is up.
+    ///
+    /// <para>The assertion is the whole of it: before the call the gate carries nothing (that is
+    /// <c>Building_the_chains_touches_no_gate_state_file</c>, one case up), and after it the window
+    /// standing on disk is on the gate the chip polls.</para>
+    /// </summary>
+    [Fact]
+    public void TP_START_04_the_warm_up_seeds_the_gates_from_the_file_after_first_paint()
+    {
+        using var temp = new TempGateState();
+        var until = ProviderGates.Clock() + TimeSpan.FromMinutes(12);
+        File.WriteAllText(temp.Path, $$"""
+            { "version": 1, "providers": { "google-dict": {
+                "blockedUntil": "{{until:o}}",
+                "keyBlockedUntil": null,
+                "strikes": 1,
+                "lastKind": "RateLimited",
+                "lastAt": null,
+                "cleanSince": null } } }
+            """);
+
+        var settings = new AppSettings();
+        TranslationChains.BuildRead(settings, RequestPriority.Background, out var chain);
+        Assert.Null(ProviderGates.Snapshot(ProviderIds.GoogleDict)?.BlockedUntil);
+
+        TranslationChains.EnsureGateStateLoaded(chain);
+
+        Assert.Equal(until, ProviderGates.Snapshot(ProviderIds.GoogleDict)?.BlockedUntil);
+        // …and the chip's own view of it, which is what the story is actually about.
+        var status = TranslationChains.EngineStatus(settings, chain, stateKnown: true);
+        Assert.Equal(EngineState.Paused, status.For(ProviderIds.GoogleDict)!.State);
+        Assert.True(status.NeedsTick);
+
+        // Idempotent: it is a warm-up, and a second caller (the first TryEnter, moments later) must
+        // not re-read the file or re-seed a gate that has since recorded something of its own.
+        TranslationChains.EnsureGateStateLoaded(chain);
+        Assert.Equal(until, ProviderGates.Snapshot(ProviderIds.GoogleDict)?.BlockedUntil);
+    }
+
+    /// <summary>
+    /// A status warm-up may not be able to fail a launch. The store answers empty on any failure by
+    /// contract, so this drives the one shape that reaches the file system differently — a path that
+    /// is a DIRECTORY — and asserts the call is a no-op rather than a throw on the way to the first
+    /// paint the user is waiting for.
+    /// </summary>
+    [Fact]
+    public void The_warm_up_never_throws_at_a_launch()
+    {
+        using var temp = new TempGateState();
+        Directory.CreateDirectory(temp.Path);      // a "file" nothing can read
+
+        var settings = new AppSettings();
+        TranslationChains.BuildRead(settings, RequestPriority.Background, out var chain);
+        TranslationChains.EnsureGateStateLoaded(chain);
+
+        Assert.False(TranslationChains.EngineStatus(settings, chain, stateKnown: true)
+                                      .AllReadTiersPaused);
+    }
+
+    /// <summary>
+    /// <b>Ruling E6-a's other half, and the one a refactor breaks silently: WHERE it is called
+    /// from.</b> A warm-up that drifted into the constructor or into <c>ApplySettings</c> would
+    /// still make every behavioural test above pass, and would put a file read in front of the first
+    /// paint — which is what I10 and P1 exist to stop, and what TP-START-01 measures.
+    ///
+    /// <para>So the scan is positional: <c>OnWindowLoaded</c> only, on a pool thread
+    /// (<c>Task.Run</c>), and AFTER the update check — i.e. behind every existing await, so the
+    /// window has been on screen for as long as this handler has been running. The registry itself
+    /// is still never named outside <c>Services/</c>; that half is
+    /// <c>ProviderStateStoreTests.No_startup_path_mentions_ProviderGates</c>, untouched.</para>
+    /// </summary>
+    [Fact]
+    public void The_warm_up_is_called_from_OnWindowLoaded_on_the_pool_and_from_nowhere_else()
+    {
+        var root = RepoRoot();
+        var main = Code(File.ReadAllText(Path.Combine(root, "MainWindow.xaml.cs")));
+
+        var loaded = BracedBlock(main, main.IndexOf("private async void OnWindowLoaded(",
+                                                   StringComparison.Ordinal));
+        Assert.Contains("await CheckForUpdatesAsync();", loaded, StringComparison.Ordinal);
+
+        int warm = loaded.IndexOf("Task.Run(() => TranslationChains.EnsureGateStateLoaded(chain))",
+                                  StringComparison.Ordinal);
+        Assert.True(warm > loaded.IndexOf("await CheckForUpdatesAsync();", StringComparison.Ordinal),
+            "E6-a: the gate state is warmed AFTER first paint, behind every existing await");
+
+        // Nowhere else in the app, and the constructor least of all.
+        var callers = ProductionSources(root)
+            .SelectMany(f => Code(File.ReadAllText(f)).Split('\n')
+                .Where(l => l.Contains("EnsureGateStateLoaded", StringComparison.Ordinal))
+                .Select(l => Path.GetFileName(f) + ": " + l.Trim()))
+            .Where(l => !l.StartsWith("TranslationChains.cs", StringComparison.Ordinal))
+            .ToList();
+        Assert.Equal(new[]
+        {
+            "MainWindow.xaml.cs: try { await Task.Run(() => TranslationChains.EnsureGateStateLoaded(chain)); }",
+        }, callers);
+    }
+
+    /// <summary>Bound a method body by matching braces from its signature — the shape the other
+    /// source scans in this suite use, so a needle cannot pass because it landed in a later
+    /// method.</summary>
+    private static string BracedBlock(string code, int fromIndex)
+    {
+        Assert.True(fromIndex >= 0, "the scanned method is not where this test expects it");
+        int open = code.IndexOf('{', fromIndex);
+        Assert.True(open > 0, "no body found for the scanned method");
+        int depth = 0;
+        for (int i = open; i < code.Length; i++)
+        {
+            if (code[i] == '{') depth++;
+            else if (code[i] == '}' && --depth == 0) return code[open..(i + 1)];
+        }
+        return code[open..];
+    }
+
+    // =============================================================================================
     //  The wiring in the code-behind
     // =============================================================================================
 

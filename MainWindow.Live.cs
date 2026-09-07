@@ -202,6 +202,13 @@ public partial class MainWindow
         // must not keep showing a status that says something is still coming). E7.S2.
         StopCountdown();
         SetScreenStatus("Live stopped.");
+        // …and then the chip is asked whether IT still needs the tick (E7.S3). Stopping LIVE ends
+        // the loop, not the pause: a provider inside a window keeps counting down whether or not
+        // anything is reading the screen, and the chip is the surface that says so. This is exactly
+        // the second start site E7.S2's code note warned about, and the tick's stop rule was widened
+        // for it — the timer above still goes off first, so "Live stopped." is never repainted over,
+        // and it comes back only if there is something left to count.
+        UpdateEngineChip();
     }
 
     /// <summary>Set the screen-reading status on the main window AND (if shown) the overlay, so the
@@ -211,7 +218,12 @@ public partial class MainWindow
     private void SetScreenStatus(string msg)
     {
         ScreenReadStatus.Text = msg;
-        _overlay?.SetStatus(msg);
+        // The overlay's third placement of the chip (E7.S3 AC 1): it has no TextBlock of its own
+        // there — the window is 360 px wide — so MainWindow composes "{chip}  {status}" and the
+        // overlay renders it (I2). OverlayLine returns the status untouched when the chain is
+        // healthy ("shown only when not healthy") and when the chip is carrying a countdown, which
+        // is E7.S2's AC 4: one line, one clock.
+        _overlay?.SetStatus(OverlayLine(msg));
     }
 
     private void SetLiveUi(bool on)
@@ -224,6 +236,10 @@ public partial class MainWindow
         LiveStatus.Text = on
             ? "🔴 Live is running — re-reading the area and re-translating whenever the text changes. Press Stop to end."
             : "Live mode keeps watching the chosen area and re-translates automatically whenever the text changes, until you press Stop.";
+        // One of the events the chip is repainted on instead of on a timer (E7.S3 T5): starting or
+        // stopping LIVE changes which window owns the clock, and therefore whether the chip shows
+        // one (E7.S2's AC 4). Polling a breaker every 250 ms is exactly the cost this epic removes.
+        UpdateEngineChip();
     }
 
     private async Task LiveLoop(System.Drawing.Rectangle rect, CancellationToken ct)

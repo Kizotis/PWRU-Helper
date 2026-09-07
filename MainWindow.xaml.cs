@@ -207,6 +207,13 @@ public partial class MainWindow : Window
         // once the window is already on screen. The Screen OCR tab it writes to is not the one you
         // land on, so nobody sees the difference — except in the time to first paint.
         ApplySettings();
+        // The chip's first paint (E7.S3). It is a REPAINT and never a start: RefreshEngineChip
+        // reads snapshots and never a file — ProviderGates.All() enumerates the registry the three
+        // chains above have just populated and asks each gate for its immutable record — so nothing
+        // here reads provider-state.json (I10). What it renders is therefore "checking…", because
+        // _gateStateKnown is false until OnWindowLoaded's warm-up lands (ruling E6-a); it is written
+        // now rather than left blank so the chip never appears out of nothing a second later.
+        RefreshEngineChip();
         // Track "my language" only from here on, so the init-time combo changes above
         // (and the translator's auto-flip to Russian) don't overwrite it.
         FromCombo.SelectionChanged += FromCombo_SelectionChanged;
@@ -253,6 +260,32 @@ public partial class MainWindow : Window
         // Run the update check once the window is up, so the dialog has an owner and
         // appears in front of our always-on-top window instead of behind it.
         await CheckForUpdatesAsync();
+
+        // ---- Ruling E6-a: the gate state, read AFTER first paint, on a pool thread -------------
+        //
+        // TP-START-04 wants the chip to show a saved pause "at first paint"; I10 forbids reading
+        // provider-state.json before it. E6-a is the settlement, and this is the whole of it: the
+        // file is read here — last in this handler, so it is behind every await above and therefore
+        // long after the window is on screen — and the chip reads "checking…" until it lands.
+        //
+        // It names TranslationChains and not ProviderGates (ruling E3-c / TP-START-02), it runs on
+        // the pool because a sub-kilobyte synchronous read still has no business on the dispatcher,
+        // and it is guarded because a status warm-up may not be able to fail a launch. The flag is
+        // set whatever happens: a chip stuck on "checking…" for ever would be a worse lie than a
+        // chip reporting an unseeded gate as ready.
+        //
+        // The chain is captured into a local first: the lambda runs on the pool, and _readChain is
+        // reassigned on the dispatcher by a key save (RebuildReadChains). Either instance would be
+        // correct — both resolve the same process-global gates (I9) — and reading the field once
+        // here says so deliberately instead of by luck.
+        var chain = _readChain;
+        try { await Task.Run(() => TranslationChains.EnsureGateStateLoaded(chain)); }
+        catch (Exception ex) { Logging.Warn("gate state warm-up did not finish: " + ex.Message); }
+        _gateStateKnown = true;
+        // …and the first paint of the chip that is worth anything. UpdateEngineChip, not
+        // RefreshEngineChip: a pause restored from disk has a countdown to step, and this is the one
+        // start site that exists before any request has been made.
+        UpdateEngineChip();
     }
 
     // ============================================================
@@ -633,26 +666,319 @@ public partial class MainWindow : Window
     /// <para>Internal so the tests can drive it with a <c>ChainPause</c> of their own: nothing in
     /// this story may sleep (CI-3), and nothing in it may reach the process-global gates.</para>
     ///
-    /// <para><b>E7.S3, read this before you add the chip.</b> There is exactly ONE stop condition
-    /// here — <c>!AllPaused</c> — and the <c>_liveCts</c> guard below returns WITHOUT stopping,
-    /// because today the only thing that clears <c>_liveCts</c> is <c>StopLive</c> and it stops the
-    /// countdown itself. The moment a second site starts this timer while LIVE is off (the chip is
-    /// exactly that site) the guard becomes a 1 Hz poll that paints nothing and cannot stop, for as
-    /// long as the pause lasts — which is NFR7's "never runs idle" broken by a caller rather than by
-    /// this method. Widen the condition deliberately when you add that caller: the tick must stop
-    /// when it has NOTHING left to paint, not when LIVE is off. It is not widened here because the
-    /// only headless way to pin AC 1's lifetime is a window with no loop, so a
-    /// <c>_liveCts</c>-shaped stop would need a test seam this story has no use for. Flagged for
-    /// Winston in the review.</para></summary>
-    internal void CountdownTick(ChainPause pause)
+    /// <para><b>The stop rule was widened by E7.S3, exactly as E7.S2's note asked.</b> It used to be
+    /// the single condition <c>!AllPaused</c>, with the <c>_liveCts</c> guard returning WITHOUT
+    /// stopping — safe only while <c>StopLive</c> was the sole writer of <c>_liveCts</c> and stopped
+    /// the countdown itself. The chip is the second start site, and it can need this tick with LIVE
+    /// off: a provider counting down does not care whether a loop is running. So the tick now asks
+    /// TWO questions and stops when BOTH say there is nothing left to paint — the chip's own
+    /// <c>NeedsTick</c> and LIVE's <c>AllPaused</c> — and the <c>_liveCts</c> guard is no longer
+    /// reached before that decision.</para></summary>
+    /// <remarks>The chip is repainted FIRST and unconditionally — it is the surface that can need
+    /// this tick with no LIVE loop, and it goes through its own guard, so a tick that changes
+    /// nothing costs nothing. Its answer is then the first half of the stop rule.</remarks>
+    internal void CountdownTick(ChainPause pause) => CountdownTick(pause, RefreshEngineChip());
+
+    /// <summary>The tick with the chip's answer handed in — the seam AC 1's lifetime is pinned
+    /// through. A window in a headless test has no paused registry behind it, and giving it one to
+    /// prove a STOP RULE would mean driving the process-global gates from the WPF collection, which
+    /// is the cross-collection hazard <c>GatesCollection</c> exists to prevent. The one-argument
+    /// form above is what the timer calls; this one is the same method with its first line already
+    /// evaluated.</summary>
+    internal void CountdownTick(ChainPause pause, bool chipNeedsIt)
     {
-        if (!pause.AllPaused) { _countdownTimer.Stop(); return; }
-        if (_liveCts == null) return;   // see the E7.S3 note above: returns, does NOT stop
+        // AC 1 / NFR7 — "never runs idle", now as two questions rather than one. The chip's half
+        // deliberately excludes the AuthFailed sentinel (DateTimeOffset.MaxValue): that window
+        // counts down to nothing, for ever, and its exit is a key save rather than a second.
+        if (!chipNeedsIt && !pause.AllPaused) { _countdownTimer.Stop(); return; }
+
+        // LIVE's status lines are not this tick's to paint when no loop owns them (E7.S2's
+        // deviation 3: read-once writes a past-tense summary on the very same TextBlock). Unlike
+        // before, nothing is skipped by returning here — the stop decision has already been made
+        // above, and the chip has already been repainted.
+        if (_liveCts == null || !pause.AllPaused) return;
 
         int? left = LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now);
         SetIfChanged(ScreenReadStatus, LivePausedStatus(left));
         _overlay?.SetStatusIfChanged(LivePausedOverlayStatus(left));
     }
+
+    // ============================================================
+    //  THE PROVIDER CHIP (ux-mode-degrade §2.1-§2.3, E7.S3)
+    // ============================================================
+    //
+    // One TextBlock in three places — the write path, the read path, and a prefix of the compact
+    // overlay's single status line — showing which engine is serving the player and, when one is
+    // paused, how long for. It is the ONLY always-on indicator in the app (§2.2's first reading
+    // rule), which is what lets every status line go quiet and say something only when the state
+    // changes.
+    //
+    // The state itself is Services/' (TranslationChains.EngineStatus over ProviderGate.Snapshot()
+    // and ChainTranslator.LastOutcome, rulings R-2 / R-3); this file turns it into a glyph, a word,
+    // a Theme brush key and a countdown — I2, and the reason ChipFor below is a pure static that a
+    // unit test drives with eight literals.
+
+    /// <summary>Ruling <b>E6-a</b>: has <c>provider-state.json</c> been read yet? False until the
+    /// warm-up <see cref="OnWindowLoaded"/> starts on a pool thread — AFTER first paint — has
+    /// finished, and the chip says "checking…" for that moment rather than claiming a health it has
+    /// not verified. A per-window field and not a registry read on purpose: it is this window's
+    /// account of its own startup, so it is deterministic in a test and cannot be flipped by
+    /// whatever else the process has already done.</summary>
+    private bool _gateStateKnown;
+
+    /// <summary>Whether the state the chip last rendered was a degraded one — §3.5's notice is shown
+    /// "once per switch", so something has to remember the switch. Without it "Back on Google."
+    /// would be written at the first successful translation of every session, which is the opposite
+    /// of a notice.</summary>
+    private bool _chipWasDegraded;
+
+    /// <summary>The three glyphs §2.3 allows, and no fourth (§6: no new fonts, images or colours).
+    /// <c>●</c> serving · <c>○</c> paused or not sending · <c>⚠</c> you may need to act.</summary>
+    private const string ChipServingGlyph = "●", ChipQuietGlyph = "○", ChipWarnGlyph = "⚠";
+
+    /// <summary>
+    /// <b>§2.1's eight states, as a pure function.</b> Values in, strings out: an
+    /// <see cref="EngineStatus"/> (itself pure over gate snapshots) and one flag, giving a glyph, a
+    /// word and a <c>Theme.xaml</c> resource KEY.
+    ///
+    /// <para><b>A key and not a <c>Brush</c></b> (UX-DR18): the two existing status writes already
+    /// use <c>SetResourceReference</c>, so the palette stays in one file and a chip cannot introduce
+    /// a colour. It also keeps this function UI-free, which is what makes the eight-state test L1 —
+    /// a function that read <c>_readChain</c> and wrote <c>WriteChip.Text</c> could not be tested
+    /// without a window.</para>
+    ///
+    /// <para><b>The order of the arms is the specification.</b> S6 and S5 first because a chain with
+    /// nothing left to try outranks any single engine's news; then the two that ask the player to
+    /// act on a KEY (S7, S8), because an Azure quota is a better answer than "Azure paused"; then
+    /// S3, S4, S2 and finally S1. Reordering them changes what a player is told, not just how.</para>
+    /// </summary>
+    /// <param name="statusLineOwnsTheClock">E7.S2's AC 4, decided there and obeyed here: at most ONE
+    /// countdown per window. While LIVE's own paused status line is stepping a clock on this window,
+    /// the chip drops its number and keeps its glyph and its word — which is where NFR11 says the
+    /// information lives anyway.</param>
+    internal static EngineChip ChipFor(EngineStatus status, bool statusLineOwnsTheClock = false)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+
+        // Ruling E6-a's first second. Not a state of any engine, so it takes no name and asks for
+        // no tick: "checking" ends when a task finishes, not when a second passes.
+        if (!status.StateKnown)
+            return new EngineChip(ChipQuietGlyph, UserMessages.EngineChipChecking(), "TextMutedBrush");
+
+        var readLines = status.ReadTiers.Select(status.For).OfType<EngineLine>().ToList();
+
+        if (status.AllReadTiersPaused)
+        {
+            // S6 — ruling GAP-3: the full pause is universal, so this is S5 with a cause the player
+            // can actually do something about, and it is worth saying instead of "all paused".
+            if (readLines.Count > 0 && readLines.All(l => l.Kind == TranslationErrorKind.Network))
+                return new EngineChip(ChipWarnGlyph, UserMessages.EngineChipNoInternet(), "AccentBrush");
+
+            // S5
+            var all = statusLineOwnsTheClock ? null : Countdown(status.SoonestReadRetry, status.Now);
+            return new EngineChip(ChipQuietGlyph,
+                UserMessages.EngineChipAllPaused() + (all is null ? "" : " " + all),
+                "GoldBrush", HasClock: all is not null);
+        }
+
+        // S7 / S8 — the two the user's OWN key can be in. AuthFailed has no honest countdown (the
+        // MaxValue sentinel), so S7 says the state and stops; S8 names who is serving instead, which
+        // is the reassurance half of "your quota ran out".
+        if (KeyedPause(status, TranslationErrorKind.AuthFailed) is { } refused)
+            return new EngineChip(ChipWarnGlyph,
+                UserMessages.EngineChipKeyRefused(refused.ProviderId), "AccentBrush");
+
+        if (KeyedPause(status, TranslationErrorKind.QuotaExhausted) is { } spent)
+            return new EngineChip(ChipServingGlyph,
+                UserMessages.EngineChipQuotaOut(Serving(status, readLines), spent.ProviderId),
+                "GoldBrush");
+
+        // S3 — the preferred engine is inside a window and something below it still serves. Ruling
+        // E3-a decided what "paused" means; EngineStatus applied it.
+        if (readLines.FirstOrDefault(l => l.State == EngineState.Paused) is { } paused)
+        {
+            var t = statusLineOwnsTheClock ? null : Countdown(paused.PausedUntil, status.Now);
+            return new EngineChip(ChipQuietGlyph,
+                UserMessages.EngineChipPaused(paused.ProviderId, t),
+                "TextMutedBrush", HasClock: t is not null);
+        }
+
+        var serving = Serving(status, readLines);
+
+        // S4 — the offline engine answered. E8 has not shipped, so this is unreachable today; the
+        // mapping is total over ProviderIds.All all the same, and a synthetic outcome proves it.
+        if (string.Equals(serving, ProviderIds.Bergamot, StringComparison.Ordinal))
+            return new EngineChip(ChipServingGlyph, UserMessages.EngineChipServing(serving), "TealBrush");
+
+        // S2 — a lower tier answered because a higher one was SKIPPED (ruling E3-b). Gold, because
+        // it is serving you but it is not the engine you would have got.
+        if (status.FellBack)
+            return new EngineChip(ChipServingGlyph, UserMessages.EngineChipBackup(serving), "GoldBrush");
+
+        // S1
+        return new EngineChip(ChipServingGlyph, UserMessages.EngineChipServing(serving), "TealBrush",
+            IsHealthy: true);
+    }
+
+    /// <summary>A keyed tier (the user's own DeepL or Azure) sitting in a window this gate recorded
+    /// <paramref name="kind"/> for. Only those two: a free engine has no key to refuse and no quota
+    /// of the player's to run out, so S7 and S8 are questions about a credential.</summary>
+    private static EngineLine? KeyedPause(EngineStatus status, TranslationErrorKind kind)
+    {
+        foreach (var id in new[] { ProviderIds.DeepL, ProviderIds.Azure })
+            if (status.For(id) is { State: EngineState.Paused } line && line.Kind == kind) return line;
+        return null;
+    }
+
+    /// <summary>Who the chip names as serving. <c>LastAnswered</c> first — that is the provider that
+    /// really answered (R-3), never a guess — and the first read tier that is neither paused nor off
+    /// when nothing has been translated yet, which is the honest reading of "this is who you would
+    /// get".</summary>
+    private static string? Serving(EngineStatus status, IReadOnlyList<EngineLine> readLines)
+        => status.LastAnswered
+           ?? readLines.FirstOrDefault(l => l.State is EngineState.Ready or EngineState.Answering)
+                       ?.ProviderId;
+
+    /// <summary>The chip's <c>{t}</c>: §2.4's bands, from the gates' own clock (IS-6 — the instant
+    /// came from <see cref="EngineStatus.Now"/>, never <c>DateTimeOffset.UtcNow</c>), or null when
+    /// there is nothing honest to count down to.</summary>
+    private static string? Countdown(DateTimeOffset? until, DateTimeOffset now)
+        => CountdownText(LiveTickPolicy.CountdownSeconds(until, now));
+
+    /// <summary>
+    /// <b>§2.3's tooltip</b> — the whole chain, one line per <see cref="ProviderIds.All"/> member,
+    /// in chain order, aligned. It is the only place outside the About tab that lists every tier.
+    ///
+    /// <para><b>Plain text, and that is load-bearing</b> (AC 4, and <c>project-context.md</c> says
+    /// so): assigned to <c>ToolTip</c> as a <c>string</c>, the dark <c>ToolTip</c> style in
+    /// <c>Theme.xaml</c> applies untouched. A <c>StackPanel</c>, a <c>ContentTemplate</c> or a
+    /// second <c>Style</c> here is how that style gets bypassed by accident.</para>
+    ///
+    /// <para><b>Aligned with spaces, in the composer</b> (T4) — not with a <c>Grid</c>, which would
+    /// be a visual tree inside a tooltip and the same mistake wearing a layout hat. The pad is
+    /// computed from the longest name rather than hardcoded, so a name added to
+    /// <c>ProviderNames</c> cannot silently break the column.</para>
+    ///
+    /// <para><b>No jargon and no HTTP codes</b>: the parenthetical is a
+    /// <see cref="TranslationErrorKind"/> rendered through <c>UserMessages</c>, and the ids
+    /// themselves are internals that may not appear in copy (I11).</para>
+    /// </summary>
+    internal static string EngineTooltip(EngineStatus status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+
+        int width = 0;
+        foreach (var line in status.Lines) width = Math.Max(width, line.DisplayName.Length);
+
+        var rows = new List<string>(status.Lines.Count);
+        foreach (var line in status.Lines)
+        {
+            var state = line.State switch
+            {
+                EngineState.Answering => UserMessages.EngineLineInUse(),
+                EngineState.Ready => UserMessages.EngineLineReady(),
+                EngineState.Paused => UserMessages.EngineLinePaused(Countdown(line.PausedUntil, status.Now)),
+                _ => UserMessages.EngineLineOff(line.OffReason),
+            };
+            // The parenthetical belongs to a PAUSE and to nothing else: a "ready" tier that once
+            // answered a 429 is ready, and saying why it used to be paused would be the app
+            // explaining a state it is no longer in.
+            var why = line.State == EngineState.Paused
+                ? UserMessages.EngineLineReason(line.Kind) : null;
+
+            rows.Add(line.DisplayName.PadRight(width) + "  " + state
+                     + (why is null ? "" : "   (" + why + ")"));
+        }
+        return string.Join("\n", rows);
+    }
+
+    /// <summary>
+    /// <b>The repaint</b> — the one place the three chip surfaces are written, and the answer to
+    /// "does the 1 Hz tick still have anything to do?".
+    ///
+    /// <para>Everything goes through <see cref="SetIfChanged"/>, including the foreground: at 1 Hz,
+    /// above the 90-second band, the rendered string changes once a minute and this method then
+    /// assigns nothing at all (NFR7, hint 7).</para>
+    ///
+    /// <para><c>LastOutcome</c> is read ONCE, inside <c>TranslationChains.EngineStatus</c>, into the
+    /// record this method renders: it is <c>Volatile</c>-read because a call may be in flight on a
+    /// pool thread, and reading it twice in one repaint can mix two calls' accounts.</para>
+    /// </summary>
+    internal bool RefreshEngineChip()
+    {
+        var status = TranslationChains.EngineStatus(_settings, _readChain, _gateStateKnown);
+
+        // E7.S2's AC 4: while LIVE's paused line is stepping a clock on this window, the chip does
+        // not step a second one. It is the only cross-surface fact the pure function is told.
+        var chip = ChipFor(status, statusLineOwnsTheClock: _liveCts != null && status.AllReadTiersPaused);
+        PaintEngineChip(chip, EngineTooltip(status));
+
+        // §3.5's third line, once per recovery: the chip just changed back, and the player is told
+        // why rather than left to notice. It is written AFTER the chip so the two agree, and only
+        // when a degraded state was really observed first — otherwise every session's first
+        // translation would announce a recovery from nothing.
+        if (_chipWasDegraded && chip.IsHealthy && UserMessages.BackOn(status.LastAnswered) is { } back)
+            SetIfChanged(TranslateStatus, back);
+        // "checking…" is NOT a degraded state, and the distinction is the whole notice: every
+        // session starts unchecked, so counting it would announce "Back on Google." at the first
+        // successful translation of every launch — a recovery from nothing.
+        _chipWasDegraded = status.StateKnown && !chip.IsHealthy;
+
+        return status.NeedsTick;
+    }
+
+    /// <summary>The two main-window surfaces, written from one <see cref="EngineChip"/> — the whole
+    /// of what this feature puts on a control, in one method, so <b>TP-RENDER-03</b> can drive all
+    /// eight states through the real <c>TextBlock</c>s without a chain, a gate or a request.
+    ///
+    /// <para>The foreground follows the text through the SAME guard: a resource reference re-applied
+    /// once a second is the churn hint 7 exists to remove, and one comparison for both is what stops
+    /// a cached brush field from disagreeing with the string it belongs to. The tooltip is compared
+    /// as a <c>string</c> — which is also the assertion that it IS one, and therefore that the dark
+    /// <c>ToolTip</c> style in <c>Theme.xaml</c> still applies (AC 4).</para></summary>
+    internal void PaintEngineChip(EngineChip chip, string tooltip)
+    {
+        foreach (var surface in new[] { WriteChip, ReadChip })
+        {
+            if (SetIfChanged(surface, chip.Label))
+                surface.SetResourceReference(TextBlock.ForegroundProperty, chip.BrushKey);
+            if (!string.Equals(surface.ToolTip as string, tooltip, StringComparison.Ordinal))
+                surface.ToolTip = tooltip;
+        }
+    }
+
+    /// <summary>Repaint the chip from the events that already exist — a translation finishing, LIVE
+    /// starting or stopping, a key save — and start the 1 Hz tick if the new state needs one.
+    ///
+    /// <para>The tick itself calls <see cref="RefreshEngineChip"/> directly and never this: the tick
+    /// owns the STOP decision, and a repaint that could restart the timer it is about to stop would
+    /// be a loop with no exit.</para></summary>
+    internal void UpdateEngineChip()
+    {
+        if (RefreshEngineChip() && !_countdownTimer.IsEnabled) _countdownTimer.Start();
+    }
+
+    /// <summary>The compact overlay's half of AC 1: the chip is a <b>prefix of the one status
+    /// line</b>, "shown only when not healthy" — the window is 360 px wide and a healthy chain needs
+    /// no words there.
+    ///
+    /// <para>It is suppressed a second time when the chip carries a countdown, and that is E7.S2's
+    /// AC 4 again: the overlay has ONE line, the status half of it is already stepping a clock while
+    /// the chain is paused, and two clocks on one line is exactly what "at most one countdown per
+    /// window" forbids. <c>MainWindow</c> composes, <c>CompactOverlay</c> renders (I2).</para>
+    ///
+    /// <para>An empty status stays empty: <c>SetStatus</c> collapses the line on an empty string,
+    /// and a chip prefix must not resurrect a line the overlay had deliberately hidden.</para></summary>
+    internal string OverlayLine(string status)
+        => OverlayLine(ChipFor(TranslationChains.EngineStatus(_settings, _readChain, _gateStateKnown)),
+                       status);
+
+    /// <summary>The composition itself, pure, so all eight states can be asserted without a window
+    /// (the impure half above is one line: which chip).</summary>
+    internal static string OverlayLine(EngineChip chip, string status)
+        => string.IsNullOrEmpty(status) || chip.IsHealthy || chip.HasClock
+            ? status
+            : chip.Label + "  " + status;
 
     /// <summary>The repaint guard (AC 3, UX hint 7): assign <c>.Text</c> only when the rendered
     /// string differs from what the surface already shows. Above 90 s the band changes only on a
@@ -660,10 +986,18 @@ public partial class MainWindow : Window
     ///
     /// <para>It compares the control's OWN text rather than a cached field — one source of truth,
     /// and it stays correct when something else writes the same surface, which
-    /// <c>SetScreenStatus</c> does on both windows.</para></summary>
-    internal static void SetIfChanged(TextBlock target, string text)
+    /// <c>SetScreenStatus</c> does on both windows.</para>
+    ///
+    /// <para><b>It answers whether it wrote</b> (E7.S3). The chip has a second property to keep in
+    /// step with its text — the foreground, through <c>SetResourceReference</c> — and re-applying a
+    /// resource reference a second is exactly the churn this guard exists to remove. Returning a
+    /// bool keeps ONE comparison for both, rather than a cached brush field that could disagree with
+    /// the text it is supposed to belong to.</para></summary>
+    internal static bool SetIfChanged(TextBlock target, string text)
     {
-        if (!string.Equals(target.Text, text, StringComparison.Ordinal)) target.Text = text;
+        if (string.Equals(target.Text, text, StringComparison.Ordinal)) return false;
+        target.Text = text;
+        return true;
     }
 
     /// <summary>
@@ -805,4 +1139,36 @@ public partial class MainWindow : Window
         if (_overlay != null) { _overlay.AllowClose = true; _overlay.Close(); }
         base.OnClosed(e);
     }
+}
+
+/// <summary>
+/// <b>One rendered chip</b> — the whole of what <c>ux-mode-degrade.md</c> §2.3 puts on screen for a
+/// state: a glyph, a word, and a <c>Theme.xaml</c> resource KEY for the foreground.
+///
+/// <para><b>A key and never a <c>Brush</c></b> (UX-DR18): the palette stays in one file, the two
+/// existing status writes already use <c>SetResourceReference</c>, and a value type carrying three
+/// strings can be produced by a pure function a headless test drives with literals.</para>
+///
+/// <para><b>NFR11 lives in <see cref="Label"/>.</b> The glyph and the word carry the state; the
+/// brush only agrees with them. Strip the palette and <c>○ Google paused 0:58</c> still says
+/// everything — which is the assertion the eight-state test makes, on the text alone.</para>
+/// </summary>
+/// <param name="IsHealthy">§2.1's <b>S1</b> and nothing else. It is what the compact overlay asks
+/// before prefixing its one status line ("shown only when not healthy") — and the offline engine
+/// answering is deliberately NOT healthy for that purpose: §2.2's table gives S4 an overlay prefix
+/// of its own, because "your PC is translating this" is worth eight characters of a 360 px
+/// window.</param>
+/// <param name="HasClock">Whether <see cref="Text"/> carries a countdown. The overlay asks this too:
+/// its single line already steps LIVE's clock while the chain is paused, and E7.S2's AC 4 allows at
+/// most one countdown per window.</param>
+internal readonly record struct EngineChip(
+    string Glyph,
+    string Text,
+    string BrushKey,
+    bool IsHealthy = false,
+    bool HasClock = false)
+{
+    /// <summary>What a <c>TextBlock</c> shows: glyph, one space, word. Assembled here rather than at
+    /// the three call sites so the three surfaces cannot come to space it differently.</summary>
+    internal string Label => Glyph + " " + Text;
 }

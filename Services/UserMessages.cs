@@ -106,6 +106,13 @@ internal static class UserMessages
     private const string SomeQuotaOwner = "free translation";
     private const string SomeKeyOwner = "API";
 
+    /// <summary>The <c>{P}</c>-less form for a CHIP, where <see cref="SomeEngine"/>'s sentence
+    /// subject ("The translation service") neither fits the line nor reads as a name.
+    /// <b>Unreachable through <see cref="EngineStatus"/></b> — every <see cref="ProviderIds.All"/>
+    /// member has a name in <see cref="ProviderNames"/> — and written anyway, because "never invent
+    /// a name" (§3.0 rule 1) is not the same as "throw at a player mid-fight".</summary>
+    private const string SomeEngineShort = "Engine";
+
     /// <summary><b>Amendment A12, once, for all three rows that carry a <c>{t}</c>.</b>
     /// <c>RetryAt</c> can legitimately be absent — a gate opened on a strike count rather than on a
     /// window, and <c>AuthFailed</c>'s <see cref="DateTimeOffset.MaxValue"/> sentinel has no honest
@@ -396,7 +403,7 @@ internal static class UserMessages
             // The one row that drops "press Enter to retry": there is no engine left to retry ON.
             TranslationErrorKind.AllProvidersPaused =>
                 Warn(PausedShort("Engines", tryAgainIn) + TextIsKept + "."),
-            TranslationErrorKind.Network => KeptText("No internet"),
+            TranslationErrorKind.Network => KeptText(NoInternetShort),
             TranslationErrorKind.Timeout or TranslationErrorKind.Unavailable
                 or TranslationErrorKind.BadResponse => KeptText($"{p ?? SomeEngine} did not answer"),
             TranslationErrorKind.AuthFailed => Warn($"{Your}{p ?? SomeKeyOwner} key was refused — {SeeAbout}"),
@@ -876,6 +883,119 @@ internal static class UserMessages
                 && sentence.StartsWith(name + " ", StringComparison.Ordinal)) return true;
         return false;
     }
+
+    // ---- §2.3 / §3.5: the provider chip, its tooltip, and the one line on recovery (E7.S3) ------
+    //
+    // Words only. Every glyph the chip renders and every countdown it carries is MainWindow's
+    // (I2 — Services/ counts seconds and never formats them, and a brush key is a UI fact), and
+    // that split is why these can be asserted headlessly. The GLYPHS the tooltip carries are the
+    // exception, and a deliberate one: §2.3 writes those rows as whole strings ("● in use"), the
+    // vocabulary is fixed (● ○ ⚠ and nothing new — §6), and splitting a three-word row across two
+    // files would buy nothing and cost the one property this table exists for, that the copy can be
+    // read in one place.
+
+    /// <summary>§2.3's <c>checking…</c> — what the chip says for the first moments of a session,
+    /// before ruling <b>E6-a</b>'s warm-up has read <c>provider-state.json</c>. It is not a state of
+    /// any engine; it is the app declining to claim a health it has not verified yet.</summary>
+    public static string EngineChipChecking() => "checking…";
+
+    /// <summary>§2.1's <b>S5</b>. The subject is "all", not an engine, so it takes no name.</summary>
+    public static string EngineChipAllPaused() => "All paused";
+
+    /// <summary>§2.1's <b>S6</b> — the one chip that asks the player to do something they can
+    /// actually do. Ruling <b>GAP-3</b>: it behaves like S5 (the full pause is universal).</summary>
+    public static string EngineChipNoInternet() => NoInternetShort;
+
+    /// <summary><b>UX-DR19 applied to two words.</b> §3.4's overlay quick reply and §2.3's S6 chip
+    /// say the same thing about the same state, so they say it with the same string — one spelling,
+    /// one place to change it. <c>UserMessagesTests.UXDR19_…</c> is what caught them drifting apart
+    /// the moment the chip was written.</summary>
+    private const string NoInternetShort = "No internet";
+
+    /// <summary>§2.1's <b>S7</b>. No countdown, ever: an <c>AuthFailed</c> block has the
+    /// <c>MaxValue</c> sentinel behind it and its exit is re-saving the key, so a clock here would
+    /// be a promise nothing keeps.</summary>
+    public static string EngineChipKeyRefused(string? providerId)
+        => (ProviderNames.Short(providerId) ?? SomeEngineShort) + " key refused";
+
+    /// <summary>§2.1's <b>S8</b> — the free engines are still serving, and the sentence says both
+    /// halves: who is answering, and whose quota ran out.</summary>
+    public static string EngineChipQuotaOut(string? servingId, string? quotaId)
+        => (ProviderNames.Short(servingId) ?? SomeEngineShort) + " · "
+           + (ProviderNames.Short(quotaId) ?? "a key") + " quota out";
+
+    /// <summary>§2.1's <b>S3</b>: this engine is inside a window, something below it still serves.
+    /// <paramref name="countdown"/> is already rendered by <c>MainWindow</c> (I2) and is null when
+    /// there is no honest one — in which case the chip says "paused" and stops there rather than
+    /// leaving a hole where a number should have been (amendment A12's spirit, in two words).</summary>
+    public static string EngineChipPaused(string? providerId, string? countdown)
+        => (ProviderNames.Short(providerId) ?? SomeEngineShort) + " paused"
+           + (countdown is null ? "" : " " + countdown);
+
+    /// <summary>§2.1's <b>S2</b>, with §3.0 rule 2 applied: the <c>· backup</c> suffix is dropped
+    /// when the name already carries it, so a fallback onto <c>google-gtx</c> reads
+    /// <c>Google (backup)</c> and never <c>Google (backup) · backup</c>.</summary>
+    public static string EngineChipBackup(string? providerId)
+    {
+        var name = ProviderNames.Short(providerId) ?? SomeEngineShort;
+        return name.Contains("backup", StringComparison.OrdinalIgnoreCase) ? name : name + " · backup";
+    }
+
+    /// <summary>§2.1's <b>S1</b> / <b>S4</b> — the healthy chip is a name and nothing else.</summary>
+    public static string EngineChipServing(string? providerId)
+        => ProviderNames.Short(providerId) ?? SomeEngineShort;
+
+    /// <summary>§2.3's tooltip rows for a provider that is working. "In use" is the one that
+    /// answered the last call; "ready" is a tier that would be asked if the one above it stopped
+    /// answering.</summary>
+    public static string EngineLineInUse() => "● in use";
+
+    public static string EngineLineReady() => "● ready";
+
+    /// <summary>§2.3's paused row. The countdown is handed in already rendered (I2); with none, the
+    /// row says the state and no more.</summary>
+    public static string EngineLinePaused(string? countdown)
+        => countdown is null ? "○ paused" : "○ paused — retries in " + countdown;
+
+    /// <summary>The three ways a tier can be absent, and none of them is an error (§2.3). Keyed off
+    /// <see cref="EngineStatus"/>' reasons rather than off a provider id, so the tooltip cannot come
+    /// to call Edge "not installed" and the offline engine "not available".</summary>
+    public static string EngineLineOff(string? reason) => reason switch
+    {
+        EngineStatus.NotAvailable => "— not available",   // Edge: E3-d, no capture designated (U2)
+        EngineStatus.NotInstalled => "— not installed",   // the offline engine: E8 has not shipped
+        _ => "— not set",                                 // a key nobody has entered
+    };
+
+    /// <summary>The tooltip's parenthetical — <b>why</b> an engine is paused, in the player's words.
+    /// §2.3: "no jargon, no HTTP codes"; the input is a <see cref="TranslationErrorKind"/> and never
+    /// a status line, a header or a provider's own message (I11).
+    ///
+    /// <para>Null for the kinds that have nothing to add: a window with no recorded reason, the
+    /// pass-through <c>Unknown</c>, and the kind that may not even be named in production source
+    /// (TP-MAP-17) — which is why the last arm is a default and not a list.</para></summary>
+    public static string? EngineLineReason(TranslationErrorKind? kind) => kind switch
+    {
+        TranslationErrorKind.RateLimited => "asked us to slow down",
+        TranslationErrorKind.Blocked => "is refusing requests",
+        TranslationErrorKind.Network => "no connection",
+        TranslationErrorKind.Timeout => "did not answer in time",
+        TranslationErrorKind.Unavailable => "is having trouble",
+        TranslationErrorKind.BadResponse => "sent something unreadable",
+        TranslationErrorKind.QuotaExhausted => "quota used up",
+        TranslationErrorKind.AuthFailed => "key refused",
+        _ => null,
+    };
+
+    /// <summary>§3.5's third line, and the only one E7.S3 owns: <c>Back on Google.</c> — shown
+    /// <b>once</b> per recovery, on the status line, then left alone, so the player knows the chip
+    /// changed for a reason.
+    ///
+    /// <para>Null when no name is known, and the caller then writes nothing at all. §3.0 rule 1 —
+    /// nothing here is ever invented — and "Back on the translation service." is a sentence with no
+    /// information in it: the whole point of the notice is the NAME.</para></summary>
+    public static string? BackOn(string? providerId)
+        => ProviderNames.Display(providerId) is { } p ? "Back on " + p + "." : null;
 
     /// <summary>A full stop for a line that is rendered alone, added only if there is not one
     /// already: §4.4's <c>Unknown</c> arm passes a provider's own message through verbatim, and some
