@@ -869,6 +869,38 @@ public class TranslationCachePersistenceTests
         }
     }
 
+    /// <summary>
+    /// <b>A non-persistent store clears itself and leaves the file alone</b> (E7.S7 review). The
+    /// A.2 default is <c>persistent: false</c> and the read-once store E4.S4 builds is one of them,
+    /// but <c>ResolvePath</c> answers the same <c>translation-cache.json</c> for every instance —
+    /// so a <c>Clear()</c> that deleted unconditionally would let a store that has never written a
+    /// byte destroy the file the persistent one owns. Same rule as <c>QueueSave</c> and
+    /// <c>EnsureLoaded</c>: no file for an instance that was told not to have one.
+    /// </summary>
+    [Fact]
+    public void A10_A_non_persistent_store_clears_its_map_without_touching_the_shared_file()
+    {
+        using var cache = new TempCache();
+        try
+        {
+            var persistent = new TranslationCacheStore(persistent: true);
+            persistent.Store("ru|en|привет", "hello");
+            persistent.SaveNow();
+            Assert.True(File.Exists(cache.Path));
+
+            var private_ = new TranslationCacheStore();          // the A.2 default: no file at all
+            private_.Store("ru|en|пока", "bye");
+
+            Assert.Equal(1, private_.Clear());                   // its own map, and only its own
+            Assert.Equal(0, private_.Count);
+            Assert.True(File.Exists(cache.Path), "a non-persistent store deleted the shared file");
+        }
+        finally
+        {
+            TranslationChains.ResetCacheForTests();
+        }
+    }
+
     // ---- I10 / I11 as scans ---------------------------------------------------------------------
 
     [Fact]

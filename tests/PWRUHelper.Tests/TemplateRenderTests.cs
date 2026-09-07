@@ -728,6 +728,168 @@ public class TemplateRenderTests
                                               TranslationErrorKind.Network),
             },
             free, null, true, now);
+
+        // S7 / S8 — the two a user's own key can be in, and the WIDEST rows the block can render:
+        // the chip names a provider AND a state, and S8's fallback additionally puts §4.2's reason
+        // clause beside it. TP-RENDER-09 measures against exactly this pair.
+        var keys = new[] { ProviderIds.GoogleDict, ProviderIds.GoogleGtx,
+                           ProviderIds.DeepL, ProviderIds.Azure };
+        yield return EngineStatus.Of(free,
+            new Dictionary<string, GateSnapshot>(StringComparer.Ordinal)
+            {
+                [ProviderIds.DeepL] = new(GateState.Open, DateTimeOffset.MaxValue, 1,
+                                          TranslationErrorKind.AuthFailed),
+            },
+            keys, Answered(ProviderIds.GoogleDict), true, now);
+        yield return EngineStatus.Of(free,
+            new Dictionary<string, GateSnapshot>(StringComparer.Ordinal)
+            {
+                [ProviderIds.Azure] = new(GateState.Open, now.AddSeconds(58), 1,
+                                          TranslationErrorKind.QuotaExhausted),
+            },
+            keys, Answered(ProviderIds.GoogleDict, ProviderIds.Azure), true, now);
+    }
+
+    /// <summary>
+    /// <b>TP-RENDER-09 (E7.S7 review) — the About tab laid out at the size the app really opens
+    /// at.</b> E7.S7 shipped with the story's "check at 800×600" unverified, and E6.S5's off-screen
+    /// Test button is the failure class it was pointing at: the About tab is one <c>StackPanel</c>
+    /// in a <c>ScrollViewer</c> that scrolls <b>vertically only</b>, so a row wider than the
+    /// viewport is not scrolled to — it is clipped, with no way to reach it at any window size.
+    ///
+    /// <para>Both sizes are READ from the window and never hardcoded (<c>Width="640" Height="720"</c>,
+    /// <c>MinWidth="460" MinHeight="480"</c> in the XAML; <c>AppSettings.WindowWidth/Height</c> are
+    /// null until a user drags the frame). The minimum is included because that is the width the
+    /// user can actually drag to, and it is the one E6.S5's WrapPanels were introduced for.</para>
+    ///
+    /// <list type="number">
+    /// <item><b>Nothing is clipped horizontally</b> — every laid-out element of the region ends
+    ///       inside the viewport, in every one of §2.1's states. The states matter: the "In use
+    ///       now" row is the widest thing on the tab and it exists only while a chip has something
+    ///       to say, so one static pass would prove nothing.</item>
+    /// <item><b>Every button is reachable</b> — the region really scrolls, and scrolling to each
+    ///       button's own offset brings it fully inside the viewport. "Copy error report" is the
+    ///       one the story flagged (a support path, now below two more blocks), so it is named
+    ///       explicitly alongside the two Saves, the two Test keys and Clear cache.</item>
+    /// </list>
+    /// </summary>
+    [Fact]
+    public void TP_RENDER_09_the_about_tab_fits_and_every_button_is_reachable_at_the_shipped_sizes()
+    {
+        using var _ = new TempSettings("""{ "SettingsVersion": 3 }""");
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+            var root = (FrameworkElement)window.Content;
+            var scroller = (ScrollViewer)window.AboutTab.Content;
+            var page = (FrameworkElement)scroller.Content;
+
+            // The window's own sizes minus the chrome the client area never gets. Subtracting it
+            // makes the test STRICTER than the real window, which is the safe direction to be
+            // wrong in.
+            Size Client(double width, double height) => new(
+                width - 2 * SystemParameters.ResizeFrameVerticalBorderWidth,
+                height - 2 * SystemParameters.ResizeFrameHorizontalBorderHeight
+                       - SystemParameters.WindowCaptionHeight);
+
+            // The About tab has to BE the selected one: a TabControl builds one content presenter,
+            // and this is also the state in which the "In use now" line carries its clock (E7.S7's
+            // countdown rule), i.e. its widest string.
+            window.MainTabs.SelectedItem = window.AboutTab;
+
+            var refresh = typeof(MainWindow).GetMethod("RefreshAboutEngineLines",
+                BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+            foreach (var (what, client) in new[]
+                     {
+                         ("the default size", Client(window.Width, window.Height)),
+                         ("MinWidth/MinHeight", Client(window.MinWidth, window.MinHeight)),
+                     })
+            {
+                foreach (var status in EveryEngineStatus())
+                {
+                    refresh.Invoke(window, new object?[] { status });
+                    root.Measure(client);
+                    root.Arrange(new Rect(new Point(0, 0), client));
+                    root.UpdateLayout();
+
+                    Assert.True(scroller.ViewportWidth > 0, "the About tab never laid out");
+
+                    foreach (var element in Descendants(page))
+                    {
+                        if (element.ActualWidth <= 0 || element.Visibility != Visibility.Visible) continue;
+                        var right = element.TransformToAncestor(page).Transform(new Point(0, 0)).X
+                                  + element.ActualWidth;
+                        Assert.True(right <= scroller.ViewportWidth + 0.5,
+                            $"at {what}, {Describe(element)} ends "
+                            + $"{right - scroller.ViewportWidth:0.#} px past the "
+                            + $"{scroller.ViewportWidth:0.#} px viewport. The About tab scrolls "
+                            + "vertically only, so that content is CLIPPED and unreachable "
+                            + "(E6.S5's failure class — use a WrapPanel, or let the text wrap).");
+                    }
+                }
+
+                // ---- (2) every button is reachable ---------------------------------------------
+                var buttons = Descendants(page).OfType<Button>()
+                    .Where(b => b.Visibility == Visibility.Visible && b.ActualWidth > 0).ToList();
+
+                // Non-vacuity, and the named ones: a walk that found no buttons would pass
+                // everything below it.
+                var labels = buttons.Select(b => b.Content as string ?? "").ToList();
+                Assert.Contains("📋 Copy error report", labels);
+                Assert.Equal(2, labels.Count(l => l == "Save"));
+                Assert.Contains(window.DeepLTestButton, buttons);
+                Assert.Contains(window.AzureTestButton, buttons);
+                Assert.Contains(window.ClearCacheButton, buttons);
+
+                Assert.True(scroller.ScrollableHeight > 0,
+                    $"the About region does not scroll at {what}, so anything below the fold would "
+                    + "be unreachable");
+
+                foreach (var button in buttons)
+                {
+                    var top = button.TransformToAncestor(page).Transform(new Point(0, 0)).Y;
+                    scroller.ScrollToVerticalOffset(Math.Min(top, scroller.ScrollableHeight));
+                    root.UpdateLayout();
+
+                    var y = button.TransformToAncestor(scroller).Transform(new Point(0, 0)).Y;
+                    Assert.True(y >= -0.5 && y + button.ActualHeight <= scroller.ViewportHeight + 0.5,
+                        $"at {what}, {Describe(button)} cannot be scrolled into view "
+                        + $"(it lands at y={y:0.#} in a {scroller.ViewportHeight:0.#} px viewport)");
+                }
+
+                scroller.ScrollToTop();
+                root.UpdateLayout();
+            }
+        });
+    }
+
+    /// <summary>Every <see cref="FrameworkElement"/> under a visual root, depth-first.</summary>
+    private static IEnumerable<FrameworkElement> Descendants(DependencyObject root)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is FrameworkElement element) yield return element;
+            foreach (var deeper in Descendants(child)) yield return deeper;
+        }
+    }
+
+    /// <summary>Enough of an element to find it in the XAML from a failure message.</summary>
+    private static string Describe(FrameworkElement element)
+    {
+        var what = string.IsNullOrEmpty(element.Name)
+            ? element.GetType().Name : element.Name + " (" + element.GetType().Name + ")";
+        var text = element switch
+        {
+            TextBlock block => block.Text.Length > 0 ? block.Text
+                               : string.Concat(block.Inlines.OfType<Run>().Select(r => r.Text)),
+            ContentControl { Content: string content } => content,
+            _ => "",
+        };
+        return text.Length == 0 ? what
+             : what + " \"" + (text.Length <= 48 ? text : text[..48] + "…") + "\"";
     }
 
     /// <summary>§2.1's eight states as eight chips, built through the real pure function so this

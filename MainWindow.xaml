@@ -610,23 +610,23 @@
                         <!-- keyboard shortcuts -->
                         <TextBlock Text="Global shortcuts (work while in game)" FontSize="15" FontWeight="Bold"
                                    Foreground="{StaticResource GoldBrush}" Margin="0,18,0,6"/>
-                        <TextBlock Margin="0,2" Foreground="{StaticResource TextMutedBrush}">
+                        <TextBlock Margin="0,2" TextWrapping="Wrap" Foreground="{StaticResource TextMutedBrush}">
                             <Run Text="Ctrl+Alt+P" Foreground="{StaticResource TealBrush}" FontWeight="SemiBold"/>
                             <Run Text="  bring PWRU Helper to the front"/>
                         </TextBlock>
-                        <TextBlock Margin="0,2" Foreground="{StaticResource TextMutedBrush}">
+                        <TextBlock Margin="0,2" TextWrapping="Wrap" Foreground="{StaticResource TextMutedBrush}">
                             <Run Text="Ctrl+Alt+T" Foreground="{StaticResource TealBrush}" FontWeight="SemiBold"/>
                             <Run Text="  jump to the translator and start typing"/>
                         </TextBlock>
-                        <TextBlock Margin="0,2" Foreground="{StaticResource TextMutedBrush}">
+                        <TextBlock Margin="0,2" TextWrapping="Wrap" Foreground="{StaticResource TextMutedBrush}">
                             <Run Text="Ctrl+Alt+L" Foreground="{StaticResource TealBrush}" FontWeight="SemiBold"/>
                             <Run Text="  start / stop live translation on your last area"/>
                         </TextBlock>
-                        <TextBlock Margin="0,2" Foreground="{StaticResource TextMutedBrush}">
+                        <TextBlock Margin="0,2" TextWrapping="Wrap" Foreground="{StaticResource TextMutedBrush}">
                             <Run Text="Ctrl+Alt+M" Foreground="{StaticResource TealBrush}" FontWeight="SemiBold"/>
                             <Run Text="  toggle the compact overlay (small in-game window)"/>
                         </TextBlock>
-                        <TextBlock Margin="0,2" Foreground="{StaticResource TextMutedBrush}">
+                        <TextBlock Margin="0,2" TextWrapping="Wrap" Foreground="{StaticResource TextMutedBrush}">
                             <Run Text="Ctrl+Alt+R" Foreground="{StaticResource TealBrush}" FontWeight="SemiBold"/>
                             <Run Text="  read your last area once (no live loop)"/>
                         </TextBlock>
@@ -669,7 +669,15 @@
 
                             <TextBlock Grid.Row="0" Grid.Column="0" Text="In use now" Margin="0,0,14,3"
                                        Foreground="{StaticResource TextMutedBrush}"/>
-                            <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,3">
+                            <!-- WrapPanel and not a horizontal StackPanel, for the reason the two
+                                 key rows below have one (E6.S5's review): a horizontal StackPanel
+                                 measures its children with INFINITE width, so TextWrapping never
+                                 fires and a row wider than the viewport is clipped — the About tab
+                                 scrolls vertically only. The widest state ("○ Google paused 0:58"
+                                 plus §4.2's reason clause) already reaches 531 px of the 575 px
+                                 viewport at the default Width=640, and past the edge at MinWidth.
+                                 TP-RENDER-09 measures both. -->
+                            <WrapPanel Grid.Row="0" Grid.Column="1" Margin="0,0,0,3">
                                 <!-- The chip's FOURTH placement (E7.S3): same pure composer, same
                                      words — the tab and the chip cannot disagree. -->
                                 <TextBlock x:Name="EngineInUseText" TextWrapping="Wrap"
@@ -681,7 +689,7 @@
                                      which this story owns). -->
                                 <TextBlock x:Name="EngineReasonText" TextWrapping="Wrap" Margin="14,0,0,0"
                                            Foreground="{StaticResource TextMutedBrush}"/>
-                            </StackPanel>
+                            </WrapPanel>
 
                             <!-- TWO chain lines and not §4.2's one: the app has two chains and I8
                                  makes them structurally different (DeepL can never read the screen),
@@ -804,9 +812,16 @@
                              UpdateEngineStatusUi — ruling GAP-4 keeps the copy out of the XAML so
                              it exists exactly once. No new brush, font or colour (UX-DR18). -->
                         <CheckBox x:Name="AzureForReadingCheck" Margin="0,10,0,0"
-                                  Content="Use my Azure key for screen reading too (uses your free quota faster)"
                                   Checked="AzureForReading_Changed" Unchecked="AzureForReading_Changed"
-                                  ToolTip="Off by default: live mode reads every new chat line, so it spends a metered key much faster than the Translator tab does."/>
+                                  ToolTip="Off by default: live mode reads every new chat line, so it spends a metered key much faster than the Translator tab does.">
+                            <!-- The label is a wrapping TextBlock and not a Content string (E7.S7
+                                 review): a CheckBox measures a string label with infinite width, so
+                                 at MinWidth=460 this sentence ran 65 px past a viewport that
+                                 scrolls vertically only — clipped, with no way to read the rest.
+                                 TP-RENDER-09 measures it at both shipped sizes. -->
+                            <TextBlock TextWrapping="Wrap"
+                                       Text="Use my Azure key for screen reading too (uses your free quota faster)"/>
+                        </CheckBox>
                         <TextBlock x:Name="AzureForReadingHint" TextWrapping="Wrap" FontSize="12"
                                    Margin="22,4,0,0" Foreground="{StaticResource TextMutedBrush}"/>
 

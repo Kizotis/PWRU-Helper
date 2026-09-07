@@ -306,10 +306,12 @@ internal sealed class TranslationCacheStore
     /// <para><b>The order is the whole of it.</b> The pending save is cancelled and the map emptied
     /// under <see cref="_gate"/>, and the snapshot counter is bumped there too — so a
     /// <see cref="SaveNow"/> that had already snapshotted and is waiting on <see cref="_io"/> finds
-    /// its sequence stale and writes nothing. Then the file is deleted under <see cref="_io"/>, so
-    /// nothing can land between the two. Without that, A10's own scenario — a debounced save queued
-    /// by the translation the player made a second before pressing the button — would resurrect the
-    /// file they just cleared.</para>
+    /// its sequence stale and writes nothing. The file is then deleted under <see cref="_io"/>
+    /// <b>while <see cref="_gate"/> is still held</b>, so nothing at all can land between the two
+    /// halves. Without that, A10's own scenario — a debounced save queued by the translation the
+    /// player made a second before pressing the button — would resurrect the file they just
+    /// cleared, and a translation stored between the two locks could have its save deleted from
+    /// under it.</para>
     ///
     /// <para><b>It loads first, and that is deliberate.</b> The store reads lazily, on the first MISS
     /// (I10), so a player who clears the cache before translating anything would otherwise be told
@@ -325,8 +327,6 @@ internal sealed class TranslationCacheStore
     internal int Clear()
     {
         int removed;
-        long seq;
-        string path;
 
         lock (_gate)
         {
@@ -341,25 +341,40 @@ internal sealed class TranslationCacheStore
 
             _loaded = true;                       // there is nothing left on disk to load
             _keepFile = false;                    // the user asked for the file to go
-            seq = ++_snapshotSeq;                 // an older snapshot may no longer write
-            path = ResolvePath();
-        }
+            var seq = ++_snapshotSeq;             // an older snapshot may no longer write
+            var path = ResolvePath();
 
-        lock (_io)
-        {
-            _writtenSeq = seq;
-            try
+            // The file goes under BOTH locks, and <see cref="_gate"/> is deliberately still held:
+            // _gate → _io is the order this class already uses and nothing anywhere takes them the
+            // other way round, so nesting cannot deadlock — and released in between, the two halves
+            // are not one operation. A translation stored between them queues a save whose snapshot
+            // is NEWER than this one, and a delete arriving after that write would take the entry
+            // the player made after clearing (or push _writtenSeq backwards). The cost is that a
+            // translation waits out one File.Delete, on a button the player is watching, in a
+            // method that already reads the file under this same lock.
+            //
+            // A non-persistent store never wrote this file — the read-once store shares the path
+            // and none of it (E4.S4) — so it may not delete it either, the same rule QueueSave and
+            // EnsureLoaded apply.
+            if (!_persistent) return removed;
+
+            lock (_io)
             {
-                if (File.Exists(path)) File.Delete(path);
-                // The half-written swap file of an interrupted save, if there is one: leaving it
-                // would be a copy of the user's chat text under a name nothing ever reads again.
-                var tmp = path + ".tmp";
-                if (File.Exists(tmp)) File.Delete(tmp);
-            }
-            catch (Exception)
-            {
-                // Held open by an AV or a sync agent — the map is empty either way, and the next
-                // save rewrites the file from it.
+                _writtenSeq = seq;
+                try
+                {
+                    if (File.Exists(path)) File.Delete(path);
+                    // The half-written swap file of an interrupted save, if there is one: leaving
+                    // it would be a copy of the user's chat text under a name nothing ever reads
+                    // again.
+                    var tmp = path + ".tmp";
+                    if (File.Exists(tmp)) File.Delete(tmp);
+                }
+                catch (Exception)
+                {
+                    // Held open by an AV or a sync agent — the map is empty either way, and the
+                    // next save rewrites the file from it.
+                }
             }
         }
 
