@@ -42,14 +42,18 @@ internal static class TranslationPolicy
     public const int RequestTimeoutSeconds = 12;    // [CONFIRMED] now read once, at HttpProviderCore.CreateClient
 
     /// <summary>The <b>legacy decorator default</b>: what a <c>CachingTranslator</c> built without a
-    /// store gives its own private one. No longer "today's cache" — since E4.S1 the shared store's
-    /// capacity is <see cref="CacheCapacity"/>, and this number survives only as the parameter default
-    /// of the constructor that has no store to read a capacity from — which is, until E4.S4 passes a
-    /// shared store, still all three of the decorators the app builds. 500 is what ships today.</summary>
+    /// store gives its own private one. No longer "today's cache" and, since E4.S4, no longer what
+    /// ships either — all three chains are decorators over the shared store, whose capacity is
+    /// <see cref="CacheCapacity"/>. This number survives only as the parameter default of the
+    /// constructor that has no store to read a capacity from, which nothing in production calls.
+    /// Kept rather than deleted because that constructor is public API of an assembly the tests
+    /// exercise, and because a story that ever needs a private cache should get 500 and not 2000 of
+    /// them.</summary>
     public const int CacheCapacityToday = 500;      // [CONFIRMED] now the ctor default at CachingTranslator.cs:25
 
-    /// <summary>Entries kept by the shared LRU translation cache — §5.6's number, and the default of
-    /// <see cref="TranslationCacheStore"/>, which nothing builds until E4.S4 shares one. §8.2's
+    /// <summary>Entries kept by the shared LRU translation cache — §5.6's number, the default of
+    /// <see cref="TranslationCacheStore"/>, and since E4.S4 what the one store the app builds is
+    /// built with (<c>TranslationChains.Cache</c>, pinned by <c>ChainCompositionTests</c>). §8.2's
     /// ~150 B an entry ⇒ ≈300 KB is the JSON FILE; in memory an entry also carries two string objects,
     /// a list node and a dictionary slot, so the RAM cost is a multiple of that and is the half U8
     /// must actually measure — this app has a memory budget it has been bitten by.</summary>

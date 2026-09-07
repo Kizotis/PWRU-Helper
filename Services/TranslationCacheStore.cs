@@ -9,8 +9,8 @@ namespace PWRUHelper.Services;
 /// <c>string → string</c> map with an eviction order — and, since E4.S2, the file that map survives
 /// a restart in. It moved out (E4.S1) for one reason: a decorator can only wrap one inner
 /// translator, so "one shared cache behind the read chain, the read-once chain and the write chain"
-/// (§8.2, decision F) has to be one shared <b>store</b> behind three thin decorators. E4.S4 hands
-/// the same instance to all three.
+/// (§8.2, decision F) has to be one shared <b>store</b> behind three thin decorators. E4.S4 handed
+/// the same instance to all three, inside <see cref="TranslationChains"/>' builders.
 ///
 /// <para><b>What it does not know.</b> The key format — <c>source|target|text.Trim()</c> — and the
 /// rule that failure placeholders (anything starting with <c>(</c>, I4) are never cached both stay in
@@ -125,16 +125,17 @@ internal sealed class TranslationCacheStore
     private long _snapshotSeq;
     private long _writtenSeq;
 
-    /// <summary>Capacity defaults to §8.2's 2000; the legacy <see cref="CachingTranslator"/>
-    /// constructor still passes its own 500 (<see cref="TranslationPolicy.CacheCapacityToday"/>), so
-    /// this story raises the number for the shared store and for nobody else.
+    /// <summary>Capacity defaults to §8.2's 2000, which since E4.S4 is what the app's one store is
+    /// built with; the legacy <see cref="CachingTranslator"/> constructor still passes its own 500
+    /// (<see cref="TranslationPolicy.CacheCapacityToday"/>) to the private store it makes for a
+    /// caller that supplied none.
     ///
     /// <para><paramref name="persistent"/> is what makes an instance touch the disk at all, and it
-    /// defaults to <b>false</b> for a reason that is not taste: until E4.S4 shares one store, the
-    /// app builds <b>three</b> <see cref="CachingTranslator"/>s each owning a private one, and three
-    /// private stores pointed at a single file would spend the session overwriting each other's
-    /// 500 entries. The one persistent store is <c>TranslationChains.Cache</c>, which nothing wires
-    /// into a decorator yet — E4.S4 is that one line.</para>
+    /// defaults to <b>false</b> for a reason that is not taste: a second persistent store pointed at
+    /// the same file would spend the session overwriting the first one's entries. There is exactly
+    /// one, <c>TranslationChains.Cache</c>, and all three chains decorate it (E4.S4); the default is
+    /// what keeps the next store somebody constructs from silently becoming a second writer, and
+    /// <c>TranslationCachePersistenceTests</c> scans for it.</para>
     ///
     /// <para><paramref name="offlineEnabled"/> is AC 6's drop rule as a <b>parameter</b>, not a
     /// setting: <c>OfflineFallbackEnabled</c> arrives in E6.S3 (ruling R-7) and the Bergamot tier in

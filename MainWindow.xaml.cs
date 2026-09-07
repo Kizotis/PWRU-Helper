@@ -47,8 +47,11 @@ public partial class MainWindow : Window
     //                          is a user click waiting on an answer (ruling OQ-a). A second chain
     //                          instance rather than a per-call argument, because ITranslator may
     //                          not grow a priority parameter (I1) and the gates are process-global,
-    //                          so the two instances cost a few bytes and share their state. The two
-    //                          caches they carry become ONE shared store in E4 (§8.2).
+    //                          so the two instances cost a few bytes and share their state.
+    //
+    // All three are cache decorators over the SAME store since E4.S4 (§8.2): the one a chain
+    // translated is the one the other two get for free, and it is the same store across a DeepL key
+    // save, which rebuilds _writeTranslator alone.
     //
     // ALL THREE ARE ASSIGNED IN THE CONSTRUCTOR BODY, not here: field initializers run in
     // declaration order, and _settings (:65) is initialised AFTER these lines. A chain needs the
@@ -101,12 +104,18 @@ public partial class MainWindow : Window
         //     _readTranslator lost its initializer; it stays readonly so no handler can reassign it.
         //   · InitializeComponent() fires change handlers (see _restoringSettings above), so
         //     anything a handler could reach must already exist by the time it runs.
-        // Nothing here touches a control, and nothing here reads provider-state.json: the registry
-        // only CONSTRUCTS gates at this point (I10) — the first request, after first paint, loads it.
+        // Nothing here touches a control, and nothing here reads provider-state.json OR
+        // translation-cache.json: the registry only CONSTRUCTS gates at this point and the shared
+        // cache store only constructs a map (I10) — the first request loads the one, the first cache
+        // MISS loads the other, both after first paint.
+        //
+        // Each of the three is a thin cache decorator over ONE shared store — TranslationChains'
+        // (§8.2, E4.S4) — so a line any of the three translated is free to the other two. That
+        // wrapping is the builder's, not this file's: the code-behind names a chain and never a
+        // decorator or a store, for the same reason it never names ProviderGates (ruling E3-c).
         _writeTranslator = BuildWriteChain();
-        _readTranslator = new CachingTranslator(TranslationChains.BuildRead(_settings));
-        _readOnceTranslator = new CachingTranslator(
-            TranslationChains.BuildRead(_settings, RequestPriority.Interactive));
+        _readTranslator = TranslationChains.BuildRead(_settings);
+        _readOnceTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Interactive);
         InitializeComponent();                  // fires change handlers — _restoringSettings guards them
         _toastTimer.Tick += (_, _) => { Toast.Visibility = Visibility.Collapsed; _toastTimer.Stop(); };
 
@@ -274,7 +283,8 @@ public partial class MainWindow : Window
         // because the other threw; no control, no binding, so _restoringSettings is not engaged.
         // The facade, not the store: TranslationChains already owns the composition the code-behind
         // is not allowed to name (ruling E3-c), and it owns the shared cache for the same reason.
-        // Until E4.S4 hands that store to the three decorators this call has nothing to write.
+        // Since E4.S4 all three chains cache into that one store, so what this writes is the whole
+        // session — the LIVE feed's lines and the Translator tab's alike, in one file.
         TranslationChains.FlushCache();
 
         try

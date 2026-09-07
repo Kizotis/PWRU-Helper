@@ -39,6 +39,16 @@ namespace PWRUHelper.Services;
 /// <para><b>It also owns the shared cache</b> (E4.S2), for the same reason it owns the tier lists:
 /// so the code-behind names a chain and never a store. <see cref="FlushCache"/> is the one line
 /// <c>MainWindow.OnClosing</c> adds, beside <c>ProviderGates.Flush()</c>.</para>
+///
+/// <para><b>And since E4.S4 the builders return the chain already wrapped in it</b> (§8.2,
+/// decision F). A <see cref="CachingTranslator"/> can only wrap one inner translator, so "one shared
+/// cache behind the read chain, the read-once chain and the write chain" is one shared
+/// <see cref="TranslationCacheStore"/> behind three thin decorators — and the wrapping happens
+/// <i>here</i>, not at the three call sites, so the code-behind names neither. That is the same
+/// ruling as the tier lists (E3-c) applied to the cache, and it is what
+/// <c>TranslationCachePersistenceTests.No_source_outside_Services_names_the_store…</c> asserts.
+/// The one-object consequence a reader should carry away: a line translated by any of the three
+/// paths is free to the other two, and a key save rebuilds a chain without touching the store.</para>
 /// </summary>
 internal static class TranslationChains
 {
@@ -47,19 +57,23 @@ internal static class TranslationChains
 
     /// <summary>
     /// The one persistent <see cref="TranslationCacheStore"/> of the process — §8.2's "one shared
-    /// cache behind the read chain, the read-once chain and the write chain" (decision F).
+    /// cache behind the read chain, the read-once chain and the write chain" (decision F) — and
+    /// since E4.S4 every chain <see cref="BuildRead"/> and <see cref="BuildWrite"/> return is a
+    /// decorator over <b>this</b> instance.
     ///
-    /// <para><b>Nothing passes it to a decorator yet, and that is deliberate.</b> E4.S4 is the
-    /// one-line flip: the three <c>new CachingTranslator(…)</c> call sites gain this argument and
-    /// the three private 500-entry stores go away. Until then the three private stores stay
-    /// non-persistent (<c>TranslationCacheStore</c>'s <c>persistent</c> parameter defaults to
-    /// false), because three of them pointed at one file would spend a session overwriting each
-    /// other — so A.2 behaves exactly as it did, and <see cref="FlushCache"/> below has nothing to
-    /// write until the flip.</para>
+    /// <para><b>Built with the DEFAULT capacity, and that is the point:</b>
+    /// <c>new TranslationCacheStore()</c> is <see cref="TranslationPolicy.CacheCapacity"/> (2000),
+    /// which is §8.2's number and the one a player feels after an hour of play. Passing anything
+    /// here — <c>CacheCapacityToday</c> by copy-paste, or a literal — would ship A.2 with the legacy
+    /// 500-entry cache and break nothing visible, which is why
+    /// <c>ChainCompositionTests.The_three_chains_are_decorators_over_one_shared_store…</c> pins the
+    /// number rather than the call.</para>
     ///
     /// <para>Built on demand rather than in a static field: a persistent store is still I/O-free
     /// until its first miss (I10), but constructing one at type-load would put the decision on
-    /// whatever path happened to touch this class first.</para>
+    /// whatever path happened to touch this class first. The first thing that asks for it in
+    /// production is the constructor's first <c>Build…</c> call, before first paint — it constructs
+    /// a map and reads nothing.</para>
     /// </summary>
     internal static TranslationCacheStore Cache
     {
@@ -72,8 +86,8 @@ internal static class TranslationChains
     /// facade on purpose: the code-behind names a chain, not a store, exactly as it names this
     /// class instead of <c>ProviderGates</c> for the tier lists.
     ///
-    /// <para><c>?.</c> and not <see cref="Cache"/>: closing an app that never translated must not
-    /// be the thing that builds a cache.</para>
+    /// <para><c>?.</c> and not <see cref="Cache"/>: a close that never built a chain — the suite,
+    /// and any future headless path — must not be the thing that builds a cache.</para>
     /// </summary>
     internal static void FlushCache() => Volatile.Read(ref _cache)?.SaveNow();
 
@@ -112,6 +126,12 @@ internal static class TranslationChains
     ///
     /// <para>E2.S3 built that reserve and E2.S5 left it inert on purpose ("<c>Background</c> did not
     /// reach the read chain"). This parameter is where it stops being inert.</para>
+    ///
+    /// <para><b>Returns the chain wrapped in the shared cache</b> (E4.S4): the caller gets an
+    /// <see cref="ITranslator"/> and never names a decorator or a store. The two read instances and
+    /// the write instance are three <see cref="CachingTranslator"/>s over one
+    /// <see cref="Cache"/> — thin by design, since the key format and the <c>(</c> rule (I4) are the
+    /// decorator's and storage is the store's (§3.1).</para>
     /// </summary>
     internal static ITranslator BuildRead(AppSettings settings,
         RequestPriority priority = RequestPriority.Background)
@@ -136,7 +156,15 @@ internal static class TranslationChains
 
         // DeepL is not written in this method at all. That is what "structural, not configured"
         // means (I8) — read the class comment before changing it.
-        return ChainTranslator.Of(tiers.ToArray());
+        //
+        // The shared store can nevertheless SERVE this chain a value DeepL produced for the
+        // Translator tab, and that is accepted (ruling E4-a): §8.2's key is provider-agnostic on
+        // purpose — keying by provider would multiply the cache by the tier count and defeat the one
+        // property the epic exists for. I8 is about REQUESTS, and none is made: a cached string
+        // costs no quota, and this method still cannot construct a DeepLTranslator. The producing
+        // tier is recorded in the entry's "p" for the log and the Bergamot drop rule, and it is
+        // deliberately not part of the key.
+        return new CachingTranslator(ChainTranslator.Of(tiers.ToArray()), Cache);
     }
 
     /// <summary>
@@ -147,6 +175,12 @@ internal static class TranslationChains
     /// <para>Every tier is <see cref="RequestPriority.Interactive"/>, which is the default — so it
     /// is the READ chain that is the exception, and a future reader can see which of the two was
     /// deliberate.</para>
+    ///
+    /// <para><b>Wrapped in the shared cache, exactly like the read chain</b> (E4.S4) — and this is
+    /// the one with a behaviour change attached: <c>DeepLSaveKey_Click</c> re-runs
+    /// <c>BuildWriteChain()</c> so a corrected key takes effect on the next translation, and what it
+    /// rebuilds is the CHAIN. <see cref="Cache"/> is a property of this class, not of the chain, so
+    /// the session's accumulated translations survive the save (amplifier A5, closed here).</para>
     /// </summary>
     internal static ITranslator BuildWrite(AppSettings settings)
     {
@@ -165,6 +199,6 @@ internal static class TranslationChains
         tiers.Add((ProviderIds.GoogleGtx, new GoogleGtxTranslator()));
         // [Bergamot — E8.S3: only if OfflineFallbackEnabled and the model is present.]
 
-        return ChainTranslator.Of(tiers.ToArray());
+        return new CachingTranslator(ChainTranslator.Of(tiers.ToArray()), Cache);
     }
 }

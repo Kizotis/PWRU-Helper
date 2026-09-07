@@ -527,12 +527,14 @@ public class TranslationCachePersistenceTests
     // ---- the A.2 default: a store nobody made persistent touches no disk at all -----------------
 
     [Fact]
-    public void A_non_persistent_store_neither_reads_nor_writes_and_that_is_todays_three_decorators()
+    public void A_non_persistent_store_neither_reads_nor_writes_and_that_is_the_legacy_decorator()
     {
-        // Until E4.S4 shares one store the app builds THREE CachingTranslators each owning a
-        // private one; three of them pointed at a single file would spend the session overwriting
-        // each other's 500 entries. Persistence is therefore opt-in, and TranslationChains.Cache is
-        // the one instance that opts in.
+        // Persistence is opt-in, and since E4.S4 TranslationChains.Cache is the only instance in
+        // the app that opts in — every chain the builders return decorates THAT one. What is left
+        // on the default is the legacy CachingTranslator constructor (no store, its own private
+        // 500-entry one), which nothing in production calls any more: a second persistent store
+        // pointed at the same file would spend the session overwriting the first one's entries,
+        // which is why the default may not flip.
         using var cache = new TempCache();
         cache.Write(FileJson(("ru|en|привет", "hello")));
         var before = cache.Read();
@@ -550,8 +552,8 @@ public class TranslationCachePersistenceTests
     public void The_shared_store_is_persistent_and_the_facade_is_what_flushes_it()
     {
         // MainWindow.OnClosing names TranslationChains.FlushCache(), never a store — the same rule
-        // that keeps the chain composition in Services/ (ruling E3-c). E4.S4 is the one line that
-        // hands this instance to the three decorators.
+        // that keeps the chain composition in Services/ (ruling E3-c). Since E4.S4 this instance is
+        // what all three builders hand their decorator (ChainCompositionTests asserts that identity).
         using var cache = new TempCache();
 
         var shared = TranslationChains.Cache;
@@ -577,6 +579,68 @@ public class TranslationCachePersistenceTests
         TranslationChains.ResetCacheForTests();
     }
 
+    /// <summary>
+    /// <b>TP-CACHE-11, end to end</b> — the epic's payoff sentence, driven through the process's one
+    /// real store and its real file: a line the LIVE feed translated is free on the Translator tab,
+    /// and it is still free after a restart. E4.S2 could not write this (nothing was wired to the
+    /// shared store yet, so its "How to verify manually" steps 2–6 were not exercisable); E4.S4 is
+    /// what makes it true, and this is those steps without a window.
+    ///
+    /// <para>The decorators are built the way <c>TranslationChains</c> builds them — over
+    /// <see cref="TranslationChains.Cache"/> — but with counting inner translators rather than real
+    /// chains: a real chain carries production's HttpClient and a miss would reach the Internet
+    /// (IS-10). What the store is handed to in production is <c>ChainCompositionTests</c>' identity
+    /// assert; what that sharing buys is here, as a call count of zero.</para>
+    ///
+    /// <para>The UI-thread half of TP-CACHE-11 stays where it can be asserted without a dispatcher:
+    /// <see cref="The_load_runs_synchronously_on_the_thread_that_missed"/>. The load happens on
+    /// whichever thread missed, and every miss in this app is already off the UI thread — a LIVE
+    /// tick or a click's await — so there is no dispatcher hop to observe.</para>
+    /// </summary>
+    [Fact]
+    public async Task TP_CACHE_11_A_line_the_live_feed_translated_is_free_when_the_player_types_it()
+    {
+        using var cache = new TempCache();
+        try
+        {
+            // The LIVE feed pays for the line, once.
+            var liveInner = new CountingTranslator();
+            var live = new CachingTranslator(liveInner, TranslationChains.Cache);
+            Assert.Equal("T:привет всем", await live.TranslateAsync("привет всем", "ru", "en"));
+            Assert.Equal(1, liveInner.SingleCalls);
+
+            // The player retypes it in the Translator tab, same session: zero requests.
+            var writeInner = new CountingTranslator();
+            var write = new CachingTranslator(writeInner, TranslationChains.Cache);
+            Assert.Equal("T:привет всем", await write.TranslateAsync("привет всем", "ru", "en"));
+            Assert.Equal(0, writeInner.SingleCalls);
+
+            // Close the app: OnClosing's one line, and the file really holds the LIVE feed's entry.
+            TranslationChains.FlushCache();
+            Assert.Equal(new[] { "ru|en|привет всем" },
+                         Rows(cache.Read()).Select(r => r.GetProperty("k").GetString()).ToArray());
+
+            // …and start it again. A new store instance, which reads the file on its first MISS.
+            var closed = TranslationChains.Cache;
+            TranslationChains.ResetCacheForTests();
+            Assert.NotSame(closed, TranslationChains.Cache);   // genuinely a restart, not a re-read
+
+            var restartedInner = new CountingTranslator();
+            var restarted = new CachingTranslator(restartedInner, TranslationChains.Cache);
+            Assert.Equal("T:привет всем", await restarted.TranslateAsync("привет всем", "ru", "en"));
+            Assert.Equal(0, restartedInner.SingleCalls);
+
+            // Non-vacuity: a line the previous session never saw still costs a request.
+            Assert.Equal("T:го пати", await restarted.TranslateAsync("го пати", "ru", "en"));
+            Assert.Equal(1, restartedInner.SingleCalls);
+        }
+        finally
+        {
+            // The singleton may not outlive the TempCache whose path it pinned (E4.S2's review).
+            TranslationChains.ResetCacheForTests();
+        }
+    }
+
     [Fact]
     public void TranslationChains_Cache_is_the_only_persistent_store_production_builds()
     {
@@ -584,7 +648,7 @@ public class TranslationCachePersistenceTests
         // BECAUSE one instance opts in, and a second one pointed at the same file would spend the
         // session overwriting the first one's entries. A default is exactly the kind of guard a
         // copied constructor line silently loses, so it is pinned as an exact-equality scan —
-        // TP-START-02's shape.
+        // TP-START-02's shape. It is what stops E4.S4's sharing being undone one `new` at a time.
         var root = RepoRoot();
 
         var builders = ProductionSources(root)
@@ -706,6 +770,24 @@ public class TranslationCachePersistenceTests
         public Task<List<string>> TranslateLinesAsync(IReadOnlyList<string> lines, string source, string target,
             CancellationToken ct = default)
             => Task.FromResult(lines.Select(l => l == "привет" ? "hello" : Placeholder).ToList());
+    }
+
+    /// <summary>Counts what it is asked, so the shared store can be asserted on the number that
+    /// matters — requests NOT made. Local to this class rather than shared with
+    /// <c>SharedCacheStoreTests</c>: those cases need no file and must not be able to reach one.</summary>
+    private sealed class CountingTranslator : ITranslator
+    {
+        public int SingleCalls;
+
+        public Task<string> TranslateAsync(string text, string source, string target, CancellationToken ct = default)
+        {
+            SingleCalls++;
+            return Task.FromResult("T:" + text);
+        }
+
+        public Task<List<string>> TranslateLinesAsync(IReadOnlyList<string> lines, string source, string target,
+            CancellationToken ct = default)
+            => Task.FromResult(lines.Select(l => "T:" + l).ToList());
     }
 
     private static string Code(string text) => string.Join("\n", text.Split('\n').Select(l =>

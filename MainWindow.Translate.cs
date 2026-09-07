@@ -221,7 +221,8 @@ public partial class MainWindow
 
     /// <summary>Build the WRITING translator from settings (§8.1): the user's DeepL key in front of
     /// the free tiers when one is set, the free tiers alone when it is not — always wrapped in the
-    /// cache. Rebuilt on key change.
+    /// shared cache, which is <see cref="TranslationChains"/>' and not this chain's (§8.2, E4.S4).
+    /// Rebuilt on key change; the store is not.
     ///
     /// <para><b>DeepL is absent from the READ chain by construction, not by configuration (I8).</b>
     /// That is <see cref="TranslationChains.BuildRead"/>'s doing and no setting can undo it — which
@@ -229,16 +230,19 @@ public partial class MainWindow
     /// behind an opt-in, and the invariant that survives it is the one about DeepL.</para>
     ///
     /// <para>The composition itself lives in <see cref="TranslationChains"/>, in <c>Services/</c>:
-    /// a chain needs gates, and this file may not name <c>ProviderGates</c> (TP-START-02).</para></summary>
-    private ITranslator BuildWriteChain() => new CachingTranslator(TranslationChains.BuildWrite(_settings));
+    /// a chain needs gates, and this file may not name <c>ProviderGates</c> (TP-START-02). Since
+    /// E4.S4 it needs the shared cache store too, and the same rule applies for the same reason —
+    /// the builder returns the chain already decorated, so this file names neither.</para></summary>
+    private ITranslator BuildWriteChain() => TranslationChains.BuildWrite(_settings);
 
     private void DeepLSaveKey_Click(object sender, RoutedEventArgs e)
     {
         _settings.DeepLApiKey = (DeepLKeyBox.Password ?? "").Trim();
         SettingsService.Save(_settings);
-        // Apply immediately. It still starts with a fresh cache — the session's accumulated
-        // translations are thrown away here, an accepted A.1 tradeoff (amplifier A5): the shared
-        // store that outlives the decorator is E4's (§8.2), not this story's.
+        // Apply immediately: a corrected key takes effect on the very next translation. What is
+        // rebuilt is the CHAIN — the cache store behind it is TranslationChains' and outlives this
+        // line (§8.2, E4.S4), so the session's accumulated translations survive the save. That was
+        // amplifier A5, and it is why this handler is not something a user pays for twice.
         _writeTranslator = BuildWriteChain();
         UpdateDeepLStatus();
         ShowToast(_settings.DeepLApiKey.Length > 0
