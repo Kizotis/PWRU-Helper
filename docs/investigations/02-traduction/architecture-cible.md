@@ -154,7 +154,8 @@ flowchart TB
 | `GoogleGtxTranslator` | `Services/GoogleGtxTranslator.cs` | Today's `TranslationService`, renamed, demoted to a late tier, typed errors. | Being the default. |
 | `AzureTranslator` | `Services/AzureTranslator.cs` | Azure AI Translator F0/S1 over raw `HttpClient`. | — |
 | `DeepLTranslator` | `Services/DeepLTranslator.cs` | Unchanged behaviour; error construction goes through `Kind`. | Ever being reachable from the read path (I8). |
-| `BergamotTranslator` | `Services/BergamotTranslator.cs` | **Prototype only.** Lazy model load, idle unload, synchronous native call on `Task.Run`. | Shipping before the measured go/no-go (§7.6). |
+| `BergamotTranslator` | `Services/BergamotTranslator.cs` | **Prototype only.** Lazy model load, idle unload, synchronous native call on `Task.Run`. **Landed E8.S2** (prototype branch): the provider alone — `Load()`/`Unload()`/`IsLoaded` are the capability, the *policy* is E8.S4, the store is E8.S3, the chain placement is E8.S5. | Shipping before the measured go/no-go (§7.6). Calling `ProviderGate.TryEnter` (a local engine takes no admission token) or writing `NotSent` (ruling E8-c). |
+| `IBergamotEngine` | `Services/BergamotEngine.cs` | **Landed E8.S2.** The three C exports as an interface — `translator_initialize` (the factory), `translator_translate`, `translator_free` — with `BergamotEngine` wrapping `BlockingService` and a fake standing in for it in every automated case of epic E8 (CI-8: no model download, no native DLL in CI). | Widening it: it is a P/Invoke surface, not an abstraction layer. |
 | `TextChunker` | `Services/TextChunker.cs` | `ChunkText` / `HardSplit`, moved out of `TranslationService` because two providers need them. | — |
 
 ---
@@ -724,6 +725,16 @@ Architectural constraints, all load-bearing:
 6. **Explicit consent before the first download** (~30 MB per direction) and a RAM-budget check.
 7. Two failure modes only — *model not downloaded* and *init failed* — both returning a `(`-prefixed placeholder so
    nothing is cached (I4). It cannot time out, so I3 does not apply to this leg.
+   > **Ruling E8-c (landed in E8.S2).** This clause was written before E1 landed the typed errors and E3 landed
+   > the chain. Read literally it would have this provider *return* a placeholder, which nothing in the app does
+   > any more. What it protects is **I4 — nothing failed is ever cached** — so both failure modes **throw**
+   > `TranslationException(Unavailable, …, providerId: bergamot)` and additionally **report to the provider's
+   > gate**, which opens a soft window `ChainTranslator` skips the tier for. That is *stronger* than the
+   > placeholder: `CachingTranslator` is never handed a value at all. Neither mode sets `NotSent` —
+   > `HttpProviderCore` stays its only writer (ruling E3-b), because the flag means "no request left the machine",
+   > which is a statement about a request a local engine never makes. The I3 half is unchanged and is now written
+   > in the code: no `HttpClient`, no timeout, so no OCE with a live token — and the `when (ct.IsCancellationRequested)`
+   > filter is written anyway, because a bare catch is wrong even where it would be harmless.
 8. **MPL-2.0 enters the licence tree** (DLL, models, wrapper) and belongs in the About tab. File-level copyleft is
    compatible with shipping alongside an MIT app; it is still a second licence, and the owner has chosen SignPath
    Foundation, which requires the app itself to stay OSI-licensed (MIT).

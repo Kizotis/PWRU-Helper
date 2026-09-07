@@ -36,6 +36,31 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- E8.S2 / ruling E8-d — the ONE new NuGet this design allows, and it is on the PROTOTYPE
+         BRANCH only (NFR6, architecture-cible.md §7.6). The MANAGED BINDING AND NOTHING ELSE:
+         `ExcludeAssets="native"` keeps the 21.4 MB `bergamot.dll` out of the build output and out
+         of the single-file bundle, which is U7's whole answer — E8.S1 measured 0 B of exe growth
+         and `%TEMP%\.net\PWRUHelper\<id>` still at its five WPF files, so §7.6 constraint 4's
+         self-extraction worry (the mechanism implicated in P1) is NOT re-armed. The DLL is
+         downloaded beside the models by E8.S3's store and reached through
+         NativeLibrary.SetDllImportResolver (Services/BergamotEngine.cs). `PublishFlagsTests` is
+         untouched by design (CI-7): this changes no publish flag in any of the three build paths.
+
+         LICENCE OBLIGATION (§7.6 constraint 8, NFR10). The binding, the native engine and the
+         models are all MPL-2.0 while this app is MIT. File-level copyleft is compatible with
+         shipping beside an MIT app — and SignPath Foundation's requirement that the app itself
+         stay OSI-licensed (MIT) is met — but it is a SECOND LICENCE and it has to be visible: the
+         MPL text ships with the downloaded artefacts, and the About tab carries the notice. The
+         placement of that block is E8.S3's (§4.2's "Offline engine (optional)") and the packaging
+         decision is E8.S6's; the obligation is stated HERE so that neither of those two being
+         dropped can ship the engine with no notice.
+
+         The version is PINNED: every figure in benchmark-fournisseurs.md §6.2/§10 and every number
+         in the E8.S1 spike was measured against 0.5.1. -->
+    <PackageReference Include="BergamotTranslatorSharp" Version="0.5.1" ExcludeAssets="native" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Phrasebook data: embedded in the exe (so a single portable exe is self-contained)
          AND copied next to the exe so it stays easy to edit. -->
     <None Remove="Data\phrases.json" />
