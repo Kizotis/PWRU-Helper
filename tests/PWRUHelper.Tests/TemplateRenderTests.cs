@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -256,6 +257,68 @@ public class TemplateRenderTests
             Assert.False(window.CountdownRunning,
                          "a window that has not painted yet must not be running a countdown (I10)");
         });
+    }
+
+    /// <summary>
+    /// <b>I10, as a behaviour and not as a source scan.</b> The case above proves the chip SAYS
+    /// "checking…"; this one proves the reason is true — a real window, built with a real pause
+    /// standing in the redirected <c>provider-state.json</c>, has not read that file when its
+    /// constructor paints the chip.
+    ///
+    /// <para>The discriminating assertion is the TOOLTIP, because it is built from the same
+    /// snapshots the chip is and it names every tier's state whether or not the warm-up has run: a
+    /// constructor that loaded the file would render Google as paused there, while "checking…" on
+    /// the chip would go on looking exactly the same. This is the regression a well-meant
+    /// "make the tooltip honest" change would introduce — a file read in front of the first paint,
+    /// which is what I10 and P1 exist to stop and what ruling <b>E6-a</b> settled by moving the read
+    /// to <c>OnWindowLoaded</c>, on the pool, behind every await.</para>
+    ///
+    /// <para>It writes the run-wide redirect's own file (never the developer's <c>%AppData%</c>) and
+    /// deletes it again: the <c>Gates</c> collection is serialised against every other one, so no
+    /// case can see it, and a leftover file would seed the next gate case that opens no
+    /// <c>TempGateState</c> of its own.</para>
+    /// </summary>
+    [Fact]
+    public void A_new_window_has_not_read_the_gate_state_file_when_it_paints_the_chip()
+    {
+        using var _ = new TempSettings("""{ "SettingsVersion": 3 }""");
+
+        // Far enough out to be a live window under either clock a previous case can have left
+        // behind — the wall clock, or the run-wide virtual one.
+        var path = TestGateStateRedirect.Path;
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, """
+            { "version": 1, "providers": { "google-dict": {
+                "blockedUntil": "2099-01-01T00:00:00+00:00",
+                "keyBlockedUntil": null,
+                "strikes": 1,
+                "lastKind": "RateLimited",
+                "lastAt": null,
+                "cleanSince": null } } }
+            """);
+
+        try
+        {
+            StaTestHost.Run(() =>
+            {
+                var window = new MainWindow();
+
+                Assert.Equal("○ checking…", window.WriteChip.Text);
+                var tooltip = Assert.IsType<string>(window.WriteChip.ToolTip);
+
+                var google = tooltip.Split('\n')[0];
+                Assert.StartsWith("Google ", google, StringComparison.Ordinal);
+                Assert.EndsWith("● ready", google, StringComparison.Ordinal);
+                Assert.DoesNotContain("paused", tooltip, StringComparison.Ordinal);
+
+                // …and nothing started counting down to a window the app has not read (I10).
+                Assert.False(window.CountdownRunning);
+            });
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     /// <summary>

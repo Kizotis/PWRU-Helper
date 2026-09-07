@@ -419,6 +419,42 @@ public class ProviderChipTests
     }
 
     /// <summary>
+    /// <b>S3 is about the PREFERRED engine</b> (§2.1: "the preferred provider is gated; something
+    /// below it still serves"), so a window on a tier BELOW the one answering is not S3 and the chip
+    /// stays S1. The backup keeping its own window after the preferred one's has elapsed is the
+    /// ordinary way round, not an edge case — and reporting it would demote a healthy chip to a
+    /// muted "paused", prefix the compact overlay that is meant to stay wordless while healthy, and
+    /// arm §3.5's "Back on Google." for a recovery from nothing.
+    /// </summary>
+    [Fact]
+    public void A_pause_below_the_engine_that_is_answering_is_not_the_chips_business()
+    {
+        var backupPaused = Status(
+            gates: new(StringComparer.Ordinal)
+            {
+                [ProviderIds.GoogleGtx] = Paused(58, TranslationErrorKind.RateLimited),
+            },
+            outcome: Answered(ProviderIds.GoogleDict));
+
+        var chip = MainWindow.ChipFor(backupPaused);
+        Assert.Equal("● Google", chip.Label);
+        Assert.Equal("TealBrush", chip.BrushKey);
+        Assert.True(chip.IsHealthy, "a pause the player cannot feel may not un-heal the chip");
+        Assert.False(chip.HasClock);
+
+        // …and the same window ABOVE the answering tier is still S3, unchanged.
+        Assert.Equal("○ Google paused 0:58", Chip(S3()).Text);
+
+        // The serving tier's own window counts: it has answered, and the player is about to feel it.
+        Assert.Equal("○ Google paused 0:58", Chip(Status(
+            gates: new(StringComparer.Ordinal)
+            {
+                [ProviderIds.GoogleDict] = Paused(58, TranslationErrorKind.RateLimited),
+            },
+            outcome: Answered(ProviderIds.GoogleDict))).Text);
+    }
+
+    /// <summary>
     /// The earliest instant a paused read tier comes back — the number S5's chip counts down. The
     /// sentinel is not a candidate, so a chain holding one real window and one refused key still
     /// counts down to the real one.

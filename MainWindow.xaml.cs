@@ -793,17 +793,23 @@ public partial class MainWindow : Window
                 UserMessages.EngineChipQuotaOut(Serving(status, readLines), spent.ProviderId),
                 "GoldBrush");
 
-        // S3 — the preferred engine is inside a window and something below it still serves. Ruling
-        // E3-a decided what "paused" means; EngineStatus applied it.
-        if (readLines.FirstOrDefault(l => l.State == EngineState.Paused) is { } paused)
+        var serving = Serving(status, readLines);
+
+        // S3 — §2.1's own wording: "the PREFERRED provider is gated; something below it still
+        // serves". Ruling E3-a decided what "paused" means; EngineStatus applied it. What is
+        // decided HERE is which pause the chip speaks for, and it is not simply the first one in
+        // chain order: a tier paused BELOW the engine that is answering is not S3. The player is
+        // getting exactly the engine they would have got, so a muted "paused" chip there is S1 told
+        // wrong — and it would go on to prefix the compact overlay ("shown only when not healthy")
+        // and arm §3.5's recovery notice for a recovery from nothing. It is reachable the ordinary
+        // way round: the backup tier keeps its own window after the preferred one's has elapsed.
+        if (PreferredPause(readLines, serving) is { } paused)
         {
             var t = statusLineOwnsTheClock ? null : Countdown(paused.PausedUntil, status.Now);
             return new EngineChip(ChipQuietGlyph,
                 UserMessages.EngineChipPaused(paused.ProviderId, t),
                 "TextMutedBrush", HasClock: t is not null);
         }
-
-        var serving = Serving(status, readLines);
 
         // S4 — the offline engine answered. E8 has not shipped, so this is unreachable today; the
         // mapping is total over ProviderIds.All all the same, and a synthetic outcome proves it.
@@ -827,6 +833,29 @@ public partial class MainWindow : Window
     {
         foreach (var id in new[] { ProviderIds.DeepL, ProviderIds.Azure })
             if (status.For(id) is { State: EngineState.Paused } line && line.Kind == kind) return line;
+        return null;
+    }
+
+    /// <summary>The pause §2.1's <b>S3</b> is about: the topmost paused read tier that does not sit
+    /// <i>below</i> the engine currently serving. A window on a lower rung costs the player nothing
+    /// and must not demote a healthy chip.
+    ///
+    /// <para>The serving tier itself counts — a gate the write path closed under a tier that has
+    /// already answered is a pause the player is about to feel — and an unknown <paramref
+    /// name="serving"/> (null, or an id that is not a read tier) falls back to the whole chain, so
+    /// a state this function cannot place is still reported rather than hidden.</para></summary>
+    private static EngineLine? PreferredPause(IReadOnlyList<EngineLine> readLines, string? serving)
+    {
+        int lowest = readLines.Count - 1;
+        for (int i = 0; i < readLines.Count; i++)
+            if (string.Equals(readLines[i].ProviderId, serving, StringComparison.Ordinal))
+            {
+                lowest = i;
+                break;
+            }
+
+        for (int i = 0; i <= lowest && i < readLines.Count; i++)
+            if (readLines[i].State == EngineState.Paused) return readLines[i];
         return null;
     }
 
