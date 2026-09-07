@@ -71,7 +71,7 @@ Two files on the [Releases](../../releases) page — **take the installer if you
 - **Never stops.** If a translation engine asks us to slow down, it's paused for a few minutes and the next one takes over on its own. A small coloured dot next to the Translate button tells you which engine is answering.
 - **No line is translated twice.** Repeated chat comes back instantly from a small file on your PC.
 - **Optional keys** (About tab) if you want better wording for what *you* write: **DeepL** or **Azure Translator**. Free stays underneath — if a key runs out, the app falls back on its own.
-- **Optional offline engine.** About tab → **Download the offline engine** (about 45 MB, one time). It translates on your PC with no internet at all, and it only answers when nothing else can. It uses memory only while it is translating, and **Remove** deletes it again.
+- **Optional offline engine.** About tab → **Download the offline engine** (about 50 MB, one time). It translates on your PC with no internet at all, and it only answers when nothing else can. It uses memory only while it is translating, and **Remove** deletes it again.
 
 ---
 
