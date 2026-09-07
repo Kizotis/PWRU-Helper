@@ -37,7 +37,13 @@ public class TranslationException : Exception
     /// Null when nothing said. Rendered as a countdown by the UI; Services/ never formats it.</summary>
     public DateTimeOffset? RetryAt { get; }
 
-    /// <summary>Which provider produced the failure. For the diagnostic log only — never shown.</summary>
+    /// <summary>Which provider produced the failure.
+    /// <para><b>The id itself is never shown</b> (§3's "no provider internal"), but since E7.S1 it is
+    /// what <c>{P}</c> is looked up from: <c>UserMessages.For</c> passes it through
+    /// <c>ProviderNames.Display</c>, which answers the user-facing name or <c>null</c> — and a null
+    /// renders the sentence's <c>{P}</c>-less form rather than a name nobody chose (§3.0 rule 1).
+    /// It is <b>not</b> read from <c>ChainTranslator.LastOutcome</c>, whose <c>ProviderId</c> is
+    /// null on exactly the exit that produces a sentence.</para></summary>
     public string? ProviderId { get; }
 
     /// <summary>

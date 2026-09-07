@@ -177,7 +177,9 @@ public class LiveTickPolicyTests
                      MainWindow.LivePausedStatus(4));
         Assert.Equal("○ Live — paused, next try in 1:00. It resumes on its own; nothing is lost.",
                      MainWindow.LivePausedStatus(60));
-        Assert.Equal("○ Live — paused, next try in about 30 min. It resumes on its own; nothing is lost.",
+        // "more than", not "about", at the cap — ruling E7-a (E7.S1): the display cap is 30 minutes
+        // and a quota window is 60, so "about" was rounding a possible hour down.
+        Assert.Equal("○ Live — paused, next try in more than 30 min. It resumes on its own; nothing is lost.",
                      MainWindow.LivePausedStatus(1800));
         // No number to promise → no number invented, and the reassurance still stands.
         Assert.Equal("○ Live — paused. It resumes on its own; nothing is lost.",

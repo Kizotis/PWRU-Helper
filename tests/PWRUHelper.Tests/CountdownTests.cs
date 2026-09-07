@@ -14,7 +14,7 @@ namespace PWRUHelper.Tests;
 ///
 /// <list type="number">
 /// <item><b>The bands</b> (§2.4 / amendment A9, TP-RENDER-07): <c>about to retry</c> under five
-///       seconds, <c>m:ss</c> to ninety, <c>about N min</c> above it, <c>about 30 min</c> at the
+///       seconds, <c>m:ss</c> to ninety, <c>about N min</c> above it, <c>more than 30 min</c> at the
 ///       display cap — culture-invariant, because the <c>:</c> of a locale-aware format is a real
 ///       defect on a Russian-language Windows (the reason E2.S6's gate log is invariant).</item>
 /// <item><b>The repaint guard</b> (AC 3, hint 7): a descending second is usually the SAME string,
@@ -72,19 +72,23 @@ public class CountdownTests
     [InlineData(91, "about 2 min")]
     [InlineData(120, "about 2 min")]
     [InlineData(121, "about 3 min")]
-    // The longest window the breaker can open for, exactly on the display cap.
-    [InlineData(1800, "about 30 min")]
+    // The longest window the breaker can open for, exactly on the display cap — and AT the cap the
+    // wording changes to "more than" (ruling E7-a, E7.S1): see the note below.
+    [InlineData(1800, "more than 30 min")]
     // Past it: the cap holds rather than counting on, and it does so without overflowing on the
     // ceiling arithmetic — int.MaxValue is what a caller that skipped CountdownSeconds would hand it.
-    [InlineData(1801, "about 30 min")]
-    [InlineData(3599, "about 30 min")]
+    [InlineData(1801, "more than 30 min")]
+    // Ruling E7-a: AT the cap the number is a FLOOR under the wait, not an approximation of it —
+    // QuotaOpenMinutes is 60 against a 30-minute display cap, so "about 30 min" was rounding a
+    // possible hour DOWN, the one direction §2.4's "rounded up" may not break. Deliberate.
+    [InlineData(3599, "more than 30 min")]
     // 3600 is LiveTickPolicy.MaxCountdownSeconds — the LAST second CountdownSeconds still gives a
     // number for, and therefore the largest value production can actually hand this. 3601 is the
     // first it cannot (the fact below pins that guard); both are here because the story's Testing
     // section names them, and because the display cap must not develop an opinion at either.
-    [InlineData(3600, "about 30 min")]
-    [InlineData(3601, "about 30 min")]
-    [InlineData(int.MaxValue, "about 30 min")]
+    [InlineData(3600, "more than 30 min")]
+    [InlineData(3601, "more than 30 min")]
+    [InlineData(int.MaxValue, "more than 30 min")]
     public void TP_RENDER_07_the_four_bands(int? seconds, string? expected)
         => Assert.Equal(expected, MainWindow.CountdownText(seconds));
 
@@ -101,10 +105,10 @@ public class CountdownTests
         Assert.Null(LiveTickPolicy.CountdownSeconds(Now + TimeSpan.FromHours(2), Now));
         Assert.Null(MainWindow.CountdownText(LiveTickPolicy.CountdownSeconds(DateTimeOffset.MaxValue, Now)));
 
-        // The display cap: a real 45-minute wait would still be shown, and shown as "about 30 min".
+        // The display cap: a real 45-minute wait would still be shown, as "more than 30 min" (E7-a).
         // Nothing in the app produces one today (the honesty guard answers null first), which is
         // exactly why the cap needs its own case rather than being read off a caller.
-        Assert.Equal("about 30 min", MainWindow.CountdownText(45 * 60));
+        Assert.Equal("more than 30 min", MainWindow.CountdownText(45 * 60));
         Assert.Equal(3600, LiveTickPolicy.MaxCountdownSeconds);
     }
 
@@ -401,15 +405,19 @@ public class CountdownTests
     [Fact]
     public void A_sentence_that_joins_in_t_gets_no_number_under_the_floor()
     {
-        Assert.Equal("0:30", MainWindow.CountdownJoinText(30));
+        // E7.S1 / ruling E7-a widened the floor from §2.4's five seconds to a whole minute: a
+        // sentence written once and never repainted may not show a stopwatch at all, so "0:30" is
+        // now a null here too and A12's clause takes over. Deliberate — see E7a_… in
+        // UserMessagesTests, which owns the band.
+        Assert.Null(MainWindow.CountdownJoinText(30));
         Assert.Equal("about 4 min", MainWindow.CountdownJoinText(200));
         Assert.Null(MainWindow.CountdownJoinText(4));
         Assert.Null(MainWindow.CountdownJoinText(null));
 
         // The two sentences that take it, at the floor: each already has an honest form for "no
-        // number", and this is what selects it. Neither sentence is changed by this story.
-        Assert.Equal("Read 3 line(s) — all engines are paused. Try again shortly.",
-                     UserMessages.ReadOncePaused(3, MainWindow.CountdownJoinText(4)));
+        // number", and this is what selects it.
+        Assert.Equal("Read 3 line(s) — every engine is paused, try again shortly.",
+                     UserMessages.ReadOncePaused(3, MainWindow.CountdownJoinText(4), liveIsRunning: false));
         Assert.Equal("⚠ Not checked — Azure is paused right now.",
                      UserMessages.KeyTestSentence(ProviderIds.Azure,
                          KeyTestResult.PausedFor(TranslationErrorKind.RateLimited, 4), "westeurope",

@@ -677,13 +677,40 @@ public partial class MainWindow : Window
     ///
     /// The mapping is a pure function and lives in <c>Services/</c> so the suite can assert on the
     /// copy without an STA host; this stays the display-time entry point, which is where the
-    /// countdown will be formatted from <see cref="TranslationException.RetryAt"/> when E7.S1 adds
-    /// it (I2: <c>Services/</c> never formats a time).
+    /// countdown IS formatted from <see cref="TranslationException.RetryAt"/> (I2:
+    /// <c>Services/</c> counts the seconds and never formats them).
+    ///
+    /// <para><b>Both parameters of the deck's sentence are resolved here</b> (E7.S1).
+    /// <c>{P}</c> comes from <see cref="TranslationException.ProviderId"/> through
+    /// <c>ProviderNames</c> — from the failure itself, never guessed, and never
+    /// <c>ChainTranslator.LastOutcome</c>, whose <c>ProviderId</c> is null on exactly the exit that
+    /// produces a sentence. <c>{t}</c> comes from <see cref="TryAgainIn"/>.</para>
+    ///
+    /// <para>"— another engine is being tried" is NOT offered here and the default <c>false</c> is
+    /// the honest value: this method is reached once an attempt has already failed (amendment A4).
+    /// The clause is for a status line rendered while a chain is still walking, and the caller that
+    /// builds one passes it from its own position — see <c>UserMessages.Sentence</c>.</para>
     ///
     /// <c>internal</c>, not <c>private</c>: the suite reaches it through <c>InternalsVisibleTo</c>.
-    /// Both feed-row call sites wrap the result in parentheses — do not add them here (I4).
+    /// A feed row no longer renders this at all (amendment A5).
     /// </summary>
-    internal static string Friendly(Exception ex) => UserMessages.For(ex);
+    internal static string Friendly(Exception ex) => UserMessages.For(ex, TryAgainIn(ex));
+
+    /// <summary>The <c>{t}</c> of a failure's own sentence, in the <b>coarse</b> band (ruling
+    /// <b>E7-a</b>): a §3.1 sentence is written once onto a status line and never ticks, so it may
+    /// not show "0:05" — a frozen stopwatch reads as a live clock, which is the one thing a
+    /// countdown must not do. <c>CountdownJoinText</c> is that coarse band; only the 1 Hz LIVE lines
+    /// use <c>m:ss</c>.
+    ///
+    /// <para>The clock is <c>UtcNow</c> and not a gate's <c>Now()</c>: a static display-time helper
+    /// holds no chain, and reaching for <c>ProviderGates</c> from the code-behind is what TP-START-02
+    /// forbids. The two agree in production (a gate's default clock IS <c>UtcNow</c>) and diverge
+    /// only under an injected test clock — where the countdown degrades to A12's "briefly" /
+    /// "shortly" rather than printing a wrong number.</para></summary>
+    internal static string? TryAgainIn(Exception ex)
+        => ex is TranslationException te
+            ? CountdownJoinText(LiveTickPolicy.CountdownSeconds(te.RetryAt, DateTimeOffset.UtcNow))
+            : null;
 
     // ============================================================
     //  GLOBAL HOTKEYS (work even while the game has focus)

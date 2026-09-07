@@ -242,7 +242,7 @@ public partial class MainWindow
         // NOT _ocrItems.Clear(): the result is appended to the feed and framed instead (see
         // TranslateSentencesInto). Wiping the history to show one answer threw away the live lines
         // the user was reading — most obviously from the overlay, where the feed IS the window.
-        SetScreenStatus("Reading…");
+        SetScreenStatus(UserMessages.ReadingStatus());
 
         // One CancellationTokenSource per read, and the budget lives on it rather than on any one
         // request: what took the worst case to ≈36.9 s of uncancellable UI was the FAN-OUT (two
@@ -285,14 +285,20 @@ public partial class MainWindow
             }
             lines = sentences.Count;
             var target = SelectedTag(OcrTargetCombo) ?? "en";
-            SetScreenStatus($"Read {lines} line(s). Translating…");
+            SetScreenStatus(UserMessages.ReadTranslatingStatus(lines));
 
             // The four-way branch of §3.3, and "Done" is one branch of it (never the fall-through):
             // ReadOnceSummary reaches it only when every line read carries a translation, which is
             // UX hint 4 and the whole of DoD V1.5. The counts come from what the rows ACTUALLY got,
             // never from lines — reading N lines has never meant translating N lines.
             var (translated, error) = await TranslateSentencesInto(sentences, target, cts.Token);
-            SetScreenStatus(ReadOnceSummary.Status(lines, translated, error, PausedTryAgainIn(error)));
+            // _liveCts is amendment A7's fork: the E5.S3 retry queue is drained by the LIVE
+            // loop, so "they fill in when one is back" is a promise only a read taken with the loop
+            // running can keep. (It is null on every path today — read-once stops the loop first —
+            // and the state is read rather than assumed so the sentence stays right the day that
+            // changes.)
+            SetScreenStatus(ReadOnceSummary.Status(lines, translated, error, PausedTryAgainIn(error),
+                                                   liveIsRunning: _liveCts != null));
         }
         // I3, in the shape ChainTranslator.RunAsync uses: OUR token really is cancelled, so this is
         // a person or the budget — never an HttpClient timeout, whose OperationCanceledException
@@ -475,7 +481,12 @@ public partial class MainWindow
                     EnqueueForRetry(items[i], parts[i].Body, target);
                 }
             else
-                foreach (var it in items) it.TranslationBody = $"({Friendly(ex)})";
+                // Amendment A5: a row carries no §3.1 sentence, no provider name and no countdown —
+                // three row texts exist and this is the finished one. §3.3a's gap note is exactly
+                // this branch: a read with no drain behind it would otherwise sit on "…" for ever,
+                // so it is stamped with the same finished form the retry queue uses when it gives up.
+                // The reason stays on the status line, once (ReadOnceSummary.Status below).
+                foreach (var it in items) GiveUpRow(it);
             return (0, AsTranslationFailure(ex, ct));
         }
         for (int i = 0; i < items.Count && i < translations.Count; i++)

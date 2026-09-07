@@ -153,7 +153,12 @@ public partial class CompactOverlay : Window
         if (!r.Ok)
         {
             // Keep what the user typed so they don't lose their message; show why it failed.
-            SetReplyResult($"⚠ {r.Error ?? "couldn't translate"} — your text is kept, press Enter to retry.", error: true);
+            //
+            // The WHOLE line arrives from the copy deck now (amendment A3 / §3.4): this surface
+            // takes a short form chosen by Kind, not a §3.1 sentence in a wrapper — the wrapper
+            // alone was 46 of the ~60 characters §3.4 allows a 360 px window. `Error` is null only
+            // for a reply with nothing typed, which never reaches this branch.
+            SetReplyResult(r.Error ?? UserMessages.OverlayReply(null), error: true);
             return;
         }
 

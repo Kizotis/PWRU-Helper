@@ -38,7 +38,13 @@ public partial class MainWindow
             bool copied = ru.Length > 0 && await CopyToClipboardAsync(ru);
             return new ReplyOutcome(true, ru, copied, null);
         }
-        catch (Exception ex) { return new ReplyOutcome(false, "", false, Friendly(ex)); }
+        // §3.4's SHORT form, not the §3.1 sentence: the overlay is 360 px and the wrapper
+        // "⚠ … — your text is kept, press Enter to retry." costs 46 characters on its own
+        // (amendment A3). The whole line is the deck's — the overlay renders what it is handed.
+        catch (Exception ex)
+        {
+            return new ReplyOutcome(false, "", false, UserMessages.OverlayReply(ex, TryAgainIn(ex)));
+        }
     }
 
     // ============================================================
@@ -103,7 +109,11 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
-            TranslateStatus.Text = $"Failed: {Friendly(ex)}";
+            // "Failed: " is RETIRED (§3.0): with {P} restored the sentence names the engine and
+            // says what happened, so a "Failed:" in front of it is the app saying "bad news" twice
+            // and demoting the sentence to a sub-clause. This is the surface §3.1 writes its
+            // sentences for — rendered alone — so it is the one that adds the terminal stop.
+            TranslateStatus.Text = UserMessages.TranslatorTabStatus(Friendly(ex));
             // Reset the colour too: gold means "too long", and an error left in gold after a long
             // translation reads as if the failure were about the length.
             TranslateStatus.SetResourceReference(TextBlock.ForegroundProperty, "TextMutedBrush");
@@ -676,8 +686,10 @@ public partial class MainWindow
     private void UpdateDeepLStatus()
     {
         bool on = (_settings.DeepLApiKey ?? "").Trim().Length > 0;
-        DeepLStatus.Text = on
-            ? "● DeepL for what you write (Translator + quick reply) — falls back to Google if it errors. Screen reading uses Google."
-            : "○ Using Google (free, no key needed)";
+        // Both lines are the deck's since E7.S1 (GAP-4) — they were the last user-facing
+        // sentences still living in a code-behind. The "off" one is §3.7's `cleared` row, which
+        // E6.S5's review found was not in the codebase at all for DeepL: "○ Using Google (free, no
+        // key needed)" names the fallback without ever naming what is missing.
+        DeepLStatus.Text = on ? UserMessages.DeepLKeySetStatus() : UserMessages.DeepLNoKeyStatus();
     }
 }

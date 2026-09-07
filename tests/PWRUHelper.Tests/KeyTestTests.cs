@@ -472,8 +472,11 @@ public class KeyTestTests : GatesTestBase
     /// place that decides what the player reads about a 429.
     /// </summary>
     [Theory]
+    // E7.S1 / amendment A1 rewrote the RateLimited row — §3.1 always banned "wait a minute" and the
+    // shipped "try again in a moment" sat next to it only because there was no gate to count down
+    // from. Deliberate expected-string update; the join itself is untouched.
     [InlineData(TranslationErrorKind.RateLimited,
-        "Could not check the key: the translation service asked us to slow down — try again in a moment.")]
+        "Could not check the key: the translation service asked us to slow down — paused briefly, and it retries on its own.")]
     [InlineData(TranslationErrorKind.Unavailable,
         "Could not check the key: the translation service is down right now — try again shortly.")]
     [InlineData(TranslationErrorKind.BadResponse,

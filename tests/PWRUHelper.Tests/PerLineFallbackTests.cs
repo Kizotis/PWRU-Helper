@@ -108,7 +108,7 @@ public class PerLineFallbackTests : GatesTestBase
 
         Assert.Equal(6, fake.Requests);                     // the batch plus five
         Assert.Equal(new[] { "hello", "hello", "hello" }, outp.Take(3));
-        Assert.StartsWith("(translation failed: ", outp[3]);
+        Assert.Equal(PerLineFallback.Failed(""), outp[3]);
         Assert.Equal("hello", outp[4]);
     }
 
@@ -322,9 +322,9 @@ public class PerLineFallbackTests : GatesTestBase
 
         var outp = await new GoogleDictTranslator(fake).TranslateLinesAsync(Lines(3), "ru", "en");
 
-        Assert.StartsWith("(translation failed: ", outp[0]);
+        Assert.Equal(PerLineFallback.Failed(""), outp[0]);
         Assert.Equal("hello", outp[1]);
-        Assert.StartsWith("(translation failed: ", outp[2]);
+        Assert.Equal(PerLineFallback.Failed(""), outp[2]);
     }
 
     /// <summary>
@@ -447,8 +447,8 @@ public class PerLineFallbackTests : GatesTestBase
         var outp = await new GoogleDictTranslator(fake).TranslateLinesAsync(Lines(3), "ru", "en");
 
         Assert.Equal("hello", outp[0]);
-        Assert.StartsWith("(translation failed: ", outp[1]);
-        Assert.StartsWith("(translation failed: ", outp[2]);
+        Assert.Equal(PerLineFallback.Failed(""), outp[1]);
+        Assert.Equal(PerLineFallback.Failed(""), outp[2]);
     }
 
     /// <summary>
@@ -524,7 +524,7 @@ public class PerLineFallbackTests : GatesTestBase
 
         var outp = await new GoogleGtxTranslator(fake).TranslateLinesAsync(Lines(2), "ru", "en");
 
-        Assert.Equal(new[] { "hello", "(translation failed: the request timed out)" }, outp);
+        Assert.Equal(new[] { "hello", PerLineFallback.Failed("the request timed out") }, outp);
     }
 
     /// <summary>I3's other side: a GENUINE cancel mid-loop propagates untouched and stops the loop

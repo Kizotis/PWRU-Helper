@@ -137,7 +137,7 @@ public class ReadOnceStatusTests
         var results = new List<string>
         {
             "need a healer",                                  // a translation
-            "(skipped — rate-limited, try again shortly)",     // E3.S8's per-line placeholder
+            PerLineFallback.SkippedMessage,                   // E3.S8's per-line placeholder
             "(no internet connection)",                        // the feed-row failure stamp
             "",                                                // nothing at all
             "go to the entrance",                              // a translation
@@ -211,20 +211,24 @@ public class ReadOnceStatusTests
 
         var pause = chain.PauseNow();
         var status = ReadOnceSummary.Status(lines, 0, error,
-            MainWindow.CountdownJoinText(LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now)));
+            MainWindow.CountdownJoinText(LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now)),
+            liveIsRunning: false);
 
-        // The "{t}" moved with E7.S2's bands (§2.4 / amendment A9): a soft cooldown is inside the
-        // m:ss band, so it now reads "0:05" rather than "5 s". Updated deliberately — the sentence
-        // itself is untouched, only the countdown it joins.
+        // The "{t}" moved twice, both times deliberately. E7.S2 gave it §2.4's bands; E7.S1 / ruling
+        // E7-a then took the STOPWATCH away from every sentence that is written once and never
+        // repainted — a frozen "0:05" reads as a live clock — so a five-second cooldown now has no
+        // number to join at all and amendment A12's "in {t}" → "shortly" is what the player reads.
         //
         // Through CountdownJoinText, which is what PausedTryAgainIn (MainWindow.Ocr.cs) actually
-        // calls (review). The two agree at five seconds, so composing through CountdownText passed
-        // while pinning a path that no longer ships — and a CountdownJoinText that answered null for
-        // everything would have left this green while read-once silently lost its countdown.
+        // calls (review): composing through CountdownText would pin a path that does not ship.
         var softCooldown = MainWindow.CountdownJoinText(TranslationPolicy.SoftCooldownSecs);
-        Assert.Equal("0:05", softCooldown);
-        Assert.Equal($"Read {lines} line(s) — all engines are paused. Try again in {softCooldown}.",
-                     status);
+        Assert.Null(softCooldown);
+        // …and the sentence itself is amendment A7's: §3.3's promise that the rows "fill in when one
+        // is back" is only true while the LIVE loop is running, so a read taken with it stopped is
+        // told to try again instead.
+        Assert.Equal($"Read {lines} line(s) — every engine is paused, try again shortly.", status);
+        Assert.Equal("Read 3 line(s) — every engine is paused, they fill in when one is back.",
+                     ReadOnceSummary.Status(lines, 0, error, null, liveIsRunning: true));
         Assert.DoesNotContain("Done", status, StringComparison.Ordinal);
     }
 
@@ -286,7 +290,7 @@ public class ReadOnceStatusTests
 
         // The pause is reported instead: the status is composed from what the read produced, and the
         // countdown is asked of the CHAIN, once, in the helper named for it.
-        Assert.Contains("ReadOnceSummary.Status(lines, translated, error, PausedTryAgainIn(error))",
+        Assert.Contains("ReadOnceSummary.Status(lines, translated, error, PausedTryAgainIn(error),",
                         ocr, StringComparison.Ordinal);
         var helper = BracedBlock(ocr, ocr.IndexOf("private string? PausedTryAgainIn(", StringComparison.Ordinal));
         Assert.Contains("_readChain.PauseNow()", helper, StringComparison.Ordinal);
@@ -541,9 +545,12 @@ public class ReadOnceStatusTests
         Assert.Contains("var (translated, error) = await TranslateSentencesInto(sentences, target, cts.Token);",
                         ocr, StringComparison.Ordinal);
         // E5-g added the fourth argument: the "{t}" of a paused read, rendered by the code-behind
-        // because formatting a countdown stays out of Services/ (I2).
-        Assert.Contains("SetScreenStatus(ReadOnceSummary.Status(lines, translated, error, PausedTryAgainIn(error)));",
+        // because formatting a countdown stays out of Services/ (I2). E7.S1 / amendment A7 added the
+        // fifth: the LIVE loop's state, which is what makes "they fill in when one is back" either
+        // a promise or a lie.
+        Assert.Contains("ReadOnceSummary.Status(lines, translated, error, PausedTryAgainIn(error),",
                         ocr, StringComparison.Ordinal);
+        Assert.Contains("liveIsRunning: _liveCts != null));", ocr, StringComparison.Ordinal);
     }
 
     /// <summary>

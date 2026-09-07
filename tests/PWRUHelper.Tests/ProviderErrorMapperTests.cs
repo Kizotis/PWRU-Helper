@@ -342,7 +342,7 @@ public class ProviderErrorMapperTests : GatesTestBase
         var outp = await new GoogleGtxTranslator(fake)
             .TranslateLinesAsync(new[] { "привет", "пока" }, "ru", "en");
 
-        Assert.Equal(new[] { "hello", "(translation failed: the request timed out)" }, outp);
+        Assert.Equal(new[] { "hello", PerLineFallback.Failed("the request timed out") }, outp);
     }
 
     // ---- AC 4 (E3.S6): which failure latches the per-line loop ---------------------------------
@@ -369,9 +369,12 @@ public class ProviderErrorMapperTests : GatesTestBase
         Assert.Equal(new[]
         {
             "hello", "hello",
-            "(rate-limited — try again shortly)",
-            "(skipped — rate-limited, try again shortly)",
-            "(skipped — rate-limited, try again shortly)",
+            // E7.S1 / amendment A5: all three per-line placeholders are now the one row text a
+            // row is allowed to carry. The BRANCHES are still three and are still asserted through
+            // three symbols, so this case still says which one produced which row.
+            PerLineFallback.RateLimitedMessage,
+            PerLineFallback.SkippedMessage,
+            PerLineFallback.SkippedMessage,
         }, outp);
         // The batch plus three lines. Lines 4 and 5 cost NO request: that is what latching is for.
         Assert.Equal(4, fake.Requests);
@@ -401,7 +404,7 @@ public class ProviderErrorMapperTests : GatesTestBase
             new[] { "привет", "пока", "спасибо", "да", "нет" }, "ru", "en");
 
         Assert.Equal(new[] { "hello", "hello" }, outp.Take(2));
-        Assert.StartsWith("(translation failed: ", outp[2]);
+        Assert.Equal(PerLineFallback.Failed(""), outp[2]);
         Assert.DoesNotContain("rate-limited", outp[2]);
         Assert.Equal(new[] { "bye", "bye" }, outp.Skip(3));
         // Every line was asked: the batch plus five. A latch here would have made it four.

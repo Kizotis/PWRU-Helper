@@ -131,7 +131,7 @@ public partial class MainWindow
         _pendingRetry.Clear();
         SetLiveUi(true);
         MainTabs.SelectedIndex = TabTranslator;
-        SetScreenStatus("🔴 Live — watching the area. Translations appear when new text shows up.");
+        SetScreenStatus(UserMessages.LiveStarted());
 
         _liveCts = new CancellationTokenSource();
         _ = LiveLoop(rect, _liveCts.Token);
@@ -415,7 +415,10 @@ public partial class MainWindow
                         $"Live translation auto-stopped — {errors.ConsecutiveFailures} failed reads in a row " +
                         "since the last translated line (refusals and pauses do not count)", ex);
                     StopLive();   // this sets "Live stopped." first…
-                    SetScreenStatus($"Live stopped after repeated errors ({Friendly(ex)}).");   // …then the real reason
+                    // …then the real reason, with the count and the way back in it (amendment A6):
+                    // "repeated" was the app declining to say how many, and ▶ was nowhere in the
+                    // sentence. ConsecutiveFailures is E5-d's five REALLY-SENT failures.
+                    SetScreenStatus(UserMessages.LiveAutoStopped(errors.ConsecutiveFailures, Friendly(ex)));
                     break;
                 }
                 // Ruling E5-f (E5.S3). A tick REFUSED from inside itself cost no request, and until
@@ -432,7 +435,11 @@ public partial class MainWindow
                     pausedWait = LiveTickPolicy.BackoffWaitMs(CurrentLiveIntervalMs(), backoffSteps);
                 backoffSteps = LiveTickPolicy.NextBackoffSteps(backoffSteps, outcome);
 
-                SetScreenStatus($"Live hiccup ({Friendly(ex)}) — retrying…");
+                // §3.2's own row, and the reason it no longer carries the failure's sentence: a
+                // hiccup the loop is already retrying is a STATE, and §1's first principle is one
+                // message per state. The engine that failed is named on the line the player reads
+                // when the loop STOPS — not on one the next tick paints over in 700 ms.
+                SetScreenStatus(UserMessages.LiveOneReadFailed());
             }
 
             // A SKIPPED tick waits the whole back-off (§9.1): there is no read+translate time to
@@ -464,9 +471,9 @@ public partial class MainWindow
     internal static string LivePausedStatus(int? secondsLeft)
         => CountdownText(secondsLeft) switch
         {
-            null            => "○ Live — paused. It resumes on its own; nothing is lost.",
-            AboutToRetry    => "○ Live — paused, about to retry.",
-            var t           => $"○ Live — paused, next try in {t}. It resumes on its own; nothing is lost.",
+            null            => UserMessages.LivePausedNoCountdown(),
+            AboutToRetry    => UserMessages.LivePausedAboutToRetry(),
+            var t           => UserMessages.LivePausedNextTry(t),
         };
 
     /// <summary>§3.2's overlay column for the same three rows, in the compact window's <b>40
@@ -479,9 +486,9 @@ public partial class MainWindow
     internal static string LivePausedOverlayStatus(int? secondsLeft)
         => CountdownText(secondsLeft) switch
         {
-            null            => "○ Live paused — it resumes on its own",
-            AboutToRetry    => "○ Live paused — about to retry",
-            var t           => $"○ Live paused — back in {t}",
+            null            => UserMessages.LivePausedOverlayNoCountdown(),
+            AboutToRetry    => UserMessages.LivePausedOverlayAboutToRetry(),
+            var t           => UserMessages.LivePausedOverlayNextTry(t),
         };
 
     /// <summary>§2.4's floor, as a name rather than as a literal in four places: under five seconds
@@ -507,14 +514,14 @@ public partial class MainWindow
     /// it will · and <c>about 30 min</c> at the display cap. Null in, null out, for the case where
     /// there is nothing honest to count down to.
     ///
-    /// <para><b>The cap is the one place the number IS an understatement, and §2.4 asks for it
-    /// anyway</b> (review). <c>TranslationPolicy.QuotaOpenMinutes</c> is <b>60</b> while the display
-    /// cap is 30, and <see cref="LiveTickPolicy.CountdownSeconds"/> only drops the number above an
-    /// hour — so the first half of a quota block renders a frozen <c>about 30 min</c> for a wait
-    /// that is really up to twice that. That is AC 2 as written ("at the 30-minute cap it renders
-    /// <c>about 30 min</c>") and it is deliberately not "fixed" here; the collision between §2.4's
-    /// cap and a 60-minute quota window is flagged for Sally and Winston rather than settled by a
-    /// formatter. Do not read the "rounded UP" promise above as covering it.</para>
+    /// <para><b>The cap says "more than 30 min", and that is ruling E7-a.</b> E7.S2 shipped
+    /// <c>about 30 min</c> there and flagged the collision behind it:
+    /// <c>TranslationPolicy.QuotaOpenMinutes</c> is <b>60</b> while the display cap is 30, and
+    /// <see cref="LiveTickPolicy.CountdownSeconds"/> only drops the number above an hour — so the
+    /// first half of a quota block rendered a frozen "about" for a wait that was really up to twice
+    /// it, which is the one direction §2.4's "rounded UP" promise may not break. "More than" is the
+    /// smallest edit that makes the cap true again: it is still the cap, it is still frozen, and it
+    /// no longer claims the wait is nearly over.</para>
     ///
     /// <para><b>Culture-invariant on purpose.</b> The <c>:</c> of a locale-aware time format is the
     /// culture's <c>TimeSeparator</c> — on a Russian-language Windows that is a real defect, and it
@@ -535,23 +542,49 @@ public partial class MainWindow
             return (s / 60).ToString(CultureInfo.InvariantCulture) + ":" +
                    (s % 60).ToString("00", CultureInfo.InvariantCulture);
 
-        // Clamped BEFORE the ceiling arithmetic: `int.MaxValue + 59` overflows to a negative, and a
-        // negative minute count would sail past the cap Math.Min is there to apply.
-        int capped = Math.Min(s, DisplayCapSeconds);
-        return $"about {((capped + 59) / 60).ToString(CultureInfo.InvariantCulture)} min";
+        return Minutes(s);
     }
 
-    /// <summary>The <c>{t}</c> a sentence <b>joins</b> with "in {t}", as opposed to the one a
-    /// surface shows on its own. The two differ in exactly one place and it is grammar rather than
-    /// policy: under §2.4's floor <see cref="CountdownText"/> renders a clause, and "Try again in
-    /// about to retry." is not English. There is no duration left to join, so this answers null and
-    /// amendment <b>A12</b>'s substitution rule ("in {t}" → "shortly", "for {t}" → "briefly") does
-    /// the talking — both sentences that take it already ship that form.
+    /// <summary>§2.4's minute band, shared by <see cref="CountdownText"/> and
+    /// <see cref="CountdownJoinText"/> so the two cannot come to round differently. Rounded UP, so
+    /// the number never promises the gate will reopen sooner than it will.
+    ///
+    /// <para>Ruling <b>E7-a</b> at the cap: there the number is not an approximation of the wait,
+    /// it is a FLOOR under it, and the sentence says so. <c>QuotaOpenMinutes</c> is 60 against a
+    /// 30-minute display cap, so "about 30 min" was rounding a possible hour DOWN — the one
+    /// direction "rounded up" may not break.</para></summary>
+    private static string Minutes(int seconds)
+    {
+        // Clamped BEFORE the ceiling arithmetic: `int.MaxValue + 59` overflows to a negative, and a
+        // negative minute count would sail past the cap Math.Min is there to apply.
+        int capped = Math.Min(seconds, DisplayCapSeconds);
+        return (seconds >= DisplayCapSeconds ? "more than " : "about ")
+             + ((capped + 59) / 60).ToString(CultureInfo.InvariantCulture) + " min";
+    }
+
+    /// <summary>The <c>{t}</c> of a sentence that is written <b>once and never ticks</b> — the
+    /// read-once summary, the About tab's key test, the deck's own <c>{t}</c>-bearing rows on the
+    /// Translator tab and in the overlay. It is <see cref="CountdownText"/>'s COARSE band, and that
+    /// is ruling <b>E7-a</b>: a frozen "0:05" on a line nobody repaints reads as a live clock, so
+    /// under a minute there is no number at all and amendment <b>A12</b>'s substitution ("in {t}" →
+    /// "shortly", "for {t}" → "briefly") does the talking. Only the 1 Hz LIVE status lines, which
+    /// really are repainted every second, use <c>m:ss</c>.
+    ///
+    /// <para>It also answers the grammar problem it was written for (E7.S2): under §2.4's floor
+    /// <see cref="CountdownText"/> renders a clause, and "Try again in about to retry." is not
+    /// English. Both cases now take the same exit, because they are the same case — there is no
+    /// duration worth joining.</para>
     ///
     /// <para>Not a second band table: it is <see cref="CountdownText"/> plus one question, so the
     /// bands still exist in one place.</para></summary>
     internal static string? CountdownJoinText(int? seconds)
-        => CountdownText(seconds) is { } t && t != AboutToRetry ? t : null;
+        => seconds is { } s && s >= CoarseFloorSeconds ? Minutes(s) : null;
+
+    /// <summary>Ruling E7-a's floor: under a minute a non-ticking sentence shows no number at all
+    /// and A12's clause takes over. It is <b>not</b> <see cref="ClockBandSeconds"/> — that is where
+    /// the stopwatch stops being a stopwatch, and this is where a written-once sentence stops
+    /// having anything worth writing.</summary>
+    private const int CoarseFloorSeconds = 60;
 
     /// <summary>Add placeholder items, translate the batch (one request when possible),
     /// keep the last MaxHistory, and auto-scroll. Respects the live cancellation token.</summary>
@@ -610,10 +643,26 @@ public partial class MainWindow
                     items[i].TranslationBody = UserMessages.PendingRetryRow();
                     EnqueueForRetry(items[i], parts[i].Body, target);
                 }
+            // Don't leave the placeholders stuck on "…" forever (e.g. a body we could not read):
+            // mark them, then let the loop's error handling show the reason on the STATUS LINE.
+            //
+            // Amendment A5 — a row carries no §3.1 sentence, no provider name and no countdown, and
+            // three row texts exist in the whole app. This used to stamp "({Friendly(ex)})", which
+            // put the whole failure sentence on every row of the batch; the status line above them
+            // was already saying it, once, which is §1's first principle.
+            //
+            // And the cancel arm is E1.S6's recorded finding (E7.S1 owns it): a user Stop landing
+            // mid-batch reached this branch — an OperationCanceledException is not retryable — and
+            // painted a timeout sentence over rows the player had abandoned, in the CLR's own
+            // localised wording on a non-English Windows. §2.1 says a cancel must render nothing at
+            // all; a row cannot render nothing (it would sit on "…" for ever with nothing coming),
+            // so it renders the one thing that is true — the player stopped this.
+            else if (ct.IsCancellationRequested)
+                foreach (var it in items) it.TranslationBody = $"({UserMessages.ReadCancelledRow()})";
             else
-                // Don't leave the placeholders stuck on "…" forever (e.g. a body we could not read):
-                // mark them, then let the loop's error handling show the reason.
-                foreach (var it in items) it.TranslationBody = $"({Friendly(ex)})";
+                // Through GiveUpRow, so "given up" is written in exactly one place and cannot come
+                // to mean two things in two of the branches that reach it (TP-LIVE-12's pin).
+                foreach (var it in items) GiveUpRow(it);
             // Still rethrown, and that is load-bearing: E5.S2's tracker owes the counter its
             // increment and the status line its sentence, whichever branch above ran.
             throw;

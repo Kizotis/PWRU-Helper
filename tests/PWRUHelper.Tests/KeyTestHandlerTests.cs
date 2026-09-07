@@ -252,7 +252,10 @@ public class KeyTestHandlerTests
             Click(window, "DeepLTestKey_Click");
             Click(window, "AzureTestKey_Click");
 
-            Assert.Equal("○ Using Google (free, no key needed)", window.DeepLStatus.Text);
+            // E7.S1: §3.7's `cleared` row, which E6.S5's review found was not in the codebase at
+            // all for DeepL — "○ Using Google (free, no key needed)" named the fallback without
+            // ever naming what was missing. Both boxes now write it from one string.
+            Assert.Equal(UserMessages.DeepLNoKeyStatus(), window.DeepLStatus.Text);
             Assert.Equal(UserMessages.AzureNoKeyStatus(), window.AzureStatus.Text);
             // Nothing was in flight, so both buttons are exactly as they were.
             Assert.True(window.DeepLTestButton.IsEnabled);

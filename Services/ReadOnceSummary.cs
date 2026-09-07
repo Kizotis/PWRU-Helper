@@ -69,8 +69,14 @@ internal static class ReadOnceSummary
     /// cache served part of it) reports the counts and names the pause as its reason, because
     /// "all engines are paused" alone would hide the lines the player did get.</para>
     /// </summary>
+    /// <param name="liveIsRunning"><b>Amendment A7's fork</b>, and only the paused branch reads it.
+    /// §3.3's paused row promises the rows "fill in when one is back"; the E5.S3 retry queue is
+    /// drained by the LIVE LOOP, so that promise is true for a read taken while the loop runs and
+    /// false for one taken with it stopped, where nothing is ever coming. One sentence cannot be
+    /// honest in both states, and §1 principle 4 does not allow picking the friendlier one — so the
+    /// loop's state is passed in by the code-behind, which is the only thing that can see it.</param>
     internal static string Status(int lines, int translated, Exception? error,
-                                 string? pausedTryAgainIn = null)
+                                 string? pausedTryAgainIn = null, bool liveIsRunning = false)
     {
         // Defensive, and cheap: a caller that counted over a longer list than it rendered must not
         // be able to buy itself a "Done" with a number bigger than the read.
@@ -81,7 +87,7 @@ internal static class ReadOnceSummary
         if (translated > 0)
             return UserMessages.ReadOncePartlyTranslated(lines, translated, error);
         if (IsAllPaused(error))
-            return UserMessages.ReadOncePaused(lines, pausedTryAgainIn);
+            return UserMessages.ReadOncePaused(lines, pausedTryAgainIn, liveIsRunning);
         return UserMessages.ReadOnceNoneTranslated(lines, error);
     }
 
