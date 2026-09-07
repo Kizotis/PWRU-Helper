@@ -53,6 +53,11 @@ internal sealed class FakeBergamotEngine : IBergamotEngine
     /// an ordering and an ordering has two ends.</summary>
     internal bool WasDisposedWhileInFlight;
 
+    /// <summary>Runs inside <c>translator_free</c>, before the count is raised — so a case can
+    /// record what the WORLD looked like at the instant the handle went (E8.S4: the model directory
+    /// must still be there when the engine is freed, because deleting it first is the bug).</summary>
+    internal Action? OnDispose;
+
     public string Translate(string text, bool html)
     {
         Enter();
@@ -99,6 +104,7 @@ internal sealed class FakeBergamotEngine : IBergamotEngine
     public void Dispose()
     {
         if (Volatile.Read(ref _inFlight) > 0) WasDisposedWhileInFlight = true;
+        OnDispose?.Invoke();
         Interlocked.Increment(ref _disposals);
     }
 }

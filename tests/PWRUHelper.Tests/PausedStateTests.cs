@@ -434,8 +434,14 @@ public class PausedStateTests
         Assert.Contains("_overlay?.EndToast();", main, StringComparison.Ordinal);
         Assert.Equal(1, Occurrences(main, "_overlay?.EndToast()"));
 
-        // Two timers in the main window and one in the overlay, and this story added none of them.
-        Assert.Equal(2, Occurrences(main, "new() { Interval ="));
+        // The main window's timers, counted exactly so a fourth has to be a decision. THIS story
+        // added none of them: the toast timer and the 1 Hz countdown are E7's, and the third is
+        // E8.S4's one-shot idle unload — armed by StopLive, fired once, stopped by its own handler,
+        // and deliberately NOT a third question on the countdown's stop rule (which is the bug
+        // E7.S2's review flagged). §2.4's "one DispatcherTimer for the whole app" is about one
+        // COUNTDOWN, as `_countdownTimer`'s own remark says, not one timer in the process.
+        Assert.Equal(3, Occurrences(main, "new() { Interval ="));
+        Assert.Equal(1, Occurrences(main, "private readonly DispatcherTimer _offlineIdleTimer ="));
         Assert.Equal(1, Occurrences(Code(File.ReadAllText(RepoFile("CompactOverlay.xaml.cs"))),
                                     "DispatcherTimer"));
     }

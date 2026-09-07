@@ -342,6 +342,32 @@ internal static class TranslationPolicy
         RequestTimeoutSeconds * MaxAttempts
         + (MaxSpacingWaitMs + BackoffBaseMs * ((1 << (MaxAttempts - 1)) - 1) + 999) / 1000;
 
+    // ---- the offline engine's lifetime (§7.6 constraint 2, amendment A-1(b)) -------------------
+    // Read by Services/BergamotLifetime.cs (E8.S4). ONE number, in ONE place: the policy type takes
+    // it as a defaulted constructor argument so its cases can be stated over literals, and no
+    // literal minute lives in BergamotTranslator or in the code-behind's one-shot.
+
+    /// <summary>How long the offline engine may sit resident with nothing using it — <b>once LIVE
+    /// has stopped</b>. While LIVE runs the model stays loaded however long the gap between two
+    /// offline translations is (amendment A-1(b)): a session whose every online tier is inside a
+    /// 30-minute gate window is precisely when the engine is about to be needed, and freeing it
+    /// there would pay the init again on resume.
+    ///
+    /// <para><b>Not a setting</b>, and that is a ruling rather than an omission: §12's table is
+    /// closed and R-4 gives the offline engine exactly one user-facing decision (Download /
+    /// Remove). A second knob for a window nobody can feel is noise.</para>
+    ///
+    /// <para><b>What would settle it:</b> E8.S7's TP-BRG-06, which times the unload on the
+    /// P1-affected machines, plus the owner's own habit — a player who stops LIVE to read a quest
+    /// text and restarts ninety seconds later pays a reload for a window that is too short, and one
+    /// who leaves the app open all evening pays 121 MiB for one that is too long. When that number
+    /// lands it <b>replaces</b> the grade word below; a second one beside it fails
+    /// <c>TranslationPolicyTests.Every_member_carries_exactly_one_evidence_grade</c> (E4.S3's T5 hit
+    /// exactly this).</para></summary>
+    // [ASSUMED] architecture-cible.md §7.6 constraint 2 names the number and nothing anywhere
+    // measures it; E8.S1 measured only that the memory does come back (+6.0 MiB of 121 MiB).
+    internal const int IdleUnloadMinutes = 10;
+
     // ---- HTML abuse-page markers (§4.3) ------------------------------------------------------
     // Matched lower-cased against DE-TAGGED text — E1.S4 does the de-tagging and lower-casing, so
     // the literals are kept lower-case here and no call site has to remember. Order matters at the

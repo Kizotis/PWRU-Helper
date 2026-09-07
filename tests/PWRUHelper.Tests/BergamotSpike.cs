@@ -258,6 +258,83 @@ public class BergamotSpike
         _out.WriteLine("");
         _out.WriteLine("The cloud column is deliberately absent: a spike does not spend a provider call to fill a");
         _out.WriteLine("column (story T4), and go-criterion 3 gives the judgement to the owner in E8.S7.");
+
+        // --- E8.S4 / T6 --------------------------------------------------------------------------
+        // Section 4 measured the lifecycle through `BlockingService` directly. This one measures it
+        // through the two types the APP really uses — BergamotTranslator + BergamotLifetime — which
+        // is what amendment A-1(b) is a claim about. It belongs HERE and never in the suite: CI-3
+        // forbids timing assertions, and a working-set assertion on a shared CI runner is worse than
+        // a timing one. In CI the same policy is proven on the fake engine and an injected clock
+        // (BergamotLifetimeTests); what only a real 121 MiB model can answer is whether the memory
+        // actually comes back through THIS path, and whether the second load costs what the first
+        // did. The clock is injected here too — a spike may take a minute, it may not sleep ten.
+        _out.WriteLine("");
+        _out.WriteLine("### 9. E8.S4 — the idle unload, through the app's own provider (A-1(b), TP-BRG-05/06)");
+        _out.WriteLine("");
+
+        var live = false;
+        var clock = new SpikeClock();
+        var lifetime = new BergamotLifetime(() => live, clock.Read,
+                                            TimeSpan.FromMinutes(TranslationPolicy.IdleUnloadMinutes));
+        var offline = new BergamotTranslator(
+            modelDirectory: () => ModelDir,
+            nativeDirectory: () => NativeDir,
+            engineFactory: config => new SpikeEngine(config),
+            gate: new ProviderGate(),           // never the registry: this run may not touch %AppData%
+            lifetime: lifetime);
+
+        var base9 = Mem();
+        var timer = Stopwatch.StartNew();
+        TranslateOneLine(offline, Lines[0]);
+        timer.Stop();
+        var firstLoadMs = timer.Elapsed.TotalMilliseconds;
+        var afterFirstLoad = Mem();
+
+        // TP-BRG-05 on the real engine: LIVE is running and ten windows have gone by with no
+        // translation. Nothing may be freed.
+        live = true;
+        clock.Advance(TimeSpan.FromMinutes(TranslationPolicy.IdleUnloadMinutes * 10));
+        var freedWhileLive = offline.UnloadIfIdle();
+        var duringLive = Mem();
+
+        // TP-BRG-06 on the real engine: the player pressed ■ Stop and the window elapsed.
+        live = false;
+        var freedAfterStop = offline.UnloadIfIdle();
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        var afterUnload = Mem();
+
+        timer.Restart();
+        TranslateOneLine(offline, Lines[1]);
+        timer.Stop();
+        var secondLoadMs = timer.Elapsed.TotalMilliseconds;
+        var afterSecondLoad = Mem();
+        offline.Dispose();
+
+        _out.WriteLine("| sample point | working set | private bytes | Δ ws vs baseline | Δ private vs baseline |");
+        _out.WriteLine("|---|---|---|---|---|");
+        _out.WriteLine($"| baseline (nothing loaded) | {Mb(base9.Ws)} | {Mb(base9.Priv)} | — | — |");
+        _out.WriteLine($"| first load + translate | {Mb(afterFirstLoad.Ws)} | {Mb(afterFirstLoad.Priv)} | "
+                       + $"{MbD(afterFirstLoad.Ws - base9.Ws)} | {MbD(afterFirstLoad.Priv - base9.Priv)} |");
+        _out.WriteLine($"| LIVE running, 10 windows idle | {Mb(duringLive.Ws)} | {Mb(duringLive.Priv)} | "
+                       + $"{MbD(duringLive.Ws - base9.Ws)} | {MbD(duringLive.Priv - base9.Priv)} |");
+        _out.WriteLine($"| after the idle unload + 2 collections | {Mb(afterUnload.Ws)} | {Mb(afterUnload.Priv)} | "
+                       + $"{MbD(afterUnload.Ws - base9.Ws)} | {MbD(afterUnload.Priv - base9.Priv)} |");
+        _out.WriteLine($"| SECOND load + translate | {Mb(afterSecondLoad.Ws)} | {Mb(afterSecondLoad.Priv)} | "
+                       + $"{MbD(afterSecondLoad.Ws - base9.Ws)} | {MbD(afterSecondLoad.Priv - base9.Priv)} |");
+        _out.WriteLine("");
+        _out.WriteLine($"TP-BRG-05, kept loaded while LIVE runs : freed = {freedWhileLive} → "
+                       + $"{Verdict(!freedWhileLive)} (it must be false)");
+        _out.WriteLine($"TP-BRG-06, unloaded once LIVE stopped  : freed = {freedAfterStop} → "
+                       + $"{Verdict(freedAfterStop)}");
+        _out.WriteLine($"working set back to baseline           : {MbD(afterUnload.Ws - base9.Ws)} → "
+                       + $"{Verdict(Math.Abs(afterUnload.Ws - base9.Ws) <= 10L * 1024 * 1024)}");
+        _out.WriteLine($"a second load costs the same as the first: {firstLoadMs:F1} ms then "
+                       + $"{secondLoadMs:F1} ms · Δ ws {MbD(afterFirstLoad.Ws - base9.Ws)} then "
+                       + $"{MbD(afterSecondLoad.Ws - base9.Ws)}");
+        _out.WriteLine("");
+        _out.WriteLine("(Both loads include the first translate, because Marian allocates its pool there — §10.)");
 #else
         _out.WriteLine("PWRU_SPIKE is not defined — the engine half of this harness is not compiled.");
 #endif
@@ -418,6 +495,41 @@ public class BergamotSpike
 
         return (afterFirst.Ws - baseline.Ws, afterFirst.Priv - baseline.Priv,
                 afterDispose.Ws - baseline.Ws, afterDispose.Priv - baseline.Priv);
+    }
+
+    /// <summary>One line through the app's provider, synchronously. A helper and not two lines in
+    /// the case body because <c>xUnit1031</c> (rightly) refuses a blocking wait inside a test method
+    /// — the same reason every other blocking call in this harness lives in a helper. The spike is
+    /// a measurement, and a measurement of a load has to be taken on one thread.</summary>
+    private static void TranslateOneLine(BergamotTranslator provider, string line) =>
+        provider.TranslateAsync(line, "ru", "en").GetAwaiter().GetResult();
+
+    /// <summary>E8.S4's clock, injected here for the same reason it is injected everywhere else
+    /// (IS-6): the idle window is ten minutes and a spike that waited them out would be a ten-minute
+    /// spike. Advancing a field is the whole of "ten minutes have passed".</summary>
+    private sealed class SpikeClock
+    {
+        private DateTimeOffset _now = new(2026, 9, 7, 20, 0, 0, TimeSpan.Zero);
+        internal DateTimeOffset Read() => _now;
+        internal void Advance(TimeSpan by) => _now += by;
+    }
+
+    /// <summary><see cref="IBergamotEngine"/> over the real <c>BlockingService</c>. The app's own
+    /// <c>BergamotEngine</c> is deliberately not used: it resolves the DLL through
+    /// <c>OfflineModelStore.IsVerifiedNative</c>, which answers false until the owner's release
+    /// digests land, and this harness has its own resolver (U7) pointed at its own temp
+    /// directory.</summary>
+    private sealed class SpikeEngine : IBergamotEngine
+    {
+        private readonly BlockingService _service;
+
+        internal SpikeEngine(string configPath) => _service = new BlockingService(configPath);
+
+        public string Translate(string text, bool html) => _service.Translate(text, html);
+
+        public IReadOnlyList<string> TranslateBatch(IReadOnlyList<string> lines) => _service.Translate(lines);
+
+        public void Dispose() => _service.Dispose();
     }
 
     private static bool _resolverInstalled;

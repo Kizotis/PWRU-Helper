@@ -379,15 +379,31 @@ public class OfflineModelStoreTests : GatesTestBase
         TranslationChains.BuildRead(settings, RequestPriority.Background, out _);
         TranslationChains.BuildRead(settings, RequestPriority.Interactive);
 
+        // …and E8.S4's provider, built beside them in the same constructor, handed the store's two
+        // locators as METHOD GROUPS. This is the assertion that makes the source scan below safe to
+        // narrow: naming ModelDirectory is not calling it, and calling it is what would walk 45 MB.
+        var offline = new BergamotTranslator(
+            modelDirectory: store.ModelDirectory,
+            nativeDirectory: store.NativeDirectory,
+            lifetime: new BergamotLifetime(() => false));
+
         Assert.False(Directory.Exists(temp.Root),
             "something asked the model store a question before first paint (I10 / AC 7)");
+        Assert.False(offline.IsLoaded);
         Assert.NotNull(store);
     }
 
     /// <summary>The other half, as a scan: the way I10 breaks is invisible — a convenience call
     /// added to the constructor by the next person, and 45 MB of directory is walked before first
     /// paint again. The permitted call sites are the post-paint warm-up in <c>OnWindowLoaded</c> and
-    /// the two Click handlers, and none of them is the constructor or <c>ApplySettings</c>.</summary>
+    /// the two Click handlers, and none of them is the constructor or <c>ApplySettings</c>.
+    ///
+    /// <para><b>The two locators are narrowed to a CALL for the constructor only (E8.S4).</b> The
+    /// offline provider is built there, beside the chains, and it takes its two locators as
+    /// <c>Func&lt;string?&gt;</c> — a method group runs nothing at all, which is the whole reason the
+    /// provider takes questions rather than answers. So the constructor may NAME them and may not
+    /// CALL them, and the behavioural half above (the model root that must still not exist after
+    /// everything the constructor does) is what actually proves it.</para></summary>
     [Fact]
     public void No_startup_path_asks_the_model_store_anything()
     {
@@ -396,11 +412,20 @@ public class OfflineModelStoreTests : GatesTestBase
         foreach (var member in new[] { "public MainWindow()", "private void ApplySettings()" })
         {
             var body = Code(Body(main, member));
+            var locators = member == "public MainWindow()"
+                ? new[] { "ModelDirectory()", "NativeDirectory()" }      // the call, never the handoff
+                : new[] { "ModelDirectory", "NativeDirectory" };
             foreach (var asks in new[] { "IsInstalled", "BytesOnDisk", "InstalledPairs",
-                                         "ModelDirectory", "NativeDirectory", "IsVerifiedNative" })
+                                         "IsVerifiedNative" }.Concat(locators))
                 Assert.False(body.Contains(asks, StringComparison.Ordinal),
                     $"{member} asks the model store \"{asks}\" — that is a disk read before first paint (I10)");
         }
+
+        // …and the narrowing is not vacuous: the constructor's use of the two locators really is the
+        // provider's argument list and nothing else.
+        var ctor = Code(Body(main, "public MainWindow()"));
+        Assert.Contains("modelDirectory: _offlineStore.ModelDirectory,", ctor, StringComparison.Ordinal);
+        Assert.Contains("nativeDirectory: _offlineStore.NativeDirectory,", ctor, StringComparison.Ordinal);
 
         // …and the carve-out is not vacuous: the post-paint probe really is in OnWindowLoaded.
         Assert.Contains("_offlineStore.IsInstalled",

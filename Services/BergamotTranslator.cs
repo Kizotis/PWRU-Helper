@@ -7,9 +7,11 @@ namespace PWRUHelper.Services;
 /// answers when every online rung is gone. It is <b>a class that turns text into text</b> and
 /// nothing else. Three neighbouring concerns are deliberately not here, because each touches files
 /// this one does not: the model store and the one-click install are <b>E8.S3</b>, the
-/// keep-loaded-while-LIVE lifetime is <b>E8.S4</b> (this story ships the CAPABILITY —
-/// <see cref="Load"/> / <see cref="Unload"/> / <see cref="IsLoaded"/> — and no policy, and above all
-/// no timer), and the chain placement, the chip and the cache-drop rule are <b>E8.S5</b>.
+/// keep-loaded-while-LIVE lifetime is <b>E8.S4</b> (this class ships the CAPABILITY —
+/// <see cref="Load"/> / <see cref="Unload"/> / <see cref="IsLoaded"/> — and, since E8.S4 landed,
+/// <b>calls</b> a policy it does not own: <see cref="BergamotLifetime"/> arrives as a constructor
+/// argument, decides nothing here, and there is still no timer in this file), and the chain
+/// placement, the chip and the cache-drop rule are <b>E8.S5</b>.
 ///
 /// <para><b>0 MB at rest, and that is the whole argument for shipping it.</b> One model is ~85 % of
 /// the app's current working set (E8.S1: +121 MiB resident, +367 MiB committed private, while the
@@ -28,8 +30,9 @@ namespace PWRUHelper.Services;
 /// <c>_initFailed</c> bool exists here: a second, disagreeing one is worse than none.</para>
 ///
 /// <para><b>I2</b>: no UI type, no dispatcher, no settings read — the store's answer arrives as a
-/// <c>Func&lt;string?&gt;</c> and "is LIVE running?" never arrives at all (that is E8.S4's, as a
-/// <c>Func&lt;bool&gt;</c> it will own). <b>I1</b>: <see cref="ITranslator"/> is implemented
+/// <c>Func&lt;string?&gt;</c> and "is LIVE running?" still never arrives here at all: it is a
+/// <c>Func&lt;bool&gt;</c> that <see cref="BergamotLifetime"/> owns, and this file only ever asks
+/// that object a yes/no question. <b>I1</b>: <see cref="ITranslator"/> is implemented
 /// unchanged; <see cref="Load"/> and the rest are members of this class, never of the interface.
 /// <b>I6</b>: this file never expands slang — see the class's own remark below, and the source scan
 /// that enforces it.</para>
@@ -64,6 +67,12 @@ internal sealed class BergamotTranslator : ITranslator, IDisposable
     private readonly IReadOnlyList<(string Source, string Target)> _pairs;
     private readonly ProviderGate? _gate;
 
+    /// <summary>E8.S4's policy, or <c>null</c> for "keep whatever is loaded until somebody says
+    /// otherwise". Null is the honest default rather than a permissive one: a provider with no
+    /// lifetime never unloads ITSELF, and every caller that can supply one does — the app in
+    /// <c>MainWindow</c>'s constructor, the suite in its fixtures.</summary>
+    private readonly BergamotLifetime? _lifetime;
+
     /// <summary>One engine, one lock, and the lock is taken by the translate path too (T6): an
     /// <see cref="Unload"/> racing a translate in flight would free the handle under a native call.
     /// It serialises this class's native work, which is the honest contract — <c>BlockingService</c>
@@ -95,18 +104,24 @@ internal sealed class BergamotTranslator : ITranslator, IDisposable
     /// <param name="gate">A test's own gate, exactly as the HTTP providers take one. Null means the
     /// registry's — resolved per call, never captured, because the registry may not be touched
     /// before the first request.</param>
+    /// <param name="lifetime">E8.S4's A-1(b) policy. It is injected rather than constructed here for
+    /// the reason the whole story exists: "is LIVE running?" is a question about a window, and I2
+    /// forbids this file from being able to ask it. Null means nothing ever unloads this provider
+    /// except an explicit <see cref="Unload"/>.</param>
     internal BergamotTranslator(
         Func<string?>? modelDirectory = null,
         Func<string?>? nativeDirectory = null,
         Func<string, IBergamotEngine>? engineFactory = null,
         IReadOnlyList<(string Source, string Target)>? pairs = null,
-        ProviderGate? gate = null)
+        ProviderGate? gate = null,
+        BergamotLifetime? lifetime = null)
     {
         _modelDirectory = modelDirectory ?? (static () => null);
         _nativeDirectory = nativeDirectory ?? (static () => null);
         _engineFactory = engineFactory ?? (config => BergamotEngine.Create(config, _nativeDirectory));
         _pairs = pairs ?? DefaultPairs;
         _gate = gate;
+        _lifetime = lifetime;
     }
 
     /// <summary>This provider's gate, resolved through the registry on every call rather than
@@ -243,6 +258,25 @@ internal sealed class BergamotTranslator : ITranslator, IDisposable
         }
     }
 
+    /// <summary>
+    /// <b>The (c) half of E8.S4's heartbeat</b>: free the engine <i>if the policy says so</i>, and
+    /// answer whether it did. The whole decision — LIVE, the clock, the idle window — is
+    /// <see cref="BergamotLifetime"/>'s; this method's only contribution is that it asks
+    /// <b>under the lock</b>, so "should we free?" and the free are one instant rather than two with
+    /// a translate able to start between them.
+    ///
+    /// <para>No lifetime means no opinion, so nothing is freed: a caller that wants the engine gone
+    /// regardless calls <see cref="Unload"/>, which is the unconditional door.</para>
+    ///
+    /// <para><b>It blocks, like <see cref="Unload"/> and for the same reason</b> — it waits for a
+    /// frame in flight — so the one-shot timer that calls it does so through <c>Task.Run</c> and
+    /// never on the dispatcher.</para>
+    /// </summary>
+    internal bool UnloadIfIdle()
+    {
+        lock (_sync) { return SweepLocked(); }
+    }
+
     /// <summary><b>Not terminal, deliberately</b>, and E8.S4 is the one that has to know: this is
     /// <see cref="Unload"/> under another name, so a translate arriving afterwards brings a fresh
     /// engine up rather than throwing. That is what makes the load/unload cycle a capability instead
@@ -266,9 +300,11 @@ internal sealed class BergamotTranslator : ITranslator, IDisposable
             // have been cancelled while it waited on this lock, and "we do not start one you
             // cancelled" has to mean the 82 ms init as well as the translate.
             ct.ThrowIfCancellationRequested();
+            SweepLocked();
             var engine = LoadLocked(ct);
             ct.ThrowIfCancellationRequested();
             answer = Call(() => engine.Translate(text, false), ct);
+            _lifetime?.RecordUse();
         }
 
         // §5.3's other half: without it the soft strike count is cumulative-for-ever instead of
@@ -290,9 +326,11 @@ internal sealed class BergamotTranslator : ITranslator, IDisposable
         lock (_sync)
         {
             ct.ThrowIfCancellationRequested();
+            SweepLocked();
             var engine = LoadLocked(ct);
             ct.ThrowIfCancellationRequested();
             answer = Call(() => engine.TranslateBatch(lines), ct);
+            _lifetime?.RecordUse();
         }
 
         // I5. Not a pad, not a truncation, not a per-line retry: a BadResponse, which the gate
@@ -378,6 +416,37 @@ internal sealed class BergamotTranslator : ITranslator, IDisposable
         var engine = _engine;
         Volatile.Write(ref _engine, null);
         SafeFree(engine);
+    }
+
+    /// <summary>
+    /// <b>E8.S4's (a) heartbeat</b>, and the one place the policy is consulted: ask
+    /// <see cref="BergamotLifetime.ShouldUnload"/>, free if it says so, and say whether it did.
+    /// Called under <see cref="_sync"/> — from <see cref="UnloadIfIdle"/>, and at the top of both
+    /// translate paths.
+    ///
+    /// <para><b>Why a translate asks at all, when it is about to need an engine.</b> The check costs
+    /// two delegate calls and a subtraction, and the case it catches is real: a session in which
+    /// LIVE never ran (the Translator tab alone) never reaches <c>StopLive</c>, so the one-shot that
+    /// covers the tail is never armed and nothing else would ever collect the engine. When it does
+    /// fire on such a path the next line pays the 82 ms init again — and that is the policy being
+    /// obeyed, not work being wasted: sitting resident for ten idle minutes is exactly the tax
+    /// "uses memory only while translating" promises the player it will not pay. It cannot fire
+    /// while LIVE is running, which is the whole of A-1(b) and of AC 3.</para>
+    ///
+    /// <para>It is <b>above</b> <see cref="LoadLocked"/> rather than below it for the obvious
+    /// reason: asking after the load would free the engine this very call is holding.</para>
+    /// </summary>
+    private bool SweepLocked()
+    {
+        if (_lifetime is null) return false;
+        if (!_lifetime.ShouldUnload(_engine is not null)) return false;
+
+        var engine = _engine;
+        Volatile.Write(ref _engine, null);
+        // Inside the lock, exactly as Unload's free is and for the same reason: `translator_free` is
+        // a native call like the other two and the binding is not documented thread-safe.
+        SafeFree(engine);
+        return true;
     }
 
     /// <summary>

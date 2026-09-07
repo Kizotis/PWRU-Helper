@@ -186,7 +186,7 @@ public partial class MainWindow
             != MessageBoxResult.Yes)
             return;
 
-        var freed = _offlineStore.Remove();
+        var freed = UnloadThenRemove(_offlineEngine, _offlineStore);
         _settings.OfflineFallbackEnabled = false;
         SettingsService.Save(_settings);
         _offlineInstalled = false;
@@ -196,6 +196,29 @@ public partial class MainWindow
         // just wrote. Same ownership rule the key boxes follow (E7.S7): the standing state is
         // rewritten by the refresh, a transient answer overwrites it until the next gesture.
         OfflineEngineText.Text = UserMessages.OfflineRemovedStatus(freed);
+    }
+
+    /// <summary>
+    /// <b>E8.S3's review finding, fixed by E8.S4 because E8.S4 owns the lifecycle.</b> On Windows a
+    /// loaded DLL cannot be deleted: with the engine resident, <c>Directory.Delete</c> threw, the
+    /// store logged a kind and answered 0, and the row read "Offline engine removed — 0 MB freed"
+    /// while every file was still on disk and <c>OfflineFallbackEnabled</c> was already false. So
+    /// the handle goes first, and only then the files.
+    ///
+    /// <para><b>It waits, deliberately.</b> <c>Unload</c> takes the provider's one lock, so a frame
+    /// in flight finishes (or fails typed through the chain) before the free — that is the whole
+    /// point, and it is why this cannot be fired and forgotten. It is the one place the dispatcher
+    /// waits on that lock, bounded by a batched frame (3.75 ms a line, measured), and the
+    /// alternative is deleting a model out from under a native call.</para>
+    ///
+    /// <para><b>Static, and that is the seam.</b> Driving <c>RemoveOfflineEngine</c> would mean a
+    /// modal in a headless run; as two arguments the ORDER — the only thing this method is — is
+    /// provable against the fake engine with no window at all.</para>
+    /// </summary>
+    internal static long UnloadThenRemove(BergamotTranslator engine, OfflineModelStore store)
+    {
+        engine.Unload();
+        return store.Remove();
     }
 
     /// <summary>

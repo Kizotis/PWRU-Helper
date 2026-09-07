@@ -133,6 +133,13 @@ public partial class MainWindow
         MainTabs.SelectedIndex = TabTranslator;
         SetScreenStatus(UserMessages.LiveStarted());
 
+        // A-1(b), the first clause (E8.S4): a LIVE session is starting, so nothing may free the
+        // offline model for the length of it. The policy would refuse the unload anyway — it asks
+        // `_liveCts != null` on every question — and disarming here is the belt to that braces: a
+        // timer that fires ten minutes into a session and finds nothing to do is a callback nobody
+        // needs, and the state a reader can see (`OfflineIdleUnloadArmed`) should say what is true.
+        DisarmOfflineIdleUnload();
+
         _liveCts = new CancellationTokenSource();
         _ = LiveLoop(rect, _liveCts.Token);
     }
@@ -209,6 +216,15 @@ public partial class MainWindow
         // for it — the timer above still goes off first, so "Live stopped." is never repainted over,
         // and it comes back only if there is something left to count.
         UpdateEngineChip();
+
+        // A-1(b)'s second clause (E8.S4, AC 4): the model stayed loaded for the whole session, and
+        // the idle clock is what releases it now. This is the ONE site that arms the one-shot, and
+        // it is inside StopLive rather than at its call sites for the reason the story spells out —
+        // Stop is reachable from the ■ button, from Resume, from Ctrl+Alt+L and from E5.S2's
+        // auto-stop, and three of those four would have been missed. It sits at the BOTTOM, below
+        // `_liveCts = null`, so everything it can reach already agrees LIVE has ended; it paints
+        // nothing, so it does not come between StopCountdown and "Live stopped." above.
+        ArmOfflineIdleUnload();
     }
 
     /// <summary>Set the screen-reading status on the main window AND (if shown) the overlay, so the

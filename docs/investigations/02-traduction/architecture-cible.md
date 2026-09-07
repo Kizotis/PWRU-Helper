@@ -154,7 +154,7 @@ flowchart TB
 | `GoogleGtxTranslator` | `Services/GoogleGtxTranslator.cs` | Today's `TranslationService`, renamed, demoted to a late tier, typed errors. | Being the default. |
 | `AzureTranslator` | `Services/AzureTranslator.cs` | Azure AI Translator F0/S1 over raw `HttpClient`. | — |
 | `DeepLTranslator` | `Services/DeepLTranslator.cs` | Unchanged behaviour; error construction goes through `Kind`. | Ever being reachable from the read path (I8). |
-| `BergamotTranslator` | `Services/BergamotTranslator.cs` | **Prototype only.** Lazy model load, idle unload, synchronous native call on `Task.Run`. **Landed E8.S2** (prototype branch): the provider alone — `Load()`/`Unload()`/`IsLoaded` are the capability, the *policy* is E8.S4, the store is E8.S3, the chain placement is E8.S5. | Shipping before the measured go/no-go (§7.6). Calling `ProviderGate.TryEnter` (a local engine takes no admission token) or writing `NotSent` (ruling E8-c). |
+| `BergamotTranslator` | `Services/BergamotTranslator.cs` | **Prototype only.** Lazy model load, idle unload, synchronous native call on `Task.Run`. **Landed E8.S2** (prototype branch): the provider alone — `Load()`/`Unload()`/`IsLoaded` are the capability, the store is E8.S3, the chain placement is E8.S5. The *policy* landed **E8.S4** as `Services/BergamotLifetime.cs` (A-1(b), see §7.6 constraint 2): the provider calls it, owns no timer and decides nothing. | Shipping before the measured go/no-go (§7.6). Calling `ProviderGate.TryEnter` (a local engine takes no admission token) or writing `NotSent` (ruling E8-c). |
 | `IBergamotEngine` | `Services/BergamotEngine.cs` | **Landed E8.S2.** The three C exports as an interface — `translator_initialize` (the factory), `translator_translate`, `translator_free` — with `BergamotEngine` wrapping `BlockingService` and a fake standing in for it in every automated case of epic E8 (CI-8: no model download, no native DLL in CI). | Widening it: it is a P/Invoke surface, not an abstraction layer. |
 | `TextChunker` | `Services/TextChunker.cs` | `ChunkText` / `HardSplit`, moved out of `TranslationService` because two providers need them. | — |
 
@@ -715,6 +715,17 @@ Architectural constraints, all load-bearing:
 2. **Lazy load on first fallback use, unload after `IdleUnloadMinutes` (10, [ASSUMED]).** One model is ~85 % of the
    app's entire current working set; a RU↔FR pivot needs two models resident, ≈ 250–310 MiB. Never at startup
    (I10), never always-on.
+   > **Superseded by A-1(b), landed E8.S4.** The unload half as written above is wrong for a LIVE session: a loop
+   > whose every online tier is inside a 30-minute gate window has no offline translation for half an hour, and
+   > "unload after ten idle minutes" would free the model in the middle of it and pay the init again on resume.
+   > The rule is now: **loaded on first fallback use; kept loaded for the whole LIVE session however long the gap;
+   > unloaded only after LIVE stops AND `IdleUnloadMinutes` elapses.** The plain idle-unload above still governs
+   > when LIVE is not running, which is the Translator tab's case. The policy is `Services/BergamotLifetime.cs` —
+   > `Func<bool> liveIsRunning`, an injected clock, one predicate — and it is consulted from two places: the
+   > provider itself, on every call (free, and it covers the session), and **one one-shot `DispatcherTimer` armed
+   > by `StopLive`** (the tail, which no call can reach because it happens after the last one). E7's 1 Hz countdown
+   > stop rule was deliberately **not** widened for it. The lazy-load half is unchanged and I10 still binds:
+   > nothing here loads anything, ever — this policy can only unload.
 3. **`BlockingService.Translate` is synchronous** → always `Task.Run`, never the UI thread.
 4. **Ship the native DLL beside the exe, not inside the single-file bundle.** Bundling re-arms
    `IncludeNativeLibrariesForSelfExtract` extraction to `%TEMP%\.net\…` on first run — the exact mechanism

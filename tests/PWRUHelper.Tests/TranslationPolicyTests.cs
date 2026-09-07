@@ -120,6 +120,13 @@ public class TranslationPolicyTests
         // in front of it.
         Assert.Equal(5, TranslationPolicy.LiveAutoStopThreshold);
 
+        // E8.S4's idle window, and it is pinned for the same reason the auto-stop above is: it
+        // decides when 121 MiB leaves a player's machine, which is the sentence the whole offline
+        // feature is sold on ("uses memory only while translating"). Ten is what §7.6 constraint 2
+        // names; E8.S7's TP-BRG-06 is what would move it, and when it does it edits THIS line and
+        // the one grade word beside the declaration, and no other.
+        Assert.Equal(10, TranslationPolicy.IdleUnloadMinutes);
+
         // E6.S2's two Azure request limits, and these two are pinned for a different reason than
         // the rest: they are not tuning knobs at all but the DOCUMENTED contract of someone else's
         // endpoint ([CONFIRMED], benchmark-fournisseurs.md §5.4 [S19]). AzureTranslatorTests asserts

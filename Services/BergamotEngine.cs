@@ -157,6 +157,18 @@ internal sealed class BergamotEngine : IBergamotEngine
     /// being executed — and it is a hash rather than a "verified" marker file precisely because a
     /// marker is forgeable by copying two files into the directory. It costs ~20 ms for 22 MB and
     /// runs once per process: the runtime caches a successful resolve and never asks again.</para>
+    ///
+    /// <para><b>The window between the hash and the load is open, on purpose, and E8.S4 looked at
+    /// it.</b> A writer who can swap the file in the ~20 ms between <see cref="OfflineModelStore.IsVerifiedNative"/>
+    /// and <see cref="NativeLibrary.TryLoad"/> gets the load — but that writer can already write this
+    /// directory, so it is not a capability the check was ever going to remove. The cheap narrowing
+    /// (hold the file open with a restrictive <c>FileShare</c> across both, so it cannot be replaced
+    /// in between) was <b>considered and not taken</b>: whether Windows admits <c>LoadLibrary</c>'s
+    /// execute-mapping open against such a handle cannot be established anywhere in this repo —
+    /// CI-8 forbids the native load outright — and an untested change to the one path that P/Invokes
+    /// 22 MB fails in the worse direction, refusing the engine on a correctly installed machine.
+    /// It belongs to <b>E8.S7</b>, on the owner's machine, where the real DLL can be loaded and the
+    /// mitigation actually verified rather than assumed.</para>
     /// </summary>
     private static IntPtr Resolve(string name, System.Reflection.Assembly _, DllImportSearchPath? __)
     {
