@@ -826,6 +826,43 @@ internal static class UserMessages
          + " MB freed from your disk.";
 
     /// <summary>
+    /// <b>Ruling E8-b's residual case, owed since E8.S3 and landed here with the deck line in the
+    /// same commit.</b> <c>Remove</c> now frees the engine before it deletes (E8.S4) and closes it
+    /// for good first (E8.S5), so the one cause the app could remove is removed — what is left is a
+    /// hold this process cannot break: an antivirus or a sync agent with a file open. The old row
+    /// said "Offline engine removed — 0 MB freed from your disk." over 50 MB that was all still
+    /// there, which is the one thing principle 1 forbids outright.
+    ///
+    /// <para>So it says what happened, how much is left, and <b>what the user can do about it</b>
+    /// (principle 2 — never a statement with no exit). Closing the app is the honest instruction:
+    /// it is what releases a handle this process is holding, and it costs the player nothing.</para>
+    /// </summary>
+    public static string OfflineRemoveIncomplete(long bytesLeft)
+        => "Could not remove every file — "
+         + Math.Max(1, bytesLeft / 1024 / 1024).ToString(CultureInfo.InvariantCulture)
+         + " MB left; close the app and try again.";
+
+    // ---- §2.1's state S4: the offline engine is the one answering (E8.S5) ----------------------
+    //
+    // Two surfaces, two sentences, and that is UX-DR19 obeyed rather than broken: §2.2's table gives
+    // the Translator tab and the LIVE status line different columns because they are read in
+    // different postures — one after a deliberate click, one out of the corner of an eye during a
+    // fight. The NAME in both comes from ProviderNames (§3.0 rule 1, nothing is invented); it is
+    // spelled here because these lines say what is happening rather than who is doing it.
+
+    /// <summary>§2.2's Translator-tab column for S4. It says <b>on your PC</b> first because that is
+    /// the fact the player has to hold — no internet was needed and none was used — and names the
+    /// engine in the parenthetical so the sentence matches the chip beside it (<c>● Offline
+    /// engine</c>).</summary>
+    public static string TranslatedOnYourPc() => "Translated on your PC (offline engine).";
+
+    /// <summary>§2.2's LIVE column for the same state, in §3.2's shape: the 🔴 marker, the em dash,
+    /// and no promise the loop cannot keep. It is deliberately not "no internet needed" — the loop
+    /// may be on this rung because every online engine is paused rather than because the connection
+    /// is gone, and §3.0 rule 1 applies to causes as well as to names.</summary>
+    public static string LiveUsingOfflineEngine() => "🔴 Live — using the offline engine.";
+
+    /// <summary>
     /// <b>AC 2 — the only thing a background failure may do.</b> §3.6 is a deliberate divergence
     /// from the brief's own flow (d): the consent dialog is never raised by a failure, because a
     /// modal over a fullscreen game opened by a loop the player forgot was running is the single

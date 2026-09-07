@@ -429,6 +429,9 @@ public class UserMessagesTests : GatesTestBase
             UserMessages.OfflineCancelLabel(), UserMessages.OfflineRemovedStatus(0),
             UserMessages.OfflineRemovedStatus(52_428_800),
             UserMessages.AllPausedOfflineNudge(),
+            // E8.S5: ruling E8-b's residual case, and §2.2's two columns for state S4.
+            UserMessages.OfflineRemoveIncomplete(1), UserMessages.OfflineRemoveIncomplete(52_428_800),
+            UserMessages.TranslatedOnYourPc(), UserMessages.LiveUsingOfflineEngine(),
         };
 
         foreach (var why in Enum.GetValues<OfflineInstallFailure>())
@@ -1234,6 +1237,11 @@ public class UserMessagesTests : GatesTestBase
             "This deletes the offline engine's files from your PC",
             "Offline engine removed — ", " MB freed from your disk.",
             "All engines are paused — you can add an offline engine in About.",
+            // E8.S5: E8-b's residual case, and §2.2's S4 columns. The two status lines are the ones
+            // UX-DR19 most wants counted — "the offline engine is answering" is one state, and two
+            // spellings of it on one surface is the failure the rule is named for.
+            "Could not remove every file — ", " MB left; close the app and try again.",
+            "Translated on your PC (offline engine).", "🔴 Live — using the offline engine.",
             "Clear cache", "Cache cleared — ", " saved translation(s) removed.",
             // §4.2's reason column. Only the clause is scanned: the row is composed from a provider
             // NAME plus this, so the rendered sentence is not a contiguous literal anywhere — which

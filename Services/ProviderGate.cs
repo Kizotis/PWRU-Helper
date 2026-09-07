@@ -521,7 +521,21 @@ internal sealed class ProviderGate
     /// arrive while a probe was outstanding, close the gate and reset the whole strike ladder. It
     /// is still a real success — the soft count and the clean run see it — but only the probe's own
     /// report may end the half-open window.</param>
-    internal void ReportSuccess(long probeToken = 0)
+    /// <param name="selfHealing"><b>Ruling E8-e, and it is written for callers that have no probe to
+    /// hold.</b> A LOCAL provider never calls <see cref="TryEnter"/> — there is no endpoint to be
+    /// polite to and no token bucket to spend — so nothing ever hands it
+    /// <see cref="GateOutcome.Probe"/>, and the ordinary arm below cannot close a gate. The result
+    /// was that one failure left <see cref="StateAt"/> reading <c>Open</c> for the rest of the
+    /// process (the state outlives its window on purpose, ruling E3-a) and E7's chip said "paused"
+    /// about a working engine, for ever.
+    ///
+    /// <para>What this flag buys is exactly one thing: <b>the first success after the window has
+    /// ELAPSED closes the gate</b>. Not a success inside a live window — the chain skips a tier
+    /// inside one, so such a success can only come from a caller that went round the chain, and it
+    /// is not evidence the window was wrong. It is <c>false</c> by default and no HTTP provider
+    /// passes it, so <c>ProviderGateTests</c>' probe semantics are untouched: for a remote endpoint
+    /// only a probe may end a half-open window, which is ruling E2-h and stays.</para></param>
+    internal void ReportSuccess(long probeToken = 0, bool selfHealing = false)
     {
         GateState from = default;
         GateSnapshot? landed = null;
@@ -533,7 +547,18 @@ internal sealed class ProviderGate
             _lastAt = now;
             _badResponses = 0;                  // "a success in between resets the soft count" (§5.3)
 
-            if (IsOutstandingProbe(probeToken))
+            if (selfHealing && !_probeOutstanding && BlockedUntil is { } elapsed && elapsed <= now)
+            {
+                // The window is over and a local engine has just proved it is well. Both timelines,
+                // the strikes and the clean run, exactly as a successful probe leaves them — because
+                // that is what this IS for a provider that cannot be probed.
+                _strikes = 0;
+                _keyBlockedUntil = null;
+                _ipBlockedUntil = null;
+                _cleanSince = now;
+                landed = SnapshotAt(now);       // Open → Closed: the pause is over, persist it
+            }
+            else if (IsOutstandingProbe(probeToken))
             {
                 _probeOutstanding = false;
                 _probeToken = 0;                // one report per probe; a replay resolves nothing

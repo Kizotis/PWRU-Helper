@@ -238,6 +238,68 @@ public class BergamotLifetimeTests : GatesTestBase
         Assert.Equal(1, engine.Disposals);
     }
 
+    // =============================================================================================
+    //  E8.S5 — the decline race E8.S4 recorded: deferring must not mean forgetting
+    // =============================================================================================
+
+    /// <summary>
+    /// <b>The gap, closed at the provider end.</b> The one-shot asks "has the window elapsed?" on
+    /// the dispatcher and the pool asks it again an instant later, under the provider's lock. A
+    /// translation landing in between moves the window, <c>UnloadIfIdle</c> declines — and before
+    /// E8.S5 it declined into silence, so the engine stayed resident until the next call into the
+    /// provider or until <c>OnClosing</c>. It now answers with the idle it decided on, computed
+    /// inside the same lock as the decision, and the tick re-arms from that.
+    ///
+    /// <para>The two negative answers matter as much as the positive one: a decline with nothing
+    /// left to wait for means the policy said no for a reason a timer cannot fix, and re-arming on
+    /// it would be a 50 ms loop for the rest of the session.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_decline_answers_with_what_is_left_so_the_tick_can_re_arm()
+    {
+        var clock = new FakeClock();
+        var factory = new FakeBergamotEngineFactory();
+        using var model = new TempModel();
+        var provider = Provider(factory, model, new BergamotLifetime(() => false, clock.Read, Timeout));
+
+        await provider.TranslateAsync("привет", "ru", "en");
+        clock.Advance(Timeout);                                  // the one-shot is about to fire…
+
+        // …and a line lands in the microseconds before the pool asks.
+        await provider.TranslateAsync("пока", "ru", "en");
+
+        Assert.False(provider.UnloadIfIdle(out var remaining));
+        Assert.True(provider.IsLoaded);
+        Assert.Equal(Timeout, remaining);
+
+        // The window really has elapsed this time: it frees, and there is nothing to re-arm for.
+        clock.Advance(Timeout);
+        Assert.True(provider.UnloadIfIdle(out var afterTheFree));
+        Assert.Equal(TimeSpan.Zero, afterTheFree);
+
+        // Nothing is loaded any more, so a second ask declines with zero — the answer that stops
+        // the caller re-arming for ever over an engine that is already gone.
+        Assert.False(provider.UnloadIfIdle(out var nothingLoaded));
+        Assert.Equal(TimeSpan.Zero, nothingLoaded);
+    }
+
+    /// <summary>A provider with no policy has no opinion and never unloads itself — and it answers
+    /// zero rather than a window, so the caller does not arm a timer for an engine nothing will ever
+    /// free on a schedule.</summary>
+    [Fact]
+    public async Task With_no_policy_a_decline_names_no_window()
+    {
+        var factory = new FakeBergamotEngineFactory();
+        using var model = new TempModel();
+        var provider = Provider(factory, model, lifetime: null);
+
+        await provider.TranslateAsync("привет", "ru", "en");
+
+        Assert.False(provider.UnloadIfIdle(out var remaining));
+        Assert.Equal(TimeSpan.Zero, remaining);
+        Assert.True(provider.IsLoaded);
+    }
+
     /// <summary>
     /// <b>The (a) heartbeat, at the one moment it is the only thing left.</b> A session in which
     /// LIVE never ran never reaches <c>StopLive</c>, so the one-shot is never armed and nothing
@@ -477,10 +539,12 @@ public class BergamotLifetimeTests : GatesTestBase
                         Body(live, "private void StartLive(System.Drawing.Rectangle rect)"),
                         StringComparison.Ordinal);
 
-        // TWO arming sites in the whole app and no more, and they are these two: StopLive (the ONE
-        // site a player's gesture reaches — Stop comes from the ■ button, from Resume, from
-        // Ctrl+Alt+L and from E5.S2's auto-stop, and arming at those four call sites would have
-        // missed three of them) and the tick's own re-arm when it finds the window has moved.
+        // THREE arming sites in the whole app and no more: StopLive (the ONE site a player's gesture
+        // reaches — Stop comes from the ■ button, from Resume, from Ctrl+Alt+L and from E5.S2's
+        // auto-stop, and arming at those four call sites would have missed three of them), the
+        // tick's own re-arm when it finds the window has moved, and — E8.S5 — the re-arm after the
+        // POOL declines, which is E8.S4's recorded gap: a translation landing between the
+        // dispatcher's question and the provider's answer made UnloadIfIdle decline into silence.
         var arming = ProductionSources()
             .Select(f => (Name: Path.GetFileName(f),
                           Count: Occurrences(Code(File.ReadAllText(f)), "ArmOfflineIdleUnload();")))
@@ -488,7 +552,7 @@ public class BergamotLifetimeTests : GatesTestBase
             .Select(x => $"{x.Name}: {x.Count}")
             .OrderBy(x => x, StringComparer.Ordinal)
             .ToList();
-        Assert.Equal(new[] { "MainWindow.Live.cs: 1", "MainWindow.xaml.cs: 1" }, arming);
+        Assert.Equal(new[] { "MainWindow.Live.cs: 1", "MainWindow.xaml.cs: 2" }, arming);
 
         // OnClosing: the timer roots its handler on a window that is going away (E7.S2's reason for
         // StopCountdown), and the engine goes with it — off the dispatcher, bounded, because Unload
@@ -506,8 +570,16 @@ public class BergamotLifetimeTests : GatesTestBase
 
         // The unload never happens on the UI thread. Every site that can free the engine either
         // hands it to the pool or is a user gesture that deliberately waits (RemoveOfflineEngine).
-        Assert.Contains("Task.Run(() => engine.UnloadIfIdle());",
-                        Body(main, "internal void OfflineIdleTick()"), StringComparison.Ordinal);
+        // Since E8.S5 the pool call also answers with the idle it decided on, and the hop back is a
+        // BeginInvoke guarded by _closing — re-arming a rooted timer on a window that is going away
+        // is precisely what E8.S4 refused to risk without this guard.
+        var tickBody = Body(main, "internal void OfflineIdleTick()");
+        Assert.Contains("engine.UnloadIfIdle(out var remaining)", tickBody, StringComparison.Ordinal);
+        Assert.Contains("Task.Run(", tickBody, StringComparison.Ordinal);
+        Assert.Contains("Dispatcher.BeginInvoke", tickBody, StringComparison.Ordinal);
+        Assert.Contains("_closing", tickBody, StringComparison.Ordinal);
+        // …and the guard is really set, first thing, on the way out.
+        Assert.Contains("_closing = true;", closing, StringComparison.Ordinal);
     }
 
     /// <summary>

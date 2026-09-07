@@ -250,7 +250,7 @@ public partial class MainWindow
     /// a chain needs gates, and this file may not name <c>ProviderGates</c> (TP-START-02). Since
     /// E4.S4 it needs the shared cache store too, and the same rule applies for the same reason —
     /// the builder returns the chain already decorated, so this file names neither.</para></summary>
-    private ITranslator BuildWriteChain() => TranslationChains.BuildWrite(_settings);
+    private ITranslator BuildWriteChain() => TranslationChains.BuildWrite(_settings, _offlineTier);
 
     private void DeepLSaveKey_Click(object sender, RoutedEventArgs e)
     {
@@ -288,8 +288,8 @@ public partial class MainWindow
     /// on the read side too.</para></summary>
     private void RebuildReadChains()
     {
-        _readTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Background, out _readChain);
-        _readOnceTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Interactive);
+        _readTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Background, out _readChain, _offlineTier);
+        _readOnceTranslator = TranslationChains.BuildRead(_settings, RequestPriority.Interactive, _offlineTier);
     }
 
     /// <summary>

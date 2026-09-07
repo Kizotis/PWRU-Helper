@@ -775,6 +775,173 @@ public class BergamotTranslatorTests : GatesTestBase
     }
 
     // =============================================================================================
+    //  E8.S5 — ruling E8-e: the local gate heals itself
+    // =============================================================================================
+
+    /// <summary>A clock this file owns, so a gate window is stepped over rather than waited out
+    /// (CI-3). Deliberately the same shape as <c>ProviderGateTests.FakeClock</c>.</summary>
+    private sealed class FakeClock
+    {
+        public DateTimeOffset Now { get; private set; } = new(2026, 9, 7, 12, 0, 0, TimeSpan.Zero);
+        public DateTimeOffset Read() => Now;
+        public void Advance(TimeSpan d) => Now += d;
+    }
+
+    /// <summary>What E7's chip would say about a chain whose last rung is this provider, at
+    /// <paramref name="now"/>. A pure function over values — no window, no registry — which is the
+    /// whole reason <c>ChipFor</c> is a static.</summary>
+    private static string ChipLabel(ProviderGate gate, DateTimeOffset now, string? answered)
+    {
+        var tiers = new[] { ProviderIds.Bergamot };
+        var status = EngineStatus.Of(
+            tiers,
+            new Dictionary<string, GateSnapshot>(StringComparer.Ordinal)
+                { [ProviderIds.Bergamot] = gate.Snapshot() },
+            tiers,
+            answered is null ? null
+                : new ChainTranslator.Outcome(answered, Array.Empty<(string, string)>(), null, null),
+            stateKnown: true, now);
+
+        return MainWindow.ChipFor(status).Label;
+    }
+
+    /// <summary>
+    /// <b>Ruling E8-e, end to end through the provider.</b> A local engine never calls
+    /// <c>TryEnter</c>, so nothing ever handed it a probe token and nothing could close its gate:
+    /// one failure left the state reading <c>Open</c> for the rest of the process, the clean run
+    /// never started, and the strike ladder therefore never decayed — so a healthy engine's next
+    /// failure escalated from wherever the old one left it. The first success after the window
+    /// closes the gate, and the chip never says "paused" about an engine that is loaded and
+    /// answering.
+    /// </summary>
+    [Fact]
+    public async Task E8_e_The_first_success_after_the_window_closes_the_local_gate()
+    {
+        var factory = new FakeBergamotEngineFactory();
+        using var model = new TempModel();
+        var clock = new FakeClock();
+        var gate = new ProviderGate(clock.Read);
+
+        // The model is not there yet — E8.S2's failure mode 1, a typed Unavailable with a window.
+        string? directory = null;
+        var provider = new BergamotTranslator(
+            modelDirectory: () => directory, nativeDirectory: () => null,
+            engineFactory: factory.Create, gate: gate);
+
+        await Assert.ThrowsAsync<TranslationException>(
+            () => provider.TranslateAsync("привет", "ru", "en"));
+
+        Assert.Equal(GateState.Open, gate.Snapshot().State);
+        Assert.Contains("paused", ChipLabel(gate, clock.Now, answered: null),
+                        StringComparison.OrdinalIgnoreCase);
+
+        // The window elapses and the model is back (the user re-installed, or the Remove race is
+        // over). The state still reads Open — that is ruling E3-a, and it is what used to be
+        // permanent.
+        clock.Advance(TimeSpan.FromMinutes(TranslationPolicy.OpenCapMinutes + 1));
+        directory = model.Path;
+        Assert.Equal(GateState.Open, gate.Snapshot().State);
+
+        Assert.Equal("[привет]", await provider.TranslateAsync("привет", "ru", "en"));
+
+        Assert.True(provider.IsLoaded);
+        Assert.Equal(GateState.Closed, gate.Snapshot().State);
+        Assert.Null(gate.Snapshot().BlockedUntil);
+        Assert.Equal(0, gate.Snapshot().Strikes);
+
+        var chip = ChipLabel(gate, clock.Now, ProviderIds.Bergamot);
+        Assert.DoesNotContain("paused", chip, StringComparison.OrdinalIgnoreCase);
+        // The chip's short form, which for this one provider is not the display name (§3.0: the
+        // overlay's 40-character line cannot spare "Offline engine").
+        Assert.Equal("● " + ProviderNames.Short(ProviderIds.Bergamot), chip);
+    }
+
+    // =============================================================================================
+    //  E8.S5 — the terminal state Remove needs
+    // =============================================================================================
+
+    /// <summary>
+    /// <b>Freeing is not closing</b> (E8.S2's review, and E8.S3's). <c>Unload</c> is reversible by
+    /// design — the next line brings a fresh engine up, which is what makes the idle policy a
+    /// capability rather than a one-shot — and that is exactly wrong for a <b>Remove</b>: a
+    /// translation landing between the free and the <c>Directory.Delete</c> mapped the DLL again,
+    /// the delete failed, and the row read "removed — 0 MB freed" over 50 MB that was still there.
+    /// After <c>Close</c> every translate fails typed <c>Unavailable</c> and <c>Load</c> is refused.
+    /// </summary>
+    [Fact]
+    public async Task Close_is_terminal_and_a_translate_can_never_undo_it()
+    {
+        var factory = new FakeBergamotEngineFactory();
+        using var model = new TempModel();
+        var provider = Provider(factory, model, gate: new ProviderGate());
+
+        await provider.TranslateAsync("привет", "ru", "en");
+        Assert.True(provider.IsLoaded);
+
+        provider.Close();
+
+        Assert.True(provider.IsClosed);
+        Assert.False(provider.IsLoaded);
+        Assert.Equal(1, factory.Last!.Disposals);
+
+        // Every door a translation can knock on, twice, and none of them brings 121 MiB back.
+        var one = await Assert.ThrowsAsync<TranslationException>(
+            () => provider.TranslateAsync("привет", "ru", "en"));
+        Assert.Equal(TranslationErrorKind.Unavailable, one.Kind);
+        Assert.False(one.NotSent, "ruling E8-c: a local engine never makes a request to not send");
+
+        var many = await Assert.ThrowsAsync<TranslationException>(
+            () => provider.TranslateLinesAsync(new[] { "a", "b" }, "ru", "en"));
+        Assert.Equal(TranslationErrorKind.Unavailable, many.Kind);
+
+        Assert.Throws<TranslationException>(provider.Load);
+
+        Assert.Equal(1, factory.Initialisations);
+        Assert.False(provider.IsLoaded);
+    }
+
+    /// <summary>The way back, and it is the ONLY one: a Download that really installed the files.
+    /// The asymmetry is the design — Remove retires the one instance the process owns, Download
+    /// revives it, and nothing on the translate path can do either.</summary>
+    [Fact]
+    public async Task Reopen_is_the_only_way_back_and_it_is_not_on_the_translate_path()
+    {
+        var factory = new FakeBergamotEngineFactory();
+        using var model = new TempModel();
+        var provider = Provider(factory, model, gate: new ProviderGate());
+
+        provider.Close();
+        await Assert.ThrowsAsync<TranslationException>(
+            () => provider.TranslateAsync("привет", "ru", "en"));
+        Assert.True(provider.IsClosed);
+
+        provider.Reopen();
+
+        Assert.False(provider.IsClosed);
+        Assert.False(provider.IsLoaded);                       // I10: reviving loads nothing
+        Assert.Equal("[привет]", await provider.TranslateAsync("привет", "ru", "en"));
+        Assert.True(provider.IsLoaded);
+    }
+
+    /// <summary><see cref="BergamotTranslator.Unload"/> stays reversible, which is the distinction
+    /// the two members exist for: the idle policy frees memory and the next line pays 82 ms for it,
+    /// while a Remove is permanent until a Download.</summary>
+    [Fact]
+    public async Task Unload_is_still_not_terminal()
+    {
+        var factory = new FakeBergamotEngineFactory();
+        using var model = new TempModel();
+        var provider = Provider(factory, model, gate: new ProviderGate());
+
+        await provider.TranslateAsync("привет", "ru", "en");
+        provider.Unload();
+
+        Assert.False(provider.IsClosed);
+        Assert.Equal("[привет]", await provider.TranslateAsync("привет", "ru", "en"));
+        Assert.Equal(2, factory.Initialisations);
+    }
+
+    // =============================================================================================
     //  The pins — source scans, because a comment can be deleted and a scan cannot
     // =============================================================================================
 

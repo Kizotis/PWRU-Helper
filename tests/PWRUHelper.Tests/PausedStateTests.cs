@@ -522,8 +522,12 @@ public class PausedStateTests
         // is the whole reason the nudge is safe: it is a sentence a pure function chooses, so it can
         // never become a dialog or a per-row annotation, and "once, when the state is entered" is
         // the memory below rather than a new mechanism.
-        Assert.Contains("var notice = StateNotice(status, chip, _chipWasDegraded, _offlineInstalled);",
-                        body, StringComparison.Ordinal);
+        // …and E8.S5 added a fifth: which SURFACE is going to render it. S4 is the one state whose
+        // sentence differs between the Translator tab and the LIVE status line (§2.2's table), and
+        // the choice is made where the state is rather than by the writer downstream.
+        Assert.Contains(
+            "var notice = StateNotice(status, chip, _chipWasDegraded, _offlineInstalled, _liveCts != null);",
+            body, StringComparison.Ordinal);
     }
 
     /// <summary>

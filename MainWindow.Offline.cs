@@ -146,6 +146,12 @@ public partial class MainWindow
             _settings.OfflineFallbackEnabled = true;
             SettingsService.Save(_settings);
             _offlineInstalled = true;
+            // …and the provider comes back out of retirement, which is the ONLY way back from
+            // Close() and deliberately so (E8.S5): a Remove retires the one instance the process
+            // owns, and only a Download that really installed the files may revive it. Nothing on
+            // the translate path can, which is what makes the terminal flag unforgeable. Before the
+            // rebuild, so the tier the builders are about to construct is a live one.
+            _offlineEngine.Reopen();
             RebuildChainsForOfflineChange();
             UpdateOfflineEngineUi();
         }
@@ -195,7 +201,17 @@ public partial class MainWindow
         // …and then the row says what came back, over the resting sentence UpdateOfflineEngineUi
         // just wrote. Same ownership rule the key boxes follow (E7.S7): the standing state is
         // rewritten by the refresh, a transient answer overwrites it until the next gesture.
-        OfflineEngineText.Text = UserMessages.OfflineRemovedStatus(freed);
+        //
+        // RULING E8-b's residual case, owed since E8.S3 and landed with its deck line. The store
+        // answers 0 when the delete failed and the directory is still there, and the row used to
+        // report that as "removed — 0 MB freed from your disk" over 50 MB that had not moved. The
+        // engine is closed and freed before the delete now (E8.S4 + this story's Close), so the one
+        // cause the app can remove is removed; what is left is a handle this process cannot break —
+        // an antivirus or a sync agent — and the sentence says so, with the one action that ends it.
+        var left = _offlineStore.BytesOnDisk;
+        OfflineEngineText.Text = left > 0
+            ? UserMessages.OfflineRemoveIncomplete(left)
+            : UserMessages.OfflineRemovedStatus(freed);
     }
 
     /// <summary>
@@ -215,19 +231,23 @@ public partial class MainWindow
     /// modal in a headless run; as two arguments the ORDER — the only thing this method is — is
     /// provable against the fake engine with no window at all.</para>
     ///
-    /// <para><b>What it does NOT do, and its owner.</b> Freeing is not closing: a translation
-    /// arriving between the <c>Unload</c> and the <c>Delete</c> loads the engine again, the delete
-    /// fails on the mapped DLL, and the row is back to E8.S3's untrue "removed — 0 MB freed". Nothing
-    /// is wired to this provider yet, so the window is unreachable today; shutting it needs a
-    /// terminal state on <see cref="BergamotTranslator"/> (a load that refuses after a retire), which
-    /// is the same thing E8.S2's review already handed to <b>E8.S5</b> ("Dispose is not terminal").
-    /// The residual case — a delete that fails for a reason no unload can remove, an AV hold — still
-    /// owes a truthful sentence in <c>UserMessages</c> and in the copy deck, in one commit
-    /// (ruling E8-b).</para>
+    /// <para><b>It CLOSES rather than unloading — E8.S5, and the difference is the whole bug.</b>
+    /// Freeing is not closing: a translation arriving between the free and the <c>Delete</c> brought
+    /// a fresh engine up, the delete then failed on the mapped DLL, and the row was back to E8.S3's
+    /// untrue "removed — 0 MB freed". E8.S3 could leave that window open because nothing was wired
+    /// to the provider; this story wires it, so <see cref="BergamotTranslator.Close"/> is the call —
+    /// it frees under the same lock AND retires the provider, so a line that arrives mid-delete
+    /// fails typed <c>Unavailable</c> instead of allocating 121 MiB nobody asked for. The chains are
+    /// rebuilt without the tier a moment later; a Download is what revives it (<c>Reopen</c>).</para>
+    ///
+    /// <para>The residual case ruling <b>E8-b</b> owed — a delete that fails for a reason no unload
+    /// can remove, an antivirus or a sync agent holding a file — now has its truthful sentence:
+    /// <c>UserMessages.OfflineRemoveIncomplete</c>, written with the deck line in the same commit,
+    /// and chosen by the caller from what is still on disk.</para>
     /// </summary>
     internal static long UnloadThenRemove(BergamotTranslator engine, OfflineModelStore store)
     {
-        engine.Unload();
+        engine.Close();
         return store.Remove();
     }
 
@@ -237,11 +257,10 @@ public partial class MainWindow
     /// takes it away, and a chain built before the change would go on answering from the old tier
     /// list until a restart — the divergence class E6.S3's region-change handler exists to prevent.
     ///
-    /// <para><b>It is a no-op today and is written anyway.</b> The builders do not construct the
-    /// Bergamot tier yet — that wiring, and the <c>Func&lt;string?&gt;</c> locators this store can
-    /// already answer, are <b>E8.S5</b>'s (rulings E8-c/E8-e), which is why this story adds no
-    /// plumbing to <c>TranslationChains</c> at all. Calling the seam here is what makes E8.S5 a
-    /// change to the builders and not a hunt for the two places that had to learn about it.</para>
+    /// <para><b>E8.S5 made it real.</b> The builders now append the offline rung behind one
+    /// predicate — <c>OfflineFallbackEnabled</c> AND the model on disk — so this really does change
+    /// the tier list, and it is the only mechanism that does: the post-paint probe in
+    /// <c>OnWindowLoaded</c> calls it too when the disk contradicts the setting.</para>
     /// </summary>
     private void RebuildChainsForOfflineChange()
     {

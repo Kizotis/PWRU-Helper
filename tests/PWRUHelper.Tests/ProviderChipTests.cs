@@ -486,4 +486,138 @@ public class ProviderChipTests
         Assert.Null(UserMessages.BackOn(null));
         Assert.Null(UserMessages.BackOn("something-new"));
     }
+
+    // =============================================================================================
+    //  E8.S5 — S4 is reachable now, on all four surfaces (AC 4)
+    // =============================================================================================
+
+    /// <summary>
+    /// <b>S4 was a mapping nobody could reach until this story.</b> E7.S3 shipped it with the
+    /// offline tier permanently <c>Off</c>, so the <c>Answering</c>-on-<c>bergamot</c> path had
+    /// never been exercised by anything but a synthetic outcome. It is now the state a player
+    /// really lands in, so the chip and its two status-line sentences are pinned as literals.
+    ///
+    /// <para>The names are <c>ProviderNames</c>' and nothing here invents one (§3.0 rule 1): the
+    /// chip takes the SHORT form, because the compact overlay's 40-character line cannot spare
+    /// "Offline engine" — which is the one provider for which the two forms differ.</para>
+    /// </summary>
+    [Fact]
+    public void S4_renders_the_decks_chip_and_its_two_status_lines()
+    {
+        var status = S4();
+
+        Assert.Equal("● Offline", MainWindow.ChipFor(status).Label);
+        Assert.Equal("TealBrush", MainWindow.ChipFor(status).BrushKey);
+
+        // §2.2's two columns for this one state, chosen by the surface that will render it.
+        Assert.Equal("Translated on your PC (offline engine).", UserMessages.TranslatedOnYourPc());
+        Assert.Equal("🔴 Live — using the offline engine.", UserMessages.LiveUsingOfflineEngine());
+
+        // …and the About tab's own row, which is the same composer with the clock moved
+        // (E7.S7): one state, one spelling, four surfaces.
+        Assert.Equal("● Offline", MainWindow.AboutChipFor(status, showTheClock: true).Label);
+    }
+
+    /// <summary>
+    /// <b>§3.5 needs no new sentence for the offline engine, and this is the check that says so.</b>
+    /// The deck lists "Translated by the offline engine — no internet needed." as a line of its own;
+    /// E7.S4's <c>Translated by {P} — {P2} is paused.</c> already carries it with <c>{P}</c> read
+    /// out of <see cref="ProviderNames"/>, and a second spelling of one state on one surface is
+    /// exactly what UX-DR19 forbids. Verified, not re-written.
+    /// </summary>
+    [Fact]
+    public void The_fallback_notice_names_the_offline_engine_without_a_sentence_of_its_own()
+    {
+        Assert.Equal("Translated by Offline engine — Google is paused.",
+                     UserMessages.TranslatedBy(ProviderIds.Bergamot, ProviderIds.GoogleDict));
+
+        // …and through the pure chooser the app really calls, over a chain that fell back to the
+        // last rung because the first one is inside a window.
+        var chain = new[] { ProviderIds.GoogleDict, ProviderIds.Bergamot };
+        var fellBack = Status(
+            readTiers: chain, configured: chain,
+            gates: new(StringComparer.Ordinal)
+            {
+                [ProviderIds.GoogleDict] = Paused(58, TranslationErrorKind.RateLimited),
+            },
+            outcome: Answered(ProviderIds.Bergamot, ProviderIds.GoogleDict));
+
+        Assert.Equal("Translated by Offline engine — Google is paused.",
+                     MainWindow.FallbackNotice(fellBack));
+    }
+
+    /// <summary>
+    /// <b>The state notice for S4, per surface.</b> §3.5's evidence-backed line comes FIRST when
+    /// there is a pause to name — it says what happened AND why — and this one is what is left when
+    /// there is not: a rung that failed without earning a window, or a chain whose only rung is this
+    /// one. Then "why" is not a question the app can answer honestly, so it reports the state.
+    /// </summary>
+    [Fact]
+    public void The_offline_state_notice_differs_by_surface_and_yields_to_a_nameable_pause()
+    {
+        var status = S4();
+
+        // No pause above the rung that answered ⇒ S4's own sentence, per surface.
+        var onlyOffline = Status(readTiers: new[] { ProviderIds.Bergamot },
+                                 configured: new[] { ProviderIds.Bergamot },
+                                 outcome: Answered(ProviderIds.Bergamot));
+
+        Assert.Equal("Translated on your PC (offline engine).",
+            MainWindow.StateNotice(onlyOffline, MainWindow.ChipFor(onlyOffline), wasDegraded: false));
+        Assert.Equal("🔴 Live — using the offline engine.",
+            MainWindow.StateNotice(onlyOffline, MainWindow.ChipFor(onlyOffline), wasDegraded: false,
+                                   offlineInstalled: true, liveIsRunning: true));
+
+        // A pause there IS worth naming ⇒ §3.5's line wins, on either surface.
+        var chain = new[] { ProviderIds.GoogleDict, ProviderIds.Bergamot };
+        var withAPause = Status(
+            readTiers: chain, configured: chain,
+            gates: new(StringComparer.Ordinal)
+            {
+                [ProviderIds.GoogleDict] = Paused(58, TranslationErrorKind.RateLimited),
+            },
+            outcome: Answered(ProviderIds.Bergamot, ProviderIds.GoogleDict));
+
+        Assert.Equal("Translated by Offline engine — Google is paused.",
+            MainWindow.StateNotice(withAPause, MainWindow.ChipFor(withAPause), wasDegraded: false,
+                                   offlineInstalled: true, liveIsRunning: true));
+
+        // …and no state that is not the offline one gained a sentence. S1 still says nothing, S2 is
+        // still §3.5's, and S3's is E7.S4's — the arm is keyed on WHO answered, not on the shape of
+        // the chain.
+        Assert.Null(MainWindow.StateNotice(S1(), MainWindow.ChipFor(S1()), wasDegraded: false));
+        Assert.Null(MainWindow.StateNotice(S2(), MainWindow.ChipFor(S2()), wasDegraded: false,
+                                           offlineInstalled: true, liveIsRunning: true));
+        Assert.Equal("Translated by Google (backup) — Google is paused.",
+            MainWindow.StateNotice(S3(), MainWindow.ChipFor(S3()), wasDegraded: false));
+
+        // Non-vacuity for the surface split: the same state really does read differently on the two
+        // surfaces, which is what the fifth argument buys.
+        Assert.NotEqual(
+            MainWindow.StateNotice(onlyOffline, MainWindow.ChipFor(onlyOffline), wasDegraded: false),
+            MainWindow.StateNotice(onlyOffline, MainWindow.ChipFor(onlyOffline), wasDegraded: false,
+                                   offlineInstalled: true, liveIsRunning: true));
+        Assert.NotNull(status);
+    }
+
+    /// <summary>
+    /// <b>AC 6 — the tooltip's row does not disappear.</b> With no offline rung in the chain the
+    /// line reads <c>Off</c> with <c>not-installed</c>, which is ruling E3-d's precedent applied to
+    /// a second provider: a tooltip that silently drops a row the About tab shows is worse than one
+    /// that explains it. With the rung present it becomes a real state.
+    /// </summary>
+    [Fact]
+    public void The_offline_row_says_not_installed_when_it_is_absent_and_a_real_state_when_it_is_not()
+    {
+        var absent = Status().For(ProviderIds.Bergamot);
+        Assert.NotNull(absent);
+        Assert.Equal(EngineState.Off, absent!.State);
+        Assert.Equal(EngineStatus.NotInstalled, absent.OffReason);
+        Assert.Equal("Offline engine", absent.DisplayName);
+
+        var present = S4().For(ProviderIds.Bergamot);
+        Assert.NotNull(present);
+        Assert.Equal(EngineState.Answering, present!.State);
+        Assert.Null(present.OffReason);
+    }
 }

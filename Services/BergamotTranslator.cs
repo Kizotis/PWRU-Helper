@@ -82,6 +82,10 @@ internal sealed class BergamotTranslator : ITranslator, IDisposable
 
     private IBergamotEngine? _engine;
 
+    /// <summary>E8.S5's terminal state — see <see cref="Close"/>. Written under
+    /// <see cref="_sync"/> only, and by two members neither of which is on the translate path.</summary>
+    private bool _closed;
+
     /// <summary>
     /// Nothing here touches the disk (I10) and nothing here resolves a gate's state: the locators
     /// are called on the first translation, and <see cref="ProviderGates.For"/> — which constructs
@@ -272,17 +276,89 @@ internal sealed class BergamotTranslator : ITranslator, IDisposable
     /// frame in flight — so the one-shot timer that calls it does so through <c>Task.Run</c> and
     /// never on the dispatcher.</para>
     /// </summary>
-    internal bool UnloadIfIdle()
+    internal bool UnloadIfIdle() => UnloadIfIdle(out _);
+
+    /// <summary>The same sweep, with the answer the caller needs when it <b>declines</b> — E8.S4's
+    /// recorded gap, closed by E8.S5 because this is the story that first makes a concurrent offline
+    /// translation possible at all.
+    ///
+    /// <para>The one-shot asks "has the window elapsed?" on the dispatcher and the pool asks it
+    /// again here, under the lock, an instant later. A translation landing in between moves the
+    /// window: this then frees nothing and, before E8.S5, <b>nothing re-armed</b> — the engine sat
+    /// resident until the next call into the provider or until the window closed. So the remaining
+    /// idle comes back with the verdict, computed <i>inside</i> the lock so it describes the same
+    /// instant the decision did, and the tick re-arms from it. <see cref="TimeSpan.Zero"/> when
+    /// there is no policy, or when the policy declined for a reason a timer cannot fix (nothing is
+    /// loaded), which is what stops a caller re-arming in a 50 ms loop.</para>
+    ///
+    /// <para><b>Nothing is marshalled from in here</b> (I2, and E8.S4's own reason for refusing to
+    /// close this gap itself): the dispatcher hop belongs to the caller, after the lock is
+    /// gone.</para></summary>
+    internal bool UnloadIfIdle(out TimeSpan remainingIdle)
     {
-        lock (_sync) { return SweepLocked(); }
+        lock (_sync)
+        {
+            if (SweepLocked()) { remainingIdle = TimeSpan.Zero; return true; }
+            remainingIdle = _engine is not null && _lifetime is not null
+                ? _lifetime.RemainingIdle()
+                : TimeSpan.Zero;
+            return false;
+        }
     }
 
-    /// <summary><b>Not terminal, deliberately</b>, and E8.S4 is the one that has to know: this is
-    /// <see cref="Unload"/> under another name, so a translate arriving afterwards brings a fresh
-    /// engine up rather than throwing. That is what makes the load/unload cycle a capability instead
-    /// of a one-shot — but it means a discarded instance can still be made to allocate 121 MiB that
-    /// nothing holds a reference to unload again. Whoever retires this provider (E8.S5's chain
-    /// rebuild) must drop every reference to it in the same breath.</summary>
+    /// <summary>
+    /// <b>The terminal door</b> — E8.S2's review recorded that <see cref="Dispose"/> is not one, and
+    /// E8.S3's that <c>UnloadThenRemove</c> frees but does not <i>close</i>: a translation arriving
+    /// between the free and the <c>Directory.Delete</c> brought a fresh engine up, the delete then
+    /// failed on the mapped DLL, and the About row went back to the untrue "removed — 0 MB freed".
+    ///
+    /// <para>After this the provider is <b>retired</b>: every translate fails typed
+    /// <see cref="TranslationErrorKind.Unavailable"/> and <see cref="Load"/> is refused, because the
+    /// one place an engine can be created checks the flag. There is still exactly ONE instance in
+    /// the process (E8.S4's pin), so the way back is <see cref="Reopen"/> and not a second object —
+    /// and the flag is unforgeable from a translation: nothing on the translate path clears it, only
+    /// a successful Download does.</para>
+    ///
+    /// <para>Under the same lock as everything else here, so "closed" and "freed" are one instant
+    /// rather than two with a translate able to start between them.</para>
+    /// </summary>
+    internal void Close()
+    {
+        lock (_sync)
+        {
+            _closed = true;
+            var engine = _engine;
+            Volatile.Write(ref _engine, null);
+            SafeFree(engine);                   // inside the lock — Unload's reasoning, unchanged
+        }
+    }
+
+    /// <summary>The way back, and the ONLY one: a Download that really installed the files. It is a
+    /// deliberate asymmetry with <see cref="Close"/> — Remove retires the provider, Download revives
+    /// it, and a translation can do neither. Loads nothing (I10): the next call brings the engine up
+    /// if the chain has a tier to reach it through.</summary>
+    internal void Reopen()
+    {
+        lock (_sync) { _closed = false; }
+    }
+
+    /// <summary>Whether <see cref="Close"/> has retired this provider. Read under the lock by
+    /// <see cref="LoadLocked"/>; exposed so a test can assert the state rather than infer it from a
+    /// throw.</summary>
+    internal bool IsClosed
+    {
+        get { lock (_sync) return _closed; }
+    }
+
+    /// <summary><b>Not terminal, deliberately</b>: this is <see cref="Unload"/> under another name,
+    /// so a translate arriving afterwards brings a fresh engine up rather than throwing. That is
+    /// what makes the load/unload cycle a capability instead of a one-shot.
+    ///
+    /// <para>The terminal door is <see cref="Close"/> (E8.S5), and the difference is the whole
+    /// reason both exist: an idle unload is the policy saving memory and must be reversible by the
+    /// next line to translate, while a <b>Remove</b> is the user taking the engine away and must NOT
+    /// be — a translate landing between the free and the delete used to bring 121 MiB back up and
+    /// leave the files undeletable.</para></summary>
     public void Dispose() => Unload();
 
     // =============================================================================================
@@ -309,7 +385,13 @@ internal sealed class BergamotTranslator : ITranslator, IDisposable
 
         // §5.3's other half: without it the soft strike count is cumulative-for-ever instead of
         // consecutive, and three BadResponses an hour apart would open a window on a healthy engine.
-        Gate.ReportSuccess();
+        //
+        // selfHealing — ruling E8-e, and it is the whole of it. There is no TryEnter on this leg
+        // (see the class comment), so nothing ever hands this provider a probe token, so nothing
+        // could ever CLOSE its gate: after one failure GateState read Open for the rest of the
+        // process and E7's chip said "paused" about an engine that was answering every line. For a
+        // local engine the success IS the probe.
+        Gate.ReportSuccess(selfHealing: true);
 
         // The honest half of the cancellation contract (T4): the native call itself is not
         // cancellable, so what this class promises is "we do not start one you cancelled, and we
@@ -344,8 +426,9 @@ internal sealed class BergamotTranslator : ITranslator, IDisposable
             throw Reported(TranslationErrorKind.BadResponse);
 
         // Reported before the discard check for the same reason the failure above is: the engine
-        // answered, and a cancel arriving afterwards is not evidence against it.
-        Gate.ReportSuccess();
+        // answered, and a cancel arriving afterwards is not evidence against it. selfHealing: see
+        // TranslateOne — ruling E8-e, a local provider closes its own window.
+        Gate.ReportSuccess(selfHealing: true);
         ct.ThrowIfCancellationRequested();
 
         return answer.ToList();
@@ -466,6 +549,13 @@ internal sealed class BergamotTranslator : ITranslator, IDisposable
     {
         var existing = _engine;
         if (existing is not null) return existing;
+
+        // Failure mode 0 — this provider has been RETIRED (E8.S5's Close, and it is the one check
+        // that runs before the locators). Not reported to the gate, for RequireInstalledPair's
+        // reason: nothing is broken and nothing heals in five seconds. "The user pressed Remove" is
+        // a fact about this session, and the chain rebuild that follows takes the tier away anyway —
+        // opening a soft window for it would only leave a stale pause on the chip.
+        if (_closed) throw Failure(TranslationErrorKind.Unavailable);
 
         // Failure mode 1 — the model is not there. E8.S5 builds this tier only if the setting is on
         // AND the model is present, so a missing model reaching this class is a race: the user

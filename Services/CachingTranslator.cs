@@ -22,6 +22,12 @@ public class CachingTranslator : ITranslator
     private readonly ITranslator _inner;
     private readonly TranslationCacheStore _store;
 
+    /// <summary>E8.S5's T3, option (i): "which tier answered?", asked of the thing that knows — the
+    /// chain — through one nullable delegate the builder supplies. Null for a decorator built over
+    /// something that is not a chain, and then the <c>"p"</c> field is written empty exactly as it
+    /// was before, which is the honest answer rather than a guess.</summary>
+    private readonly Func<string?>? _lastProvider;
+
     public CachingTranslator(ITranslator inner, int capacity = TranslationPolicy.CacheCapacityToday)
     {
         _inner = inner;
@@ -36,10 +42,18 @@ public class CachingTranslator : ITranslator
     /// pins the capacity default through <c>GetConstructors().Single()</c>, which throws the moment a
     /// second PUBLIC constructor exists. <c>InternalsVisibleTo PWRUHelper.Tests</c> keeps it reachable
     /// from the suite, and every call site that will pass a store is in this assembly.</para></summary>
-    internal CachingTranslator(ITranslator inner, TranslationCacheStore store)
+    /// <param name="lastProvider">E8.S5. Who answered the call that just returned, so the entry can
+    /// carry §8.2's <c>"p"</c>. Read <b>once</b> per store and into a local: the chain's
+    /// <c>LastOutcome</c> is a <c>Volatile</c> field a second call may already have overwritten from
+    /// a pool thread, and reading it twice in one batch would stamp two calls' accounts onto each
+    /// other's entries — a wrong <c>"p"</c> is invisible until somebody presses Remove and keeps
+    /// getting offline answers.</param>
+    internal CachingTranslator(ITranslator inner, TranslationCacheStore store,
+                               Func<string?>? lastProvider = null)
     {
         _inner = inner;
         _store = store;
+        _lastProvider = lastProvider;
     }
 
     public async Task<string> TranslateAsync(string text, string source, string target,
@@ -61,7 +75,7 @@ public class CachingTranslator : ITranslator
         // and the scan now asserts the arm is load-bearing, which is why this comment does not spell
         // the name out.
         var result = await _inner.TranslateAsync(text, source, target, ct).ConfigureAwait(false);
-        if (IsCacheable(text, result)) Store(key, result);
+        if (IsCacheable(text, result)) Store(key, result, AnsweringProvider());
         return result;
     }
 
@@ -97,12 +111,18 @@ public class CachingTranslator : ITranslator
                 throw new TranslationException(TranslationErrorKind.BadResponse,
                     "The translator returned a different number of lines than it was asked for.");
 
+            // ONE read for the whole batch (E8.S5): one call to the chain, one answering provider,
+            // so every line of this frame carries the same "p". Reading it inside the loop would ask
+            // the chain forty times about forty different instants and let a second call in flight
+            // relabel the tail of this one's entries.
+            var answered = AnsweringProvider();
+
             for (int j = 0; j < missIndexes.Count; j++)
             {
                 var value = fresh[j];
                 result[missIndexes[j]] = value;
                 if (IsCacheable(missLines[j], value))
-                    Store(Key(source, target, missLines[j]), value);
+                    Store(Key(source, target, missLines[j]), value, answered);
             }
         }
         return result.ToList();
@@ -128,5 +148,10 @@ public class CachingTranslator : ITranslator
     // is left of them here, so the call sites above read the same as they always did.
     private bool TryGet(string key, out string value) => _store.TryGet(key, out value);
 
-    private void Store(string key, string value) => _store.Store(key, value);
+    private void Store(string key, string value, string? providerId)
+        => _store.Store(key, value, providerId);
+
+    /// <summary>Who answered, or null when nobody supplied a way to ask. One invocation per store
+    /// site, never one per entry — see the batch's own comment.</summary>
+    private string? AnsweringProvider() => _lastProvider?.Invoke();
 }

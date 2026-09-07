@@ -472,6 +472,20 @@ During the download the About row becomes `Downloading the offline engine… {p}
 completion, `● Offline engine ready — used only when everything else is unavailable.` If the download fails:
 `Download failed — {reason}. Nothing was installed.`
 
+On **Remove**, the row reports what really came back: `Offline engine removed — {n} MB freed from your disk.`
+
+> **The residual case ruling E8-b left owed, landed with E8.S5's code in one commit.** A `Remove` deletes the
+> whole root, and the two causes the app can remove are removed before it tries: the engine is freed **and**
+> closed for good first (E8.S4's ordering + E8.S5's terminal `Close`, so a translation arriving mid-delete cannot
+> map the DLL again). What can still be left is a handle this process does not hold — an antivirus or a
+> sync agent with a file open — and the old row reported that as "removed — 0 MB freed from your disk" over
+> 50 MB that had not moved, which is the one thing principle 1 forbids outright. So:
+>
+> `Could not remove every file — {n} MB left; close the app and try again.`
+>
+> It says what happened, how much is left, and **what the user can do about it** (principle 2 — never a statement
+> with no exit). Closing the app is the honest instruction: it releases the handle, and it costs nothing.
+
 ### 3.7 Key validation feedback (DeepL and Azure)
 
 `Test key` is a real request that validates key **and** region without translating a paying character where the

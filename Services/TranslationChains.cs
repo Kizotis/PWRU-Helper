@@ -1,6 +1,30 @@
 namespace PWRUHelper.Services;
 
 /// <summary>
+/// <b>E8.S5 — the offline rung's two halves, as one argument to the builders.</b>
+///
+/// <para><b>The engine is passed in and never constructed here</b> (E8.S4's review pin). There is
+/// exactly ONE <c>BergamotTranslator</c> in the process — <c>MainWindow._offlineEngine</c> — because
+/// a second would be 121 MiB nothing could unload and the two would disagree about what is resident.
+/// <c>BergamotLifetimeTests.The_app_constructs_exactly_one_offline_provider</c> scans for it. The
+/// tier can be in BOTH chains, and both then wrap the SAME instance: the provider's own lock
+/// serialises them, which is the design and not an oversight (its own contract says a batch is one
+/// native call at a time).</para>
+///
+/// <para><b><see cref="IsInstalled"/> is a <c>Func</c> because the store's answer is NOT cached.</b>
+/// <c>OfflineModelStore.IsInstalled</c> stats every manifest file on every call, and the builders run
+/// in <c>MainWindow</c>'s constructor before first paint — asking it there is exactly the I10
+/// violation E8.S3's AC 7 exists to prevent. So the code-behind hands its own in-memory
+/// <c>_offlineInstalled</c> field: seeded from <c>OfflineFallbackEnabled</c> (ruling R-4 makes the
+/// setting a faithful proxy — Download and Remove are its only writers) and corrected after first
+/// paint by the pool-thread probe, which then rebuilds both chains through E6.S3's seam.</para>
+/// </summary>
+/// <param name="Engine">The one offline provider instance the app owns.</param>
+/// <param name="IsInstalled">"Are the model files really there?", answered without touching a
+/// disk.</param>
+internal sealed record OfflineTier(ITranslator Engine, Func<bool> IsInstalled);
+
+/// <summary>
 /// <c>architecture-cible.md</c> §8.1 — the two chains, built here and nowhere else.
 ///
 /// <para><b>Why the composition is in <c>Services/</c> and not in the code-behind</b> (ruling E3-c,
@@ -74,10 +98,28 @@ internal static class TranslationChains
     /// whatever path happened to touch this class first. The first thing that asks for it in
     /// production is the constructor's first <c>Build…</c> call, before first paint — it constructs
     /// a map and reads nothing.</para>
+    ///
+    /// <para><b>E8.S5 — and this accessor is now the SECOND-choice door.</b> The store's
+    /// <c>offlineEnabled</c> flag (§8.2 concern #2) is a <b>load-time</b> decision — the file is read
+    /// once, lazily, on the first miss — so it has to be supplied at construction, by the first
+    /// caller that holds an <see cref="AppSettings"/>. That caller is
+    /// <see cref="CacheFor"/>, called from the two builders, and in the app the very first
+    /// <c>Build…</c> of the constructor is what really builds this store. This property is what the
+    /// facades (<see cref="ClearCache"/>) and the suite reach for afterwards; it builds a store with
+    /// the flag <b>false</b> only if nothing has built one yet, which is the safe direction — a
+    /// <c>"p":"bergamot"</c> entry is dropped rather than served to a session nobody told about the
+    /// offline engine.</para>
     /// </summary>
-    internal static TranslationCacheStore Cache
+    internal static TranslationCacheStore Cache => CacheFor(offlineEnabled: false);
+
+    /// <summary>The one store, built on first use with §8.2 concern #2's drop rule already decided.
+    /// <paramref name="offlineEnabled"/> is <c>settings.OfflineFallbackEnabled</c> and reaches only
+    /// the FIRST construction — a flag arriving later is a flag that did nothing, because the load
+    /// is lazy and one-shot, and the code does not pretend otherwise (T4).</summary>
+    private static TranslationCacheStore CacheFor(bool offlineEnabled)
     {
-        get { lock (CacheGate) return _cache ??= new TranslationCacheStore(persistent: true); }
+        lock (CacheGate)
+            return _cache ??= new TranslationCacheStore(persistent: true, offlineEnabled: offlineEnabled);
     }
 
     /// <summary>
@@ -134,8 +176,8 @@ internal static class TranslationChains
     /// decorator's and storage is the store's (§3.1).</para>
     /// </summary>
     internal static ITranslator BuildRead(AppSettings settings,
-        RequestPriority priority = RequestPriority.Background)
-        => BuildRead(settings, priority, out _);
+        RequestPriority priority = RequestPriority.Background, OfflineTier? offline = null)
+        => BuildRead(settings, priority, out _, offline);
 
     /// <summary>
     /// The same chain, with the <see cref="ChainTranslator"/> itself handed back — what E5.S1's LIVE
@@ -155,7 +197,7 @@ internal static class TranslationChains
     /// read-once path deliberately does not get a second (E5.S4 reuses this one).</para>
     /// </summary>
     internal static ITranslator BuildRead(AppSettings settings, RequestPriority priority,
-        out ChainTranslator chain)
+        out ChainTranslator chain, OfflineTier? offline = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
@@ -198,8 +240,22 @@ internal static class TranslationChains
             //  and this line is the one that changes when the owner designates a capture.]
             // (ProviderIds.Edge, new EdgeTranslator(priority: priority)),   // [UNKNOWN until U2]
             (ProviderIds.GoogleGtx, new GoogleGtxTranslator(priority: priority)),
-            // [Bergamot — E8.S3: only if OfflineFallbackEnabled and the model is present.]
         });
+
+        // Bergamot — E8.S5, and it goes LAST. Not before GoogleGtx "because 6.5 ms a line is faster
+        // than any network call": that is exactly the argument that would put a COMET-0.8497 engine
+        // in front of a COMET-0.8785 one. It is the rung for when there is nothing else, and §7.6
+        // amendment A-1 says so.
+        //
+        // Two conditions, both load-bearing (AC 2), and both asked by ONE predicate that the write
+        // builder calls too — the shape IsSendableAzureCredential and AzureReadsTheScreen already
+        // have, so the two builders cannot drift. A tier built over a model the user deleted is a
+        // tier that fails on every line of every frame.
+        //
+        // The instance comes from the caller and is never constructed here: there is one offline
+        // provider in the process (E8.S4), and it is the code-behind's.
+        if (OfflineTierIsAvailable(settings, offline))
+            tiers.Add((ProviderIds.Bergamot, offline!.Engine));
 
         // DeepL is not written in this method at all. That is what "structural, not configured"
         // means (I8) — read the class comment before changing it.
@@ -211,8 +267,16 @@ internal static class TranslationChains
         // costs no quota, and this method still cannot construct a DeepLTranslator. The producing
         // tier is recorded in the entry's "p" for the log and the Bergamot drop rule, and it is
         // deliberately not part of the key.
-        chain = ChainTranslator.Of(tiers.ToArray());
-        return new CachingTranslator(chain, Cache);
+        // The delegate is E8.S5's T3, option (i): the store is handed a key and a value and does not
+        // know which tier answered; this decorator does not know either — the CHAIN does. One
+        // nullable Func, supplied by the builder that already holds the chain, rather than a fourth
+        // decorator on a stack that is already three deep. It is not a Bergamot special case: every
+        // tier's id now lands in the entry's "p", which is what §8.2 wanted from day one and what
+        // makes the drop rule below work at all.
+        var built = ChainTranslator.Of(tiers.ToArray());
+        chain = built;
+        return new CachingTranslator(built, CacheFor(settings.OfflineFallbackEnabled),
+                                     () => built.LastOutcome?.ProviderId);
     }
 
     /// <summary>
@@ -230,7 +294,7 @@ internal static class TranslationChains
     /// rebuilds is the CHAIN. <see cref="Cache"/> is a property of this class, not of the chain, so
     /// the session's accumulated translations survive the save (amplifier A5, closed here).</para>
     /// </summary>
-    internal static ITranslator BuildWrite(AppSettings settings)
+    internal static ITranslator BuildWrite(AppSettings settings, OfflineTier? offline = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
@@ -256,10 +320,40 @@ internal static class TranslationChains
         // [Edge — E3.S5 / ruling E3-d: absent from A.1, see BuildRead.]
         // (ProviderIds.Edge, new EdgeTranslator()),                        // [UNKNOWN until U2]
         tiers.Add((ProviderIds.GoogleGtx, new GoogleGtxTranslator()));
-        // [Bergamot — E8.S3: only if OfflineFallbackEnabled and the model is present.]
+        // Bergamot — E8.S5, LAST, behind the same one predicate BuildRead asks. It is the SAME
+        // instance the read chain wraps (I9's reasoning one level up: the thing that may not be
+        // duplicated here is not the gate but the 121 MiB the engine allocates).
+        if (OfflineTierIsAvailable(settings, offline))
+            tiers.Add((ProviderIds.Bergamot, offline!.Engine));
 
-        return new CachingTranslator(ChainTranslator.Of(tiers.ToArray()), Cache);
+        var chain = ChainTranslator.Of(tiers.ToArray());
+        return new CachingTranslator(chain, CacheFor(settings.OfflineFallbackEnabled),
+                                     () => chain.LastOutcome?.ProviderId);
     }
+
+    /// <summary>
+    /// <b>Is there an offline rung to append?</b> AC 2's two conditions, written <b>once</b> so the
+    /// two builders (and the About tab's two id lists) cannot come to disagree — the same rule, and
+    /// the same reason, as <see cref="IsSendableAzureCredential"/> and
+    /// <see cref="AzureReadsTheScreen"/>.
+    ///
+    /// <list type="number">
+    /// <item><b>The provider exists.</b> A caller with no offline engine — every headless case in
+    ///       the suite, and any future path that has none — gets no tier at all, which is what makes
+    ///       "the chain never constructs a <c>BergamotTranslator</c>" structural.</item>
+    /// <item><b><c>OfflineFallbackEnabled</c>.</b> Default false, written only by Download and
+    ///       Remove (ruling R-4). False means the tier is not even CONSTRUCTED — asserted on the
+    ///       built chain, never on a runtime guard, for the reason E6.S4 gave for Azure: a guard is
+    ///       a line someone can move, a builder that never builds the tier cannot be talked into
+    ///       it.</item>
+    /// <item><b>The model is really on disk.</b> E8.S3's review recorded exactly this hand-off —
+    ///       "setting-true-but-files-gone → E8.S5 gates the tier on the store, not the setting".
+    ///       Asked through <see cref="OfflineTier.IsInstalled"/> so no disk is touched here
+    ///       (I10).</item>
+    /// </list>
+    /// </summary>
+    private static bool OfflineTierIsAvailable(AppSettings settings, OfflineTier? offline)
+        => offline is not null && settings.OfflineFallbackEnabled && offline.IsInstalled();
 
     // =============================================================================================
     //  What a key save does — E6.S3
@@ -408,17 +502,24 @@ internal static class TranslationChains
     /// <c>ChainCompositionTests.EveryPermutation()</c> knows and at both read priorities. A tier
     /// added to a builder without a line here fails that case.</para>
     /// </summary>
-    internal static IReadOnlyList<string> WriteTierIds(AppSettings settings)
+    internal static IReadOnlyList<string> WriteTierIds(AppSettings settings,
+                                                       OfflineTier? offline = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
-        var ids = new List<string>(4);
+        var ids = new List<string>(5);
         if ((settings.DeepLApiKey ?? "").Trim().Length > 0) ids.Add(ProviderIds.DeepL);
         if (AzureWritesWhatYouType(settings)) ids.Add(ProviderIds.Azure);
         ids.Add(ProviderIds.GoogleDict);
         // [Edge — ruling E3-d: no EdgeTranslator exists, so the tab may not name one.]
         ids.Add(ProviderIds.GoogleGtx);
-        // [Bergamot — E8.S3; the offline block on this same tab says it is not installed.]
+        // Bergamot — E8.S5. The rung is named here only when the builder really appends it, which
+        // is the whole point of EngineStatusTests' "these ids equal the ids the builders construct":
+        // the tab is a SECOND expression of §8.1's order, so it learns about a new tier at the same
+        // moment the chain does or the two drift. When it is absent the tab is not silent about it —
+        // the offline block a few rows down says "not installed" and the chip's tooltip carries the
+        // row (AC 6).
+        if (OfflineTierIsAvailable(settings, offline)) ids.Add(ProviderIds.Bergamot);
         return ids;
     }
 
@@ -426,14 +527,16 @@ internal static class TranslationChains
     /// (I8): <see cref="BuildRead"/> cannot construct a DeepL tier at all, so the two lines differ
     /// structurally and a player who has just been told their key is for what they WRITE can see
     /// it.</summary>
-    internal static IReadOnlyList<string> ReadTierIds(AppSettings settings)
+    internal static IReadOnlyList<string> ReadTierIds(AppSettings settings,
+                                                      OfflineTier? offline = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
-        var ids = new List<string>(3);
+        var ids = new List<string>(4);
         if (AzureReadsTheScreen(settings)) ids.Add(ProviderIds.Azure);
         ids.Add(ProviderIds.GoogleDict);
         ids.Add(ProviderIds.GoogleGtx);
+        if (OfflineTierIsAvailable(settings, offline)) ids.Add(ProviderIds.Bergamot);
         return ids;
     }
 

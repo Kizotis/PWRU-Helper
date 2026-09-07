@@ -352,6 +352,50 @@ public class OfflineInstallUiTests : GatesTestBase
     private static string XamlCode(string text) =>
         Regex.Replace(text, "<!--.*?-->", "", RegexOptions.Singleline);
 
+    // =============================================================================================
+    //  E8.S5 — ruling E8-b's residual case: a Remove whose delete fails
+    // =============================================================================================
+
+    /// <summary>
+    /// <b>The sentence E8-b has owed since E8.S3, landed with its deck line in one commit</b> — the
+    /// rule that ruling made for the directory, applied to the copy it left behind. A <c>Remove</c>
+    /// whose delete fails used to report "Offline engine removed — 0 MB freed from your disk" over
+    /// 50 MB that had not moved, which is the one thing principle 1 forbids outright.
+    ///
+    /// <para>Both causes the app can remove are removed first (the engine is freed <i>and</i> closed
+    /// before the delete), so what is left is a handle this process does not hold. The sentence says
+    /// what happened, how much is left, and the one thing that ends it — principle 2's "never a
+    /// statement with no exit".</para>
+    /// </summary>
+    [Fact]
+    public void E8_b_A_remove_that_could_not_finish_says_so_in_the_code_and_in_the_deck()
+    {
+        var sentence = UserMessages.OfflineRemoveIncomplete(52_428_800);
+
+        Assert.Equal("Could not remove every file — 50 MB left; close the app and try again.", sentence);
+        Assert.True(sentence.Length <= 120, $"the row is one status line, not two ({sentence.Length})");
+        Assert.DoesNotContain("{", sentence, StringComparison.Ordinal);
+
+        // Never "0 MB left": a leftover smaller than a megabyte is still a leftover, and a sentence
+        // that says nothing is left while something is is the bug this replaces.
+        Assert.Equal("Could not remove every file — 1 MB left; close the app and try again.",
+                     UserMessages.OfflineRemoveIncomplete(1));
+
+        // …and it is the row's real chooser: what is still on disk decides, not what the delete
+        // claimed to free.
+        var handler = Body(Code(File.ReadAllText(RepoFile("MainWindow.Offline.cs"))),
+                           "private void RemoveOfflineEngine()");
+        Assert.Contains("_offlineStore.BytesOnDisk", handler, StringComparison.Ordinal);
+        Assert.Contains("UserMessages.OfflineRemoveIncomplete(left)", handler, StringComparison.Ordinal);
+
+        // The deck carries the same sentence, in the same commit as the code — which is the whole of
+        // ruling E8-b's process half.
+        var deck = File.ReadAllText(Path.Combine(RepoRoot(), "docs", "investigations",
+                                                 "02-traduction", "ux-mode-degrade.md"));
+        Assert.Contains("Could not remove every file — {n} MB left; close the app and try again.",
+                        deck, StringComparison.Ordinal);
+    }
+
     private static string Body(string source, string signature)
     {
         var at = source.IndexOf(signature, StringComparison.Ordinal);
