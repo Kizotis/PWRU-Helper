@@ -1,7 +1,9 @@
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Reflection;
 using System.Text.Json;
+using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using PWRUHelper.Services;
@@ -177,14 +179,19 @@ public class AzureSettingsTests
     /// AC 5. A key without a region is a guaranteed 401, and E6.S2's guard throws
     /// <c>AuthFailed</c> <b>without</b> <c>NotSent</c> — so a half-entered credential would be
     /// counted by the chain as a tier that tried and failed, and its sentence outranks every
-    /// skipped tier. The pair is therefore refused before anything is built or sent. Both empty is
-    /// not an error: it is clearing the key, and it must stay allowed.
+    /// skipped tier. That pair is therefore refused before anything is built or sent.
+    ///
+    /// <para><b>An empty KEY is the other direction and is not an error at all</b> since ruling
+    /// <b>E6-e</b>: it is the gesture that removes Azure, and it clears the region with it. E6.S3
+    /// refused an empty key over a leftover region and told the user to empty the region box too;
+    /// its own review recorded that as a dead end and referred the AC change upward. One box
+    /// cleared, one engine gone.</para>
     /// </summary>
     [Theory]
     [InlineData("", "", false)]                              // clearing — allowed
     [InlineData(RealLookingKey, "westeurope", false)]        // complete — allowed
     [InlineData(RealLookingKey, "", true)]                   // key, no region
-    [InlineData("", "westeurope", true)]                     // region, no key
+    [InlineData("", "westeurope", false)]                    // E6-e: clearing, region and all
     [InlineData("abc\u0007def", "westeurope", true)]         // unsendable key
     [InlineData(RealLookingKey, "west\u0001europe", true)]   // unsendable region
     public void AC5_Only_a_complete_or_an_empty_pair_is_accepted(string key, string region, bool refused)
@@ -215,11 +222,18 @@ public class AzureSettingsTests
     [Fact]
     public void TP_SET_06_Every_new_change_handler_bails_while_settings_are_being_restored()
     {
-        var body = Body(Code(File.ReadAllText(RepoFile("MainWindow.Translate.cs"))),
-                        "private void AzureRegionCombo_Changed(");
+        var source = Code(File.ReadAllText(RepoFile("MainWindow.Translate.cs")));
 
-        var first = body.Split('\n').Select(l => l.Trim()).First(l => l.Length > 0 && l != "{");
-        Assert.Equal("if (_restoringSettings) return;", first);
+        // Both of E6's persisted controls, and E6.S4's is the one the rule was written for: a
+        // CheckBox raises Checked during InitializeComponent() exactly as the combo raises
+        // SelectionChanged, and `IsChecked="False"` in the XAML would be a false the handler
+        // persisted over a saved true.
+        foreach (var handler in new[] { "AzureRegionCombo_Changed", "AzureForReading_Changed" })
+        {
+            var body = Body(source, $"private void {handler}(");
+            var first = body.Split('\n').Select(l => l.Trim()).First(l => l.Length > 0 && l != "{");
+            Assert.Equal("if (_restoringSettings) return;", first);
+        }
     }
 
     /// <summary>
@@ -511,6 +525,230 @@ public class AzureSettingsTests
     }
 
     // =============================================================================================
+    //  E6.S4 — the "use my key for screen reading" opt-in
+    // =============================================================================================
+
+    /// <summary>
+    /// <b>AC 4, and the whole of it is what does NOT happen.</b> An existing user upgrades with an
+    /// Azure key already saved: their <c>settings.json</c> has no <c>UseKeyForReading</c> member at
+    /// all, it deserialises to the property's default <c>false</c>, and the read chain is built
+    /// without an Azure tier. No <c>Migrate</c> step, no <c>SettingsVersion</c> bump (I13) — the
+    /// invariant delivers the AC by inaction. The way to break it is to seed the box from "a key
+    /// exists"; ruling OQ-12 is the one line to remember, and it is that an opt-in which arrives
+    /// pre-ticked is not an opt-in.
+    /// </summary>
+    [Fact]
+    public void AC4_An_old_file_with_a_key_and_no_opt_in_loads_off_and_reads_on_the_free_engines()
+    {
+        using var temp = new TempSettings($$"""
+        { "AzureApiKey": "{{RealLookingKey}}", "AzureRegion": "westeurope", "SettingsVersion": 3 }
+        """);
+
+        var loaded = SettingsService.Load();
+        Assert.Equal(RealLookingKey, loaded.AzureApiKey);
+        Assert.False(loaded.UseKeyForReading);
+        Assert.Equal(3, loaded.SettingsVersion);          // nothing migrated, nothing stamped
+
+        Assert.False(TranslationChains.AzureReadsTheScreen(loaded));
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+            Assert.False(window.AzureForReadingCheck.IsChecked);
+            Assert.True(window.AzureForReadingCheck.IsEnabled);        // there IS a key to opt into
+            Assert.Equal(UserMessages.AzureKeySetStatus("westeurope"), window.AzureStatus.Text);
+        });
+
+        // …and the load did not write anything back, so the next launch says the same thing.
+        Assert.Equal(3, SettingsService.Load().SettingsVersion);
+    }
+
+    /// <summary>
+    /// <b>AC 2.</b> Ticking the box persists, rebuilds the READ chains and refreshes the line that
+    /// reports them — exactly as the key Save rebuilds the write chain. The three read references
+    /// are compared by identity because that is the only thing a behaviour test could not see (all
+    /// chains resolve the same process-global gates, I9), and <c>_writeTranslator</c> is asserted
+    /// <b>unchanged</b>: this setting does not touch what the user writes, and a handler that
+    /// rebuilt everything would be hiding that it does not know which chain it is for.
+    ///
+    /// <para>The rebuild takes effect on the next LIVE tick — both read fields are read per tick
+    /// and never captured at <c>StartLive</c> — which is the semantics E6.S3 recorded and this
+    /// handler inherits.</para>
+    /// </summary>
+    [Fact]
+    public void AC2_Ticking_the_box_persists_rebuilds_the_read_chains_and_updates_the_status()
+    {
+        using var temp = new TempSettings($$"""
+        { "AzureApiKey": "{{RealLookingKey}}", "AzureRegion": "westeurope", "SettingsVersion": 3 }
+        """);
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+            var before = Chains(window);
+            Assert.Equal(UserMessages.AzureKeySetStatus("westeurope"), window.AzureStatus.Text);
+
+            // As the user does it — a real Checked event, not a reflected handler call.
+            window.AzureForReadingCheck.IsChecked = true;
+
+            var after = Chains(window);
+            Assert.Same(before[0], after[0]);                    // _writeTranslator — untouched
+            for (var i = 1; i < before.Length; i++)
+                Assert.NotSame(before[i], after[i]);             // the three read references
+
+            Assert.Equal(UserMessages.AzureKeySetForReadingStatus("westeurope"), window.AzureStatus.Text);
+
+            // …and back off again: an untick must persist too (Checked and Unchecked are two
+            // events, and wiring only one is how a tick sticks and an untick does not).
+            window.AzureForReadingCheck.IsChecked = false;
+            Assert.Equal(UserMessages.AzureKeySetStatus("westeurope"), window.AzureStatus.Text);
+            for (var i = 1; i < before.Length; i++)
+                Assert.NotSame(after[i], Chains(window)[i]);
+        });
+
+        using var saved = JsonDocument.Parse(File.ReadAllText(temp.Path));
+        Assert.False(saved.RootElement.GetProperty("UseKeyForReading").GetBoolean());
+        Assert.Equal(3, saved.RootElement.GetProperty("SettingsVersion").GetInt32());
+    }
+
+    /// <summary>The box is dead while there is nothing to opt into — a tickable control over an
+    /// empty key box promises a choice the builder would ignore, and AC 1 means it really would.
+    /// </summary>
+    [Fact]
+    public void The_opt_in_is_disabled_until_a_usable_credential_exists()
+    {
+        using var temp = new TempSettings("""{ "SettingsVersion": 3 }""");
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+            Assert.False(window.AzureForReadingCheck.IsEnabled);
+            Assert.False(window.AzureForReadingCheck.IsChecked);
+            Assert.Equal(UserMessages.AzureNoKeyStatus(), window.AzureStatus.Text);
+
+            // A complete pair saved from the About tab enables it on the spot — no restart.
+            window.AzureKeyBox.Password = RealLookingKey;
+            window.AzureRegionCombo.Text = "westeurope";
+            Save(window);
+
+            Assert.True(window.AzureForReadingCheck.IsEnabled);
+            Assert.False(window.AzureForReadingCheck.IsChecked);   // enabled is not ticked (OQ-12)
+        });
+    }
+
+    /// <summary>The hint that carries the cost lives in <see cref="UserMessages"/> (ruling GAP-4)
+    /// and is put on screen explicitly, like every other side effect a suppressed handler cannot
+    /// produce (I12). Asserted through the window so a `TextBlock` that exists but is never filled
+    /// fails here rather than in a screenshot.</summary>
+    [Fact]
+    public void AC3_The_quota_hint_is_rendered_from_the_one_place_it_is_written()
+    {
+        using var temp = new TempSettings("""{ "SettingsVersion": 3 }""");
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+            Assert.Equal(UserMessages.AzureForReadingHint(), window.AzureForReadingHint.Text);
+        });
+
+        // The sentence itself, re-derived in E6.S4 (T6) and unchanged by it: 2 M chars/month over
+        // ≈48 k per hour of busy chat is ≈41 h at ×1.0, and the billing multiplier is ≈×1.2–2.0
+        // now that E4.S4 has left one shared cache ⇒ ≈21–35 h, inside the range promised here.
+        var hint = UserMessages.AzureForReadingHint();
+        Assert.Contains("2 million characters a month", hint, StringComparison.Ordinal);
+        Assert.Contains("20 to 40 hours", hint, StringComparison.Ordinal);
+        Assert.Contains("off by default", hint, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <b>Ruling E6-e.</b> Emptying the key box and pressing Save removes Azure whole: the key and
+    /// the region are both cleared on disk, the region box is emptied on screen, the status line
+    /// says so, and the chains no longer carry the tier. Before this ruling the same gesture was
+    /// REFUSED — "Azure also needs your key" over a leftover region — which asked the user to
+    /// answer a question they had not asked.
+    /// </summary>
+    [Fact]
+    public void E6e_Saving_an_empty_key_clears_the_region_too_and_removes_the_engine()
+    {
+        using var temp = new TempSettings($$"""
+        {
+          "AzureApiKey": "{{RealLookingKey}}", "AzureRegion": "westeurope",
+          "UseKeyForReading": true, "SettingsVersion": 3
+        }
+        """);
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+            Assert.Equal(UserMessages.AzureKeySetForReadingStatus("westeurope"), window.AzureStatus.Text);
+
+            // Only the key box is emptied. The region is left exactly as it was.
+            window.AzureKeyBox.Password = "";
+            Save(window);
+
+            Assert.Equal(UserMessages.AzureNoKeyStatus(), window.AzureStatus.Text);
+            Assert.Equal("", window.AzureRegionCombo.Text);
+            Assert.Null(window.AzureRegionCombo.SelectedItem);
+            Assert.False(window.AzureForReadingCheck.IsEnabled);
+        });
+
+        using var saved = JsonDocument.Parse(File.ReadAllText(temp.Path));
+        Assert.Equal("", saved.RootElement.GetProperty("AzureApiKey").GetString());
+        Assert.Equal("", saved.RootElement.GetProperty("AzureRegion").GetString());
+
+        // The opt-in itself is NOT rewritten — clearing a key is not un-choosing what to do with
+        // the next one — and with no credential the builder ignores it anyway. That is the tier
+        // being gone for the reason AC 1 gives, and not for a second one bolted on here.
+        Assert.True(saved.RootElement.GetProperty("UseKeyForReading").GetBoolean());
+        Assert.False(TranslationChains.AzureReadsTheScreen(SettingsService.Load()));
+    }
+
+    /// <summary>
+    /// <b>AC 5 / R9, end to end on the shape the read chain has when the opt-in is on.</b> Azure
+    /// answers its 403 out-of-quota envelope; the call is served by the next tier with no error
+    /// text anywhere (UX hint 5 — a successful fallback is silent), the gate is blocked for the
+    /// hour <c>TranslationPolicy.QuotaOpenMinutes</c> states (rulings E2-f / E2-h: a 30-day
+    /// <c>Retry-After</c> is deliberately discarded in favour of 60-minute windows with probes),
+    /// and the SECOND call sends <b>zero</b> Azure requests — ruling E3-a, the chain skips a tier
+    /// while <c>BlockedUntil &gt; Now()</c>.
+    ///
+    /// <para>No production code was written for this AC. Local <see cref="ProviderGate"/>s with an
+    /// injected clock (IS-6) rather than the registry, so this file needs no <c>Gates</c>
+    /// collection and nothing sleeps (CI-3) — <c>ReadOnceStatusTests</c> is the precedent.</para>
+    /// </summary>
+    [Fact]
+    public async Task AC5_A_quota_exhausted_azure_falls_through_for_an_hour_and_is_not_retried()
+    {
+        var clock = new FakeClock();
+        var azureGate = new ProviderGate(clock.Read);
+        var handler = new FakeHandler()
+            .Respond(HttpStatusCode.Forbidden, Fixture("azure-error-quota.json"));
+
+        var azure = new AzureTranslator(RealLookingKey, "westeurope", handler, azureGate,
+                                        RequestPriority.Background);
+        var free = new CountingTranslator();
+        var chain = new ChainTranslator(new[]
+        {
+            new ChainTier(ProviderIds.Azure, azureGate, azure),
+            new ChainTier(ProviderIds.GoogleDict, new ProviderGate(clock.Read), free),
+        });
+
+        Assert.Equal(new[] { "T:привет" }, await chain.TranslateLinesAsync(new[] { "привет" }, "ru", "en"));
+        Assert.Equal(1, handler.Requests);          // one request, and it is not retried (§5.6)
+        Assert.Equal(1, free.Calls);
+
+        var blocked = azureGate.Snapshot().BlockedUntil;
+        Assert.NotNull(blocked);
+        Assert.Equal(clock.Now.AddMinutes(TranslationPolicy.QuotaOpenMinutes), blocked!.Value);
+
+        // Half an hour later the LIVE loop ticks again: Azure is skipped without a request.
+        clock.Advance(TimeSpan.FromMinutes(30));
+        Assert.Equal(new[] { "T:пока" }, await chain.TranslateLinesAsync(new[] { "пока" }, "ru", "en"));
+        Assert.Equal(1, handler.Requests);          // ZERO new Azure requests — the AC's whole point
+        Assert.Equal(2, free.Calls);
+    }
+
+    // =============================================================================================
     //  AC 7 — I11
     // =============================================================================================
 
@@ -532,6 +770,36 @@ public class AzureSettingsTests
     }
 
     // ---- helpers ---------------------------------------------------------------------------------
+
+    /// <summary>IS-6. A clock the case moves by hand, so a 60-minute quota window is asserted
+    /// without anything sleeping (CI-3).</summary>
+    private sealed class FakeClock
+    {
+        public DateTimeOffset Now { get; private set; } = new(2026, 9, 7, 12, 0, 0, TimeSpan.Zero);
+        public DateTimeOffset Read() => Now;
+        public void Advance(TimeSpan d) => Now += d;
+    }
+
+    /// <summary>The tier that answers when Azure is skipped, and counts how often it was asked.
+    /// It marks its output so a fall-through cannot be mistaken for a cached or echoed line.</summary>
+    private sealed class CountingTranslator : ITranslator
+    {
+        public int Calls;
+
+        public Task<string> TranslateAsync(string text, string s, string t, CancellationToken ct = default)
+        { Calls++; return Task.FromResult("T:" + text); }
+
+        public Task<List<string>> TranslateLinesAsync(IReadOnlyList<string> lines, string s, string t,
+                                                      CancellationToken ct = default)
+        { Calls++; return Task.FromResult(lines.Select(l => "T:" + l).ToList()); }
+    }
+
+    private static string Fixture(string name)
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", name);
+        Assert.True(File.Exists(path), $"fixture {name} not found at {path}");
+        return File.ReadAllText(path);
+    }
 
     /// <summary>A named piece of a control's applied template — the template has to be applied
     /// first, because nothing here is ever shown on screen.</summary>

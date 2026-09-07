@@ -306,6 +306,40 @@ public partial class MainWindow
         UpdateEngineStatusUi();
     }
 
+    /// <summary>
+    /// <b>E6.S4 — the opt-in that lets the LIVE loop and read-once spend the user's Azure key.</b>
+    /// The first line is not optional and is the same rule as the region combo's above: XAML
+    /// LOADING raises <c>Checked</c> during <c>InitializeComponent()</c>, long before
+    /// <c>ApplySettings</c> restores anything, so a handler that writes settings there persists an
+    /// unrestored control — the v0.12.3 bug (I12).
+    ///
+    /// <para>Only the READ chains are rebuilt: the write chain does not read this setting, and
+    /// rebuilding it would throw away nothing except the reader's confidence that the two are
+    /// separate decisions. The rebuild takes effect on the next LIVE tick — both read fields are
+    /// read per tick and never captured at <c>StartLive</c> — which is the semantics E6.S3
+    /// recorded and the one this handler inherits. The cache survives it (§8.2): the store is
+    /// <c>TranslationChains</c>' and not the chain's, so a tick of the box costs the session's
+    /// accumulated translations nothing.</para>
+    ///
+    /// <para>The gate is deliberately NOT cleared here. Lifting an account-scoped block is what
+    /// pressing <b>Save</b> on a key means (ruling E2-i); choosing where an existing key may be
+    /// spent says nothing about whether that key was refused.</para>
+    /// </summary>
+    private void AzureForReading_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_restoringSettings) return;
+
+        // IsChecked is bool? — `== true`, never `.Value`. No "has it actually changed" guard, unlike
+        // the region combo above: a CheckBox raises Checked/Unchecked only when its state really
+        // changes, so there is no burst to absorb and a guard would only be a second place for the
+        // field and the control to disagree.
+        _settings.UseKeyForReading = AzureForReadingCheck.IsChecked == true;
+        SettingsService.Save(_settings);
+
+        RebuildReadChains();
+        UpdateEngineStatusUi();
+    }
+
     /// <summary>The region as the app will store it. <c>SelectedTag</c> returns null for typed
     /// text — there is no <c>ComboBoxItem</c> behind it — so every read of an editable combo is
     /// the tag OR the text, and the normalisation is the one <c>SettingsService.Sanitize</c>
@@ -329,6 +363,28 @@ public partial class MainWindow
         {
             AzureStatus.Text = problem;
             return;
+        }
+
+        // Ruling E6-e: an empty KEY is not half a pair, it is the gesture that removes Azure — so
+        // it takes the region with it, and the boxes are emptied to match. E6.S3 refused this and
+        // told the user to clear the region box too; its own review called that a dead end and
+        // referred the AC change upward. One box cleared, one engine gone, and settings.json, the
+        // two chains and the status line all say the same thing afterwards.
+        if (key.Length == 0)
+        {
+            region = "";
+            // _restoringSettings for its stated meaning — "a control change that does NOT mean the
+            // user chose this" — and not as a borrowed flag: emptying the combo here raises
+            // SelectionChanged, and letting AzureRegionCombo_Changed run would persist the OLD key
+            // with no region and rebuild both chains, half a gesture before this handler does it
+            // properly. try/finally because the flag may never be left up (I12).
+            _restoringSettings = true;
+            try
+            {
+                AzureRegionCombo.SelectedItem = null;
+                AzureRegionCombo.Text = "";
+            }
+            finally { _restoringSettings = false; }
         }
 
         _settings.AzureApiKey = key;
@@ -372,12 +428,28 @@ public partial class MainWindow
 
         var region = (_settings.AzureRegion ?? "").Trim();
         var hasKey = (_settings.AzureApiKey ?? "").Trim().Length > 0;
+        var configured = hasKey && region.Length > 0;
         // Both halves, matching what TranslationChains.BuildWrite actually does with them: a status
         // line claiming a configured engine over a credential that adds no tier is the lie this
         // story is here to prevent.
-        AzureStatus.Text = hasKey && region.Length > 0
-            ? UserMessages.AzureKeySetStatus(region)
-            : UserMessages.AzureNoKeyStatus();
+        //
+        // …and since E6.S4 the line also has to say WHICH PATHS spend the key, because that is now
+        // the user's choice and not a constant. `AzureReadsTheScreen` is the predicate BuildRead
+        // itself is written from (Services/TranslationChains.cs), so the sentence and the read
+        // chain's first tier cannot disagree — the whole point of asking the rule rather than
+        // re-deriving it from three fields here.
+        AzureStatus.Text = !configured
+            ? UserMessages.AzureNoKeyStatus()
+            : TranslationChains.AzureReadsTheScreen(_settings)
+                ? UserMessages.AzureKeySetForReadingStatus(region)
+                : UserMessages.AzureKeySetStatus(region);
+
+        // The opt-in's own controls. Disabled with nothing to opt into: a tickable box over an
+        // empty key box promises a choice the chain would ignore. IsEnabled raises no Checked /
+        // Unchecked, so this is safe to run inside the restore (I12) — and it must run there,
+        // because ApplySettings suppresses the handler that would otherwise have done it.
+        AzureForReadingCheck.IsEnabled = configured;
+        AzureForReadingHint.Text = UserMessages.AzureForReadingHint();
     }
 
     private void UpdateDeepLStatus()

@@ -24,8 +24,9 @@ public partial class MainWindow : Window
 
     // True while the UI is being built or restored, i.e. whenever a control change does NOT mean
     // "the user chose this". Change handlers (SaveOcrFilterSettings, CaptureBackend_Changed,
-    // SquadUppercase_Changed, AzureRegionCombo_Changed) fire as a side effect of setting a slider /
-    // combo / tick — and an EDITABLE combo raises SelectionChanged the same way — and would
+    // SquadUppercase_Changed, AzureRegionCombo_Changed, AzureForReading_Changed) fire as a side
+    // effect of setting a slider / combo / tick — and an EDITABLE combo raises SelectionChanged
+    // the same way — and would
     // then write that transient UI state back to disk — clobbering the very settings we're loading.
     //
     // It starts TRUE and is only cleared at the end of ApplySettings, because XAML LOADING ITSELF
@@ -262,6 +263,12 @@ public partial class MainWindow : Window
             // back blank on every launch while settings.json still holds "norwayeast".
             SelectTag(AzureRegionCombo, s.AzureRegion ?? "");
             if (AzureRegionCombo.SelectedItem == null) AzureRegionCombo.Text = s.AzureRegion ?? "";
+            // E6.S4 / AC 4, and the work is in what is NOT here: UseKeyForReading is a new field
+            // with default false, so an old settings.json from a user who already has an Azure key
+            // deserialises it to false and the box comes back unticked — no Migrate step, no
+            // SettingsVersion bump (I13). The way to break AC 4 is to "helpfully" seed it from
+            // AzureApiKey.Length > 0; an opt-in that arrives pre-ticked is not an opt-in (OQ-12).
+            AzureForReadingCheck.IsChecked = s.UseKeyForReading;
             // The change handlers are suppressed for this whole method, so the UI side-effects they
             // would have produced are applied EXPLICITLY — the same rule as UpdateOcrFilterUi
             // below, applied to the key boxes (I12). UpdateDeepLStatus is now one line inside it.

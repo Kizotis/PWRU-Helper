@@ -159,10 +159,36 @@ internal static class TranslationChains
     {
         ArgumentNullException.ThrowIfNull(settings);
 
-        // [Azure — E6.S4: only if AzureApiKey is set AND UseKeyForReading is on. The setting names
-        //  are architecture §12's (ruling R-7) so E6 does not have to rename them; UseKeyForReading
-        //  defaults to FALSE — a metered key must be opted into for an unmetered loop.]
-        var tiers = new List<(string Id, ITranslator Translator)>
+        var tiers = new List<(string Id, ITranslator Translator)>();
+
+        // Azure — E6.S4, and the ONLY keyed tier this method may ever construct. Three conditions,
+        // all three load-bearing, and the tier is FIRST: a key the user has deliberately opted into
+        // is the engine they are paying attention to (§8.1's read path).
+        //
+        //  · UseKeyForReading — the opt-in itself, default FALSE and never seeded from "a key
+        //    exists". AC 1 is asserted on the BUILT CHAIN and not by a runtime guard, deliberately:
+        //    a guard is a line someone can move, a builder that never constructs the provider
+        //    cannot be talked into it by a setting or a refactor. Same shape as I8 gives DeepL.
+        //  · The REGION, with the key — a key without one is a guaranteed 401 (§12), and the
+        //    provider raises that as a failed TRANSLATION (AuthFailed without NotSent, ruling
+        //    E3-b), so a guaranteed-401 tier placed first in the LIVE chain would open its own gate
+        //    on the first tick of every session and outrank every skipped tier after it. Same
+        //    predicate as the write chain's, so the two cannot drift.
+        //  · priority: — the read chain is built TWICE, Background for the LIVE loop and
+        //    Interactive for read-once (ruling OQ-a). Dropping it would give a screen loop
+        //    Interactive, which lets it take the last token of the ceiling's bucket and stand in
+        //    front of the half-open probe — §5.4's reserve exists precisely to stop that, and
+        //    nothing else in the app would notice.
+        //
+        // Why off by default is arithmetic, not caution (R-15): F0 is 2 M characters a month and a
+        // heavy LIVE user reads ≈48 k an hour of busy chat, unattended, for as long as the app is
+        // open. An opt-in that arrives pre-ticked is not an opt-in (ruling OQ-12).
+        if (AzureReadsTheScreen(settings))
+            tiers.Add((ProviderIds.Azure, new AzureTranslator(
+                (settings.AzureApiKey ?? "").Trim(), (settings.AzureRegion ?? "").Trim(),
+                priority: priority)));
+
+        tiers.AddRange(new (string Id, ITranslator Translator)[]
         {
             // The default first free tier since the owner's decision 2 (the endpoint switch):
             // translate_a/t answers with the shape this app wants and is the one being hardened.
@@ -173,7 +199,7 @@ internal static class TranslationChains
             // (ProviderIds.Edge, new EdgeTranslator(priority: priority)),   // [UNKNOWN until U2]
             (ProviderIds.GoogleGtx, new GoogleGtxTranslator(priority: priority)),
             // [Bergamot — E8.S3: only if OfflineFallbackEnabled and the model is present.]
-        };
+        });
 
         // DeepL is not written in this method at all. That is what "structural, not configured"
         // means (I8) — read the class comment before changing it.
@@ -286,15 +312,40 @@ internal static class TranslationChains
         && !AzureTranslator.HasControlChar(key) && !AzureTranslator.HasControlChar(region);
 
     /// <summary>
+    /// Does <see cref="BuildRead"/> put an Azure tier on the screen reader for these settings?
+    /// E6.S4's three conditions, written <b>once</b> — the builder above asks this and so does the
+    /// About tab's status line, for the same reason <see cref="AzureCredentialProblem"/> shares
+    /// <see cref="IsSendableAzureCredential"/> with the write chain: a line that claims the screen
+    /// reader is using the user's key while the chain never built the tier is the lie this whole
+    /// increment exists to prevent (§1's fourth principle — honest status).
+    ///
+    /// <para>It is a QUESTION about settings, not about a built chain, and that is the honest shape:
+    /// the chain's tier list is private and stays private (<c>ChainCompositionTests</c> reaches it
+    /// by reflection precisely so nothing in the app has to). The guarantee that the two agree is
+    /// that this is the only expression of the rule, and AC 1 is still asserted on the built
+    /// chain.</para>
+    /// </summary>
+    internal static bool AzureReadsTheScreen(AppSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        return settings.UseKeyForReading
+            && IsSendableAzureCredential((settings.AzureApiKey ?? "").Trim(),
+                                         (settings.AzureRegion ?? "").Trim());
+    }
+
+    /// <summary>
     /// What is wrong with an Azure credential the user is trying to save, as the sentence to show —
     /// or <c>null</c> when there is nothing wrong with it (E6.S3 AC 5). The copy is
     /// <see cref="UserMessages"/>' (ruling GAP-4); the RULE is this class's, because it is the same
     /// rule <see cref="IsSendableAzureCredential"/> applies to the chain.
     ///
-    /// <para><b>Both halves empty is not a problem</b> — it is clearing the key, and it has to stay
-    /// allowed: a user who pastes a key by mistake needs a way back out. Exactly one half empty is
-    /// the case worth a sentence, because the provider would take it, spend a request and earn an
-    /// <c>AuthFailed</c> gate whose cause nothing on screen explains.</para>
+    /// <para><b>An empty KEY is not a problem — it is the gesture that removes Azure</b> (ruling
+    /// <b>E6-e</b>), and it takes the region with it. E6.S3 refused an empty key over a leftover
+    /// region and told the user to clear the region box as well; its own review recorded that as a
+    /// dead end — an answer to a question they had not asked — and referred the AC change upward.
+    /// One box cleared, one engine gone. The remaining refusal is the half-pair with no other
+    /// reading: a key with NO region, which the provider would take, spend a request on and earn an
+    /// <c>AuthFailed</c> gate for, with nothing on screen explaining why.</para>
     ///
     /// <para>Both arguments are expected already trimmed — the caller has to trim to decide what to
     /// persist anyway, and a validator that quietly trims a different string from the one that gets
@@ -304,9 +355,8 @@ internal static class TranslationChains
     {
         if (AzureTranslator.HasControlChar(key) || AzureTranslator.HasControlChar(region))
             return UserMessages.AzureCredentialUnsendable();
-        if (key.Length == 0 && region.Length == 0) return null;   // clearing, not an error
+        if (key.Length == 0) return null;                        // clearing the pair (E6-e)
         if (region.Length == 0) return UserMessages.AzureNeedsARegion();
-        if (key.Length == 0) return UserMessages.AzureNeedsAKey();
         return null;
     }
 }

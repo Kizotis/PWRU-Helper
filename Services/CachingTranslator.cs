@@ -48,7 +48,12 @@ public class CachingTranslator : ITranslator
         var key = Key(source, target, text);
         if (TryGet(key, out var cached)) return cached;
 
-        var result = await _inner.TranslateAsync(text, source, target, ct);
+        // ConfigureAwait(false) on both awaits (ruling E6-d): since E4.S4 this decorator is the
+        // OUTERMOST await of every translation the app makes, and both call sites are UI-thread
+        // methods — without it the continuation, and the store's synchronous work behind it, resume
+        // on the dispatcher. Same obligation as every file HttpProviderCoreTests' scan covers, and
+        // this one is now on that floor.
+        var result = await _inner.TranslateAsync(text, source, target, ct).ConfigureAwait(false);
         if (IsCacheable(text, result)) Store(key, result);
         return result;
     }
@@ -69,13 +74,27 @@ public class CachingTranslator : ITranslator
 
         if (missLines.Count > 0)
         {
-            var fresh = await _inner.TranslateLinesAsync(missLines, source, target, ct);
-            bool aligned = fresh.Count == missLines.Count;   // inner contract, but stay safe
+            var fresh = await _inner.TranslateLinesAsync(missLines, source, target, ct)
+                .ConfigureAwait(false);
+
+            // I5, one layer above every provider (ruling E6-d). This used to splice
+            // `j < fresh.Count ? fresh[j] : missLines[j]` — padding a short answer with the
+            // UNTRANSLATED SOURCE LINE and handing it back as a translation. That is the exact bug
+            // I5 exists for: DeepL's own padding once bypassed the fallback (the chain read the
+            // padded list as a success and never tried the next tier) AND cached raw Russian source
+            // as if it were English. It was unreachable here only because every provider throws
+            // first — and unreachable is not absent: since E4.S4 this wraps the WHOLE chain, so the
+            // day a tier answers 1:1-wrong without throwing, the padding would be the app's answer.
+            // A short OR long list is a BadResponse, and nothing from it is stored.
+            if (fresh.Count != missLines.Count)
+                throw new TranslationException(TranslationErrorKind.BadResponse,
+                    "The translator returned a different number of lines than it was asked for.");
+
             for (int j = 0; j < missIndexes.Count; j++)
             {
-                var value = j < fresh.Count ? fresh[j] : missLines[j];   // never leave a null slot
+                var value = fresh[j];
                 result[missIndexes[j]] = value;
-                if (aligned && IsCacheable(missLines[j], value))
+                if (IsCacheable(missLines[j], value))
                     Store(Key(source, target, missLines[j]), value);
             }
         }

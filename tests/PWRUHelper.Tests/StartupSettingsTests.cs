@@ -89,6 +89,11 @@ public class StartupSettingsTests
             Assert.Equal("0123456789abcdef0123456789abcdef", window.AzureKeyBox.Password);
             Assert.Null(window.AzureRegionCombo.SelectedItem);           // free text: no item matches
             Assert.Equal("norwayeast", window.AzureRegionCombo.Text);
+            // E6.S4's control, and it is the one with money behind it: a saved opt-in that came
+            // back unticked would silently move the LIVE loop off the user's key, and a handler
+            // firing during InitializeComponent() would write that false back over the file.
+            Assert.True(window.AzureForReadingCheck.IsChecked);
+            Assert.True(window.AzureForReadingCheck.IsEnabled);          // there IS a key to opt into
         });
 
         // TP-SET-05's own wording is "the file on disk is byte-identical", and the stronger assert

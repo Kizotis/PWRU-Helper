@@ -117,6 +117,17 @@ public class ChainCompositionTests : GatesTestBase
             new() { DeepLApiKey = "" },
             new() { DeepLApiKey = "   " },                  // whitespace is not a key
             new() { DeepLApiKey = "abc-123:fx" },
+
+            // E6.S4's triple, BY HAND, and the reason is the loop below: it varies exactly ONE
+            // property per permutation, so "a key AND a region AND the opt-in" — the only shape
+            // that puts a keyed provider on the read path — is a combination it structurally
+            // cannot generate. Written out here, it costs TP-CHN-14 nothing and buys it the sweep
+            // over the one settings shape the read chain has never had before.
+            new() { AzureApiKey = AzureKey, AzureRegion = "westeurope", UseKeyForReading = true },
+            // …and its three negatives, which are what AC 1 is actually about:
+            new() { AzureApiKey = AzureKey, AzureRegion = "westeurope" },       // key, no tick
+            new() { UseKeyForReading = true },                                  // tick, no key
+            new() { AzureApiKey = AzureKey, UseKeyForReading = true },          // tick + key, NO REGION
         };
 
         foreach (var p in typeof(AppSettings).GetProperties()
@@ -294,6 +305,133 @@ public class ChainCompositionTests : GatesTestBase
 
         Assert.DoesNotContain(ProviderIds.Azure, ids);
         Assert.Equal(new[] { ProviderIds.GoogleDict, ProviderIds.GoogleGtx }, ids);
+    }
+
+    // =============================================================================================
+    //  E6.S4 — Azure on the READ chain, behind the opt-in and nothing else
+    // =============================================================================================
+
+    /// <summary>
+    /// <b>TP-SET-08, and AC 1 is asserted HERE — on the built chain — for a reason worth keeping.</b>
+    /// The rule is not "a runtime guard refuses to use the key for reading"; it is that with the box
+    /// unticked <c>BuildRead</c> never CONSTRUCTS the tier. A guard is a line someone can move; a
+    /// builder that does not construct the provider cannot be talked into it by a setting, a
+    /// refactor or a future story — which is the same shape I8 gives DeepL, deliberately.
+    ///
+    /// <para>Why the default is off is arithmetic, not caution (risk R-15): Azure F0 is 2 M
+    /// characters a month, a heavy LIVE user reads ≈48 k characters an hour of busy chat, and the
+    /// LIVE loop translates every new line it sees, unattended, for as long as the app is open. An
+    /// opt-in that arrives pre-ticked is not an opt-in (ruling OQ-12).</para>
+    ///
+    /// <para>Both priorities, because the read chain is built TWICE (Background for LIVE,
+    /// Interactive for read-once) and a case that swept only the default would not see a builder
+    /// that keyed the tier off the priority.</para>
+    /// </summary>
+    [Fact]
+    public void TP_SET_08_azure_leads_the_read_chain_only_when_the_opt_in_is_on()
+    {
+        var free = new[] { ProviderIds.GoogleDict, ProviderIds.GoogleGtx };
+        var led = new[] { ProviderIds.Azure, ProviderIds.GoogleDict, ProviderIds.GoogleGtx };
+
+        foreach (var priority in new[] { RequestPriority.Background, RequestPriority.Interactive })
+        {
+            // A saved, usable key with the box unticked: the read path does not know it exists.
+            Assert.Equal(free, IdsOf(TranslationChains.BuildRead(
+                new AppSettings { AzureApiKey = AzureKey, AzureRegion = "westeurope" }, priority)));
+
+            // Ticked: FIRST, ahead of google-dict (§8.1's read path — a key the user has opted in
+            // is the tier they are paying attention to).
+            Assert.Equal(led, IdsOf(TranslationChains.BuildRead(
+                new AppSettings
+                {
+                    AzureApiKey = AzureKey,
+                    AzureRegion = " WestEurope ",   // trimmed here as it is at the Save button
+                    UseKeyForReading = true,
+                }, priority)));
+        }
+    }
+
+    /// <summary>
+    /// The opt-in is a third condition, not a replacement for the other two. A ticked box over half
+    /// a credential must add NOTHING — and on the read chain that matters more than on the write
+    /// one: a guaranteed-401 tier placed FIRST in the LIVE chain would open its own gate on the
+    /// first tick of every session, and every tick after that would be a skipped tier whose
+    /// sentence outranks the free engines actually doing the work.
+    /// </summary>
+    [Theory]
+    [InlineData(AzureKey, "")]
+    [InlineData(AzureKey, "   ")]
+    [InlineData("", "westeurope")]
+    [InlineData("   ", "westeurope")]
+    [InlineData("abc\u0007def", "westeurope")]   // unsendable: a header may carry no control char
+    [InlineData(AzureKey, "west\u0001europe")]
+    public void A_ticked_box_over_half_a_credential_adds_no_read_tier(string key, string region)
+    {
+        var settings = new AppSettings { AzureApiKey = key, AzureRegion = region, UseKeyForReading = true };
+
+        foreach (var priority in new[] { RequestPriority.Background, RequestPriority.Interactive })
+            Assert.Equal(new[] { ProviderIds.GoogleDict, ProviderIds.GoogleGtx },
+                         IdsOf(TranslationChains.BuildRead(settings, priority)));
+    }
+
+    /// <summary>
+    /// <b>The silent one.</b> The read chain is built twice with two different priorities, and the
+    /// new tier has to carry the one it was built with — forgetting <c>priority:</c> gives the LIVE
+    /// loop an <c>Interactive</c> Azure tier, which lets a screen loop take the last token of the
+    /// ceiling's bucket and stand in front of the half-open probe. §5.4's reserve exists precisely
+    /// to stop that, and nothing else in the app would notice.
+    /// </summary>
+    [Fact]
+    public void The_azure_read_tier_carries_the_priority_the_chain_was_built_with()
+    {
+        var settings = new AppSettings
+        {
+            AzureApiKey = AzureKey, AzureRegion = "westeurope", UseKeyForReading = true,
+        };
+
+        var live = TiersOf(TranslationChains.BuildRead(settings));
+        var once = TiersOf(TranslationChains.BuildRead(settings, RequestPriority.Interactive));
+
+        // Non-vacuity first: the tier really is there, and it really has a _priority field to read
+        // (PriorityOf answers Interactive for a provider that has none — see its comment).
+        Assert.Equal(ProviderIds.Azure, live[0].ProviderId);
+        Assert.NotNull(live[0].Translator.GetType()
+            .GetField("_priority", BindingFlags.Instance | BindingFlags.NonPublic));
+
+        Assert.All(live, t => Assert.Equal(RequestPriority.Background, PriorityOf(t.Translator)));
+        Assert.All(once, t => Assert.Equal(RequestPriority.Interactive, PriorityOf(t.Translator)));
+        Assert.All(TiersOf(TranslationChains.BuildWrite(settings)),
+            t => Assert.Equal(RequestPriority.Interactive, PriorityOf(t.Translator)));
+    }
+
+    /// <summary>
+    /// <b>I9 for the first keyed tier that lives on both chains.</b> The read chain's
+    /// <c>AzureTranslator</c> and the write chain's are two objects over ONE gate, and that has a
+    /// consequence worth pinning rather than discovering: a <c>QuotaExhausted</c> earned by the
+    /// Translator tab also pauses the screen reader — which is exactly what a quota means, since
+    /// both are spending the same 2 M characters.
+    /// </summary>
+    [Fact]
+    public void The_read_and_write_azure_tiers_are_two_objects_over_one_gate()
+    {
+        var settings = new AppSettings
+        {
+            AzureApiKey = AzureKey, AzureRegion = "westeurope", UseKeyForReading = true,
+        };
+
+        var read = TiersOf(TranslationChains.BuildRead(settings)).Single(t => t.ProviderId == ProviderIds.Azure);
+        var once = TiersOf(TranslationChains.BuildRead(settings, RequestPriority.Interactive))
+            .Single(t => t.ProviderId == ProviderIds.Azure);
+        var write = TiersOf(TranslationChains.BuildWrite(settings)).Single(t => t.ProviderId == ProviderIds.Azure);
+
+        var expected = ProviderGates.For(ProviderIds.Azure);
+        Assert.Same(expected, read.Gate);
+        Assert.Same(expected, once.Gate);
+        Assert.Same(expected, write.Gate);
+
+        // …and the providers themselves are NOT shared: they differ in the one thing that may not be.
+        Assert.NotSame(read.Translator, write.Translator);
+        Assert.NotSame(read.Translator, once.Translator);
     }
 
     /// <summary>

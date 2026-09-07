@@ -286,13 +286,12 @@ internal static class UserMessages
     public static string AzureNeedsARegion()
         => "Azure also needs the region your resource is in — pick or type it, then Save";
 
-    /// <summary>The other half of the pair, for a region left behind with no key. It has to name
-    /// the WAY OUT as well as the problem (§1's second principle): the user who empties the key box
-    /// to stop paying for Azure meets this sentence, and "paste it above" alone would be an answer
-    /// to a question they did not ask — a refusal with no exit is the R-01 lockout in miniature.
-    /// Emptying the region box is that exit, and the pair then clears.</summary>
-    public static string AzureNeedsAKey()
-        => "Azure also needs your key — paste it above, or clear the region box to stop using Azure";
+    // [There is no "Azure also needs your key" sentence any more — ruling E6-e removed the case it
+    //  answered. An empty key is no longer half a pair: it is the gesture that removes Azure, and
+    //  it clears the region with it. E6.S3's review recorded the refusal as a dead end ("paste it
+    //  above" is an answer to a question the user did not ask) and referred the AC change to
+    //  Winston; this is his answer. The remaining refusal is the one with no other reading — a key
+    //  with no region, which cannot be sent.]
 
     /// <summary>A key or region pasted with a control character inside it (a line break picked up
     /// from the portal). Trim only reaches the ends, an HTTP header may carry neither, and the
@@ -311,10 +310,55 @@ internal static class UserMessages
     public static string AzureKeySetStatus(string region)
         => $"● Azure key set ({region}) — used for what you write. Screen reading stays on the free engines";
 
+    /// <summary>The same line once the user has opted the key into the screen reader (E6.S4). It
+    /// exists as a second sentence rather than a suffix because it is a different STATEMENT: the
+    /// one above promises the free engines will keep reading the screen, and a status line that
+    /// keeps saying so while the LIVE loop spends the user's quota is precisely the dishonest
+    /// status §1's fourth principle forbids. Which of the two shows is decided by
+    /// <c>TranslationChains.AzureReadsTheScreen</c> — the same predicate the read chain is built
+    /// from, so the line cannot claim a tier the builder did not construct.</summary>
+    public static string AzureKeySetForReadingStatus(string region)
+        => $"● Azure key set ({region}) — used for what you write AND for screen reading";
+
+    /// <summary>
+    /// <b>The cost of the opt-in, in the one place the user decides</b> (UX-DR15, <c>ux</c> §4.2's
+    /// mockup, ruling GAP-4 — it lives here and not in the XAML so it exists exactly once and E6.S1's
+    /// verdict on the free tier changes ONE literal).
+    ///
+    /// <para><b>The "20 to 40 hours" was re-derived for E6.S4, not inherited</b> — <c>ux</c> §4.3
+    /// derives the figure and then says in as many words that if the caches are merged the
+    /// multiplier drops and the sentence must be re-derived rather than left to rot. E4.S4 shipped
+    /// the shared cache, so here is the arithmetic with its inputs:</para>
+    /// <list type="bullet">
+    /// <item>a heavy LIVE user is 5.8 M characters over 120 h (<c>benchmark…</c> §8.1) ⇒ ≈48 k
+    /// characters per hour of busy chat;</item>
+    /// <item>Azure F0 is 2 M characters a month ⇒ <b>41 h</b> at a billing multiplier of ×1.0;</item>
+    /// <item>§8.1's multiplier was ×1.3–2.0 from three terms: two batches per tick (<c>ru</c> and
+    /// <c>auto</c>), retries plus uncached failure placeholders, and the read and write paths
+    /// holding TWO caches that bill the same string twice. E4.S4 removed the third — one store
+    /// behind all three chains — and the <c>ru</c>/<c>auto</c> merge was evaluated and <b>rejected</b>
+    /// with arithmetic (README, Phase 2 closure), so the dominant term stands. The double-billing
+    /// term was the smallest of the three anyway: it only ever billed twice what BOTH paths
+    /// translated, and a LIVE-heavy user writes a small fraction of what they read. Low end
+    /// ×1.3 → ≈×1.2; high end unchanged at ×2.0.</item>
+    /// <item>41 h ÷ 2.0 … 41 h ÷ 1.2 = <b>≈21–35 hours</b>, inside the 20–40 the copy promises. The
+    /// sentence therefore ships unchanged — which is the conclusion of the re-derivation, not a
+    /// reason to have skipped it.</item>
+    /// </list>
+    /// <para>Still subject to <b>E6.S1 (U4)</b> for its first half: if F0 turns out to be
+    /// trial-limited rather than a standing monthly allowance, this literal is what changes.</para>
+    /// </summary>
+    public static string AzureForReadingHint()
+        => "Azure gives you 2 million characters a month for free — roughly 20 to 40 hours of busy "
+         + "chat. Screen reading is off by default because live mode reads every new line and can "
+         + "use it up in a few evenings.";
+
     /// <summary>ux flow (c).1, on the toast.</summary>
     public static string AzureKeySavedToast() => "Azure key saved — used when you write";
 
-    /// <summary>…and the same event the other way round: both halves emptied is not an error.</summary>
+    /// <summary>…and the same event the other way round: an emptied key is not an error. Since
+    /// ruling <b>E6-e</b> it is the whole gesture — one box cleared removes Azure, region and all —
+    /// so the toast speaks for the pair.</summary>
     public static string AzureKeyClearedToast() => "Azure key cleared — using the free engines";
 
     /// <summary>§3.3's join rule, and it applies to <b>one</b> of the two joins in this file.

@@ -92,7 +92,17 @@ public class DeepLTranslator : ITranslator
         text = text.Trim();
         if (text.Length == 0) return "";
         var outp = await RequestAsync(new[] { text }, source, target, ct).ConfigureAwait(false);
-        return outp.Count > 0 ? outp[0] : "";
+
+        // One input, one translation — the same 1:1 contract the batch path below enforces, and
+        // aligned with it by ruling E6-d. `outp.Count > 0 ? outp[0] : ""` padded with a BLANK,
+        // which is worse than padding with the source: an empty string is not a failure placeholder,
+        // so it does not start with "(", so the chain counts this tier as a success and no fallback
+        // runs, and CachingTranslator stores "" as that line's translation for the session (I4's
+        // rule cannot see a blank). A count that is not exactly one is a BadResponse.
+        if (outp.Count != 1)
+            throw new TranslationException(TranslationErrorKind.BadResponse,
+                "DeepL returned an unexpected response.");
+        return outp[0];
     }
 
     public async Task<List<string>> TranslateLinesAsync(IReadOnlyList<string> lines,
