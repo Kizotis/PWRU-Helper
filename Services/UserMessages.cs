@@ -413,9 +413,15 @@ internal static class UserMessages
     private const string TextIsKept = " — your text is kept";
 
     /// <summary>"{subject} paused ({t})", for the two arms that say it — an engine, or all of
-    /// them.</summary>
+    /// them.
+    ///
+    /// <para><b>A12's substitution, and it is the DURATION one</b> (review). The parenthesis here
+    /// holds how long the pause lasts — "0:58", "about 4 min" — which is the "for {t}" slot, so the
+    /// no-countdown form is <see cref="Briefly"/> and not <see cref="Shortly"/>. "Google paused
+    /// (shortly)" reads as "Google pauses soon", which is a different and false statement; "Google
+    /// paused (briefly)" is the one the amendment writes.</para></summary>
     private static string PausedShort(string subject, string? tryAgainIn)
-        => $"{subject} paused ({tryAgainIn ?? Shortly})";
+        => $"{subject} paused ({tryAgainIn ?? Briefly})";
 
     private static string Warn(string line) => "⚠ " + line;
 
@@ -750,7 +756,12 @@ internal static class UserMessages
             // Everything else — a timeout, a 5xx, a rate limit, a body nobody can read. §3.7 has no
             // row for these, so rather than invent five the deck's own sentence for the Kind is
             // joined after a colon, exactly as ReadFailed joins it (§3.3's join rule).
-            var kind => Reason(kind),
+            // …and the engine IS named here (review, §3.0/A3): this row is rendered under the key
+            // box of one specific provider, the id is a parameter of this very method, and the
+            // paused row two lines up already says "Azure is paused right now". Leaving the joined
+            // sentence on "the translation service" was the one place in the deck where {P} was
+            // available and not used.
+            var kind => Reason(kind, providerId, tryAgainIn),
         };
     }
 
@@ -795,10 +806,13 @@ internal static class UserMessages
         => Joined($"⚠ Not checked — {Display(providerId)} is paused right now.",
                   tryAgainIn is null ? null : $"Try again in {tryAgainIn}.");
 
-    /// <summary>The §3.7-less kinds, as the deck's own sentence after a colon.</summary>
-    private static string Reason(TranslationErrorKind? kind)
+    /// <summary>The §3.7-less kinds, as the deck's own sentence after a colon — with the engine
+    /// named, because a key test knows which one it was testing. <see cref="LowerAtJoin"/>'s
+    /// proper-noun guard is what keeps "DeepL took too long…" from becoming "deepL …" here.</summary>
+    private static string Reason(TranslationErrorKind? kind, string? providerId = null,
+        string? tryAgainIn = null)
     {
-        var sentence = kind is { } k ? Sentence(k) : null;
+        var sentence = kind is { } k ? Sentence(k, providerId, tryAgainIn) : null;
         return sentence is null
             ? "Could not check the key."
             : Terminated($"Could not check the key: {LowerAtJoin(sentence)}");

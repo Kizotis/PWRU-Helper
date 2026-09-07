@@ -366,7 +366,11 @@ public class KeyTestTests : GatesTestBase
         var result = await new DeepLTranslator(FreeKey, fake).TestKeyAsync();
 
         Assert.Equal(TranslationErrorKind.Timeout, result.Kind);
-        Assert.Equal("Could not check the key: the translation service took too long to answer — try again shortly.",
+        // Deliberate expected-string update (E7.S1 review): the joined sentence names the engine
+        // now. §3.0/A3 says {P} comes from the provider that failed and is never guessed — and a
+        // key test cannot guess, it was handed the id. The row sits under the DeepL key box, two
+        // lines from "⚠ Not checked — DeepL is paused right now."
+        Assert.Equal("Could not check the key: DeepL took too long to answer — try again shortly.",
             UserMessages.KeyTestSentence(ProviderIds.DeepL, result, "", null));
     }
 
@@ -475,12 +479,17 @@ public class KeyTestTests : GatesTestBase
     // E7.S1 / amendment A1 rewrote the RateLimited row — §3.1 always banned "wait a minute" and the
     // shipped "try again in a moment" sat next to it only because there was no gate to count down
     // from. Deliberate expected-string update; the join itself is untouched.
+    //
+    // …and E7.S1's review restored {P} on this join too: the id is a parameter of KeyTestSentence,
+    // so "the translation service" was the one place in the deck where a name was available and not
+    // used (§3.0 rule 1 is about NEVER INVENTING one, not about declining a known one). A11's
+    // proper-noun guard is what keeps "DeepL" capitalised after the colon.
     [InlineData(TranslationErrorKind.RateLimited,
-        "Could not check the key: the translation service asked us to slow down — paused briefly, and it retries on its own.")]
+        "Could not check the key: DeepL asked us to slow down — paused briefly, and it retries on its own.")]
     [InlineData(TranslationErrorKind.Unavailable,
-        "Could not check the key: the translation service is down right now — try again shortly.")]
+        "Could not check the key: DeepL is down right now — try again shortly.")]
     [InlineData(TranslationErrorKind.BadResponse,
-        "Could not check the key: the translation service sent something we could not read — try again shortly.")]
+        "Could not check the key: DeepL sent something we could not read — try again shortly.")]
     public void An_outcome_the_deck_has_no_row_for_still_reads_as_one_sentence(
         TranslationErrorKind kind, string expected)
         => Assert.Equal(expected, Sentence(ProviderIds.DeepL, KeyTestResult.Failed(kind)));

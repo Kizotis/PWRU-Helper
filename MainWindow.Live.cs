@@ -575,8 +575,11 @@ public partial class MainWindow
     /// English. Both cases now take the same exit, because they are the same case — there is no
     /// duration worth joining.</para>
     ///
-    /// <para>Not a second band table: it is <see cref="CountdownText"/> plus one question, so the
-    /// bands still exist in one place.</para></summary>
+    /// <para>Not a second band table: the minute arithmetic is <see cref="Minutes"/>, which
+    /// <see cref="CountdownText"/> calls for the same band, so the two cannot come to round
+    /// differently. What differs is only where each stops having something worth writing — the
+    /// ticking line at <see cref="ClockBandSeconds"/>, this one at
+    /// <see cref="CoarseFloorSeconds"/>.</para></summary>
     internal static string? CountdownJoinText(int? seconds)
         => seconds is { } s && s >= CoarseFloorSeconds ? Minutes(s) : null;
 

@@ -325,6 +325,128 @@ public class UserMessagesTests : GatesTestBase
                     }
     }
 
+    /// <summary>
+    /// <b>The budget on what the app can ACTUALLY render, which is not the same number</b> (review).
+    /// §3's 90 is measured with <c>{t}</c> = "0:58", and ruling E7-a means no §3.1 sentence ever
+    /// shows an <c>m:ss</c> again: these lines are written once and never repainted, so
+    /// <c>MainWindow.TryAgainIn</c> hands them <c>CountdownJoinText</c>'s COARSE band. The longest
+    /// thing production can put in the hole is therefore "more than 30 min" (16 characters against
+    /// four), so the two real ceilings are <b>111</b> for a NAMED row ("Google (backup)" is 15
+    /// characters against "Google"'s 6) and <b>119</b> for the <c>{P}</c>-less fallback ("The
+    /// translation service" is 23) — both on <c>Blocked</c>, the deck's longest row.
+    ///
+    /// <para>Those are budgets, not violations, and the reason is A3/A5: the two surfaces with a
+    /// hard limit of their own no longer render these sentences at all — the 360 px overlay takes
+    /// §3.4's short forms (pinned at 90/95 below) and a feed row takes no sentence (pinned at 110
+    /// in <c>ReadOnceStatusTests</c>). What is left is the Translator tab and the LIVE status line,
+    /// both of which wrap. This case exists so the numbers cannot grow again unnoticed, and so the
+    /// next reader is not told "90" by a case that pins a countdown the app can no longer
+    /// produce.</para>
+    /// </summary>
+    [Fact]
+    public void The_rendered_budget_holds_for_every_countdown_production_can_actually_emit()
+    {
+        // Exactly the band MainWindow.TryAgainIn can hand a §3.1 sentence: null under a minute
+        // (A12 takes over), "about N min" to the cap, "more than 30 min" at it.
+        var coarse = new string?[] { null, MainWindow.CountdownJoinText(60),
+                                     MainWindow.CountdownJoinText(200),
+                                     MainWindow.CountdownJoinText(45 * 60) };
+        var ids = ProviderIds.All.Select(x => (string?)x).Append(null).ToList();
+        string longestNamed = "", longestFallback = "";
+
+        foreach (var kind in Enum.GetValues<TranslationErrorKind>())
+            foreach (var id in ids)
+                foreach (var t in coarse)
+                    foreach (var another in new[] { false, true })
+                    {
+                        if (UserMessages.Sentence(kind, id, t, another) is not { } s) continue;
+                        if (id is null) { if (s.Length > longestFallback.Length) longestFallback = s; }
+                        else if (s.Length > longestNamed.Length) longestNamed = s;
+
+                        // The shapes the deck's no-terminal-stop rule and A12 exist to prevent, on
+                        // every render the app can reach rather than on the sample above.
+                        Assert.DoesNotContain("{", s);
+                        Assert.DoesNotContain("  ", s);
+                        Assert.DoesNotContain("— —", s);
+                        Assert.DoesNotContain(s[^1], ".!?;:,");
+                    }
+
+        Assert.True(longestNamed.Length <= 111,
+            $"the worst NAMED §3.1 row is now {longestNamed.Length} chars: {longestNamed}");
+        Assert.True(longestFallback.Length <= 119,
+            $"the worst {{P}}-less §3.1 row is now {longestFallback.Length} chars: {longestFallback}");
+        // Non-vacuity, and the two numbers in the doc comment above: Blocked, at the cap.
+        Assert.Equal(UserMessages.Sentence(TranslationErrorKind.Blocked, ProviderIds.GoogleGtx,
+                                           "more than 30 min"), longestNamed);
+        Assert.Equal(UserMessages.Sentence(TranslationErrorKind.Blocked, null,
+                                           "more than 30 min"), longestFallback);
+    }
+
+    /// <summary>
+    /// <b>No rendered string carries a placeholder</b> (review). Every <c>{P}</c>, <c>{t}</c> and
+    /// <c>{n}</c> of the deck is substituted by a parameter, and the one way that fails silently is
+    /// a hole left in a wrapper — a template written as copy rather than as an interpolation. The
+    /// nine rows have their own scan; this one walks the WRAPPERS, which is where the deck's copy
+    /// actually reaches a status line.
+    /// </summary>
+    [Fact]
+    public void No_rendered_line_leaves_a_placeholder_in_the_text()
+    {
+        var ex = new TranslationException(TranslationErrorKind.RateLimited, "raw", null,
+                                          ProviderIds.GoogleDict);
+        var rendered = new List<string>
+        {
+            UserMessages.TranslatorTabStatus(MainWindow.Friendly(ex)),
+            UserMessages.LiveAutoStopped(5, MainWindow.Friendly(ex)),
+            UserMessages.LiveStarted(), UserMessages.LiveOneReadFailed(),
+            UserMessages.LivePausedNextTry("0:58"), UserMessages.LivePausedAboutToRetry(),
+            UserMessages.LivePausedNoCountdown(), UserMessages.LivePausedOverlayNextTry("0:58"),
+            UserMessages.LivePausedOverlayAboutToRetry(), UserMessages.LivePausedOverlayNoCountdown(),
+            UserMessages.ReadingStatus(), UserMessages.ReadTranslatingStatus(4),
+            UserMessages.ReadOnceAllTranslated(4), UserMessages.ReadOncePartlyTranslated(4, 3, ex),
+            UserMessages.ReadOnceNoneTranslated(4, ex), UserMessages.ReadOncePaused(4, "0:58", false),
+            UserMessages.ReadOncePaused(4, null, true), UserMessages.ReadFailed(ex),
+            UserMessages.ReadCancelledStatus(), UserMessages.ReadCancelledRow(),
+            UserMessages.PendingRetryRow(), UserMessages.RetryGaveUpRow(),
+            UserMessages.DeepLNoKeyStatus(), UserMessages.AzureNoKeyStatus(),
+            UserMessages.DeepLKeySetStatus(), UserMessages.AzureKeySetStatus("westeurope"),
+            UserMessages.AzureKeySetForReadingStatus("westeurope"), UserMessages.AzureNeedsARegion(),
+            UserMessages.AzureCredentialUnsendable(), UserMessages.AzureForReadingHint(),
+            UserMessages.AzureKeySavedToast(), UserMessages.AzureKeyClearedToast(),
+            UserMessages.DeepLUsage(500_000, 1_000_000), UserMessages.DeepLUsage(500_000, null),
+            UserMessages.TestKeyLabel(), UserMessages.TestKeyLabelCosts(),
+            UserMessages.TestKeyCostsTooltip(), UserMessages.TestingLabel(),
+        };
+
+        foreach (var kind in Enum.GetValues<TranslationErrorKind>())
+            foreach (var p in new string?[] { null, ProviderIds.DeepL, ProviderIds.Bergamot })
+            {
+                rendered.Add(UserMessages.OverlayReply(
+                    new TranslationException(kind, "raw", null, p), "about 4 min"));
+                rendered.Add(UserMessages.OverlayReply(
+                    new TranslationException(kind, "raw", null, p)));
+                foreach (var id in new[] { ProviderIds.DeepL, ProviderIds.Azure })
+                {
+                    rendered.Add(UserMessages.KeyTestSentence(id, KeyTestResult.Failed(kind),
+                                                              "westeurope", "about 4 min"));
+                    rendered.Add(UserMessages.KeyTestSentence(id, KeyTestResult.PausedFor(kind, 90),
+                                                              "westeurope", "about 2 min"));
+                }
+            }
+        rendered.Add(UserMessages.KeyTestSentence(ProviderIds.DeepL, KeyTestResult.Works("x"), "", null));
+        rendered.Add(UserMessages.KeyTestSentence(ProviderIds.Azure, KeyTestResult.Works(), "westeurope", null));
+
+        Assert.True(rendered.Count > 60, $"only {rendered.Count} rendered lines — the scan is vacuous");
+        foreach (var line in rendered)
+        {
+            Assert.DoesNotContain("{", line);
+            Assert.DoesNotContain("}", line);
+            Assert.DoesNotContain("  ", line);
+            Assert.DoesNotContain("— —", line);
+            Assert.Equal(line.Trim(), line);
+        }
+    }
+
     // ---- E5.S4: the read-once statuses (§3.3) -------------------------------------------------
 
     /// <summary>
@@ -751,6 +873,13 @@ public class UserMessagesTests : GatesTestBase
                      Line(TranslationErrorKind.Blocked, ProviderIds.Azure, "about 4 min"));
         Assert.Equal("⚠ Engines paused (0:58) — your text is kept.",
                      Line(TranslationErrorKind.AllProvidersPaused, null, "0:58"));
+        // A12 with no countdown, and it is the DURATION substitution (review): the parenthesis
+        // holds how long the pause LASTS, which is the "for {t}" slot, so it degrades to "briefly".
+        // "Google paused (shortly)" reads as "Google pauses soon" — a different, false statement.
+        Assert.Equal("⚠ Google paused (briefly) — your text is kept, press Enter to retry.",
+                     Line(TranslationErrorKind.RateLimited, ProviderIds.GoogleDict));
+        Assert.Equal("⚠ Engines paused (briefly) — your text is kept.",
+                     Line(TranslationErrorKind.AllProvidersPaused, null));
         Assert.Equal("⚠ No internet — your text is kept, press Enter to retry.",
                      Line(TranslationErrorKind.Network, null));
         Assert.Equal("⚠ Google did not answer — your text is kept, press Enter to retry.",
