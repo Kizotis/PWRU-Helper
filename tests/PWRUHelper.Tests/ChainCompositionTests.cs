@@ -35,7 +35,15 @@ public class ChainCompositionTests : GatesTestBase
     /// this instance alive would hand the next case — in this file or in
     /// <c>TranslationCachePersistenceTests</c> — a store carrying this run's entries and, one day, a
     /// path into a deleted temp directory (the trap E4.S2's review found the hard way). Dropping it
-    /// per case is free: nothing here translates, so nothing here fills it.</summary>
+    /// per case is free: nothing here translates, so nothing here fills it.
+    ///
+    /// <para>Before as well as after, which is <see cref="GatesTestBase"/>'s own rule for the
+    /// registry applied to the store (review, E4.S4): this collection is serialised against every
+    /// other one, but it is not the first thing to run — a <c>new MainWindow()</c> in the WPF
+    /// collection now builds three chains, and nothing there drops the singleton afterwards. What
+    /// arrives here must be this file's own store, not whatever a window left behind.</para></summary>
+    public ChainCompositionTests() => TranslationChains.ResetCacheForTests();
+
     protected override void DisposeCore() => TranslationChains.ResetCacheForTests();
 
     // ---- reading a built chain back ------------------------------------------------------------
@@ -449,14 +457,25 @@ public class ChainCompositionTests : GatesTestBase
         Assert.Contains("private ITranslator BuildWriteChain() => TranslationChains.BuildWrite(_settings);",
             translate, StringComparison.Ordinal);
 
-        // The code-behind names no decorator at all — the same rule, and the same reason, as
+        // NO source outside Services/ names a decorator — the same rule, and the same reason, as
         // TranslationCachePersistenceTests' "no source outside Services/ names the store" and
         // TP-START-02's ProviderGates scan: the composition lives in Services/ (ruling E3-c), so the
         // next CachingTranslator outside it has to be a decision rather than a convenience.
-        foreach (var file in new[] { "MainWindow.xaml.cs", "MainWindow.Translate.cs",
-                                     "MainWindow.Live.cs", "MainWindow.Ocr.cs", "MainWindow.Compact.cs" })
-            Assert.DoesNotContain("new CachingTranslator",
-                Code(File.ReadAllText(Path.Combine(root, file))), StringComparison.Ordinal);
+        //
+        // SCANNED, not listed by name (review, E4.S4): a hardcoded list of five MainWindow partials
+        // cannot see the sixth, and MainWindow.Phrasebook.cs, MainWindow.Squad.cs,
+        // MainWindow.Update.cs and CompactOverlay.xaml.cs were all already outside it. A guard that
+        // misses the file it exists for is worth nothing.
+        var decorators = ProductionSources(root)
+            .Where(f => !Path.GetDirectoryName(f)!.EndsWith("Services", StringComparison.Ordinal))
+            .SelectMany(f => Code(File.ReadAllText(f)).Split('\n')
+                .Where(l => l.Contains("new CachingTranslator", StringComparison.Ordinal))
+                .Select(l => Path.GetFileName(f) + ": " + l.Trim()))
+            .ToList();
+
+        Assert.True(decorators.Count == 0,
+            "outside Services/ the code names a chain and never a decorator (ruling E3-c): "
+            + string.Join(" | ", decorators));
     }
 
     // ---- the source-scan helpers (the shape ChainTranslatorTests already uses) -------------------
@@ -466,6 +485,21 @@ public class ChainCompositionTests : GatesTestBase
         var cut = l.IndexOf("//", StringComparison.Ordinal);
         return cut >= 0 ? l[..cut] : l;
     }));
+
+    /// <summary>Every shipped <c>.cs</c> — the app's own sources, not the suite's and not a build
+    /// output. Deliberately the same shape as
+    /// <c>TranslationCachePersistenceTests.ProductionSources</c>, because the two scans are the two
+    /// halves of one rule (no store and no decorator outside <c>Services/</c>) and a copy that
+    /// drifted would be worse than a copy that did not.</summary>
+    private static IEnumerable<string> ProductionSources(string root) =>
+        Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+            .Where(f => Path.GetRelativePath(root, f)
+                            .Split('/', '\\')
+                            .SkipLast(1)
+                            .All(seg => !seg.StartsWith('.')
+                                        && !seg.Equals("tests", StringComparison.OrdinalIgnoreCase)
+                                        && !seg.Equals("bin", StringComparison.OrdinalIgnoreCase)
+                                        && !seg.Equals("obj", StringComparison.OrdinalIgnoreCase)));
 
     private static string RepoRoot()
     {

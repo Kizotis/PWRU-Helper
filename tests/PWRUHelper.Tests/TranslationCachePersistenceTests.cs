@@ -22,6 +22,18 @@ namespace PWRUHelper.Tests;
 /// cost; a third would be noise). Every other class builds NON-persistent stores, which is the A.2
 /// default and which never resolves a path at all.</para>
 ///
+/// <para><b>Since E4.S4 there is a third piece of shared state, and the paragraph above needs the
+/// caveat</b> (review, E4.S4): <c>TranslationChains.Cache</c> is a process-wide singleton, building
+/// any chain materialises it, and the cases below both use it and <c>ResetCacheForTests()</c> it.
+/// Two other places reach it — <c>ChainCompositionTests</c>, which is <c>[Collection("Gates")]</c>
+/// and therefore never runs beside this class, and any <c>new MainWindow()</c> in the <c>WPF</c>
+/// collection, which IS parallel with this one and builds three chains in its constructor. That is
+/// safe today for one reason: <b>no WPF case translates</b> — they render a document or read a
+/// setting — so nothing outside this class ever STORES into the singleton, and the worst an
+/// interleaving can do is hand a case an empty store somebody else constructed. The first parallel
+/// case that puts an entry in the shared cache breaks that, and the answer then is this class
+/// joining <c>[Collection("Gates")]</c> — never a weakened assertion below.</para>
+///
 /// <para>Every case runs inside a <see cref="TempCache"/> (IS-3), and
 /// <c>TestCacheRedirect</c>'s <c>[ModuleInitializer]</c> covers the ones that do not (IS-2).</para>
 /// </summary>
