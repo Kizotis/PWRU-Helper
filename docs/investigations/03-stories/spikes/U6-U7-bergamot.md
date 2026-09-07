@@ -148,3 +148,79 @@ ms/line · Δ working set after the first translate · Δ private bytes after th
 **This spike gates E8.S2 and nothing else.** It does not gate release C's other epics, it changes no
 production code, and a normal `dotnet test` is unchanged — **1213 tests**, nothing downloaded, no
 case discovered in `BergamotSpike`.
+
+---
+
+## 9. U7 packaging decision — settled by construction (E8.S6, 2026-09-07)
+
+**The decision, in one sentence with its number beside it: layout C ships — `bergamot.dll` is
+downloaded with the models — because it costs the portable exe `9,728 B` (the managed binding) to
+avoid `22,460,928 B` (the native asset) and leaves `%TEMP%\.net\PWRUHelper\<id>` at its
+`5 files, 8,214,968 B`.**
+
+**No measurement campaign was run, and that is the finding, not a shortcut.** §7 above already
+measured C's two claims on a real machine; E8.S2 and E8.S3 then shipped it (`ExcludeAssets="native"`
++ `NativeLibrary.SetDllImportResolver` + the download beside the models). Layouts A and B were **not
+built**, because each loses to C by construction rather than by margin:
+
+- **A (bundled)** re-arms `IncludeNativeLibrariesForSelfExtract` extraction to `%TEMP%\.net\…` **by
+  design** — that is what bundling a native asset *means* — and that mechanism is the named suspect
+  in P1. Publishing it to learn its cold start would measure how much worse the worse option is.
+- **B (beside the exe)** breaks the portable build's *"one file, put it anywhere"* promise **by
+  design**, and would need `IncludeNativeLibrariesForSelfExtract` handled differently in the portable
+  path than in the MSI path — which is precisely what `PublishFlagsTests`'
+  `All_three_build_paths_publish_with_the_same_flags` refuses. AC 3 calls that promise
+  non-negotiable, so B was never a candidate for the portable exe at all.
+
+A layout excluded by a hard constraint does not become admissible by measuring well, so there was
+nothing left for a number to decide.
+
+| Layout | Exe size | `%TEMP%\.net` after first launch | `pre_process_ms` #0 / warm | `in_process_ms` #0 / warm | Keeps "one file"? | Touches `PublishFlagsTests`? |
+|---|---|---|---|---|---|---|
+| **today** (no engine) | **187,631,934 B** [MEASURED, §7] | **5 files, 8,214,968 B** [MEASURED, §7] | baseline | baseline | yes | no |
+| **A** bundled | ~210 MB (187.6 + 22.46) [NOT BUILT] | ~6 files, ~30 MB [NOT BUILT] | — | — | yes | no (flags unchanged) — **but the flag it relies on is the P1 mechanism** |
+| **B** beside the exe | 187.64 MB **+ a 22,460,928 B file** [NOT BUILT] | 5 files, 8,214,968 B [NOT BUILT] | — | — | **no** | **yes** — the parity case |
+| **C** downloaded with the models ✅ | **187,631,934 B + 9,728 B** managed binding [§7 measured the native half at 0 B; the 9,728 B is the binding's own size — arithmetic, not a re-measured exe] | **5 files, 8,214,968 B** [MEASURED, §7] | **identical to today by construction** | **identical to today by construction** | yes | **no** |
+
+**Why C's two cold-start columns read "identical by construction" and not "?".** Cold start on an
+unsigned exe is Defender scanning bytes Windows has never seen (`pwru-startup-perf`). C's exe is
+today's bytes plus 9,728 B of managed assembly — 0.005 % — and its first launch self-extracts the
+same five WPF DLLs to the same place. There is no mechanism by which those columns could differ, and
+a dev-box number would not be evidence about a Defender-scanning question anyway. **E8.S7's field run
+re-confirms it on the owner's own machine**, which is where that question is answerable.
+
+**Read the exe row honestly.** §7's *0 B of growth* was measured with the package on the **test**
+csproj, where the app exe could not grow whatever happened. What it proved is the native half — the
+21.4 MB stays out and `%TEMP%\.net` does not re-arm — and that half carries over verbatim (no
+`runtimes/` directory in any build output, no `runtimeTargets` entry in `PWRUHelper.deps.json`). The
+**managed** binding does now enter the bundle, deliberately, because the production seam does not
+compile without it. 9,728 B spent, 22,460,928 B avoided.
+
+### What the decision costs the build: nothing
+
+- `Build Portable EXE.bat`, `Build MSI Installer.bat`, `.github/workflows/release.yml`,
+  `packaging/signpath-signing.md` and `installer/Product.wxs` are **untouched**, and none of them
+  names the native library. CI-7's *"only with a measurement behind it"* carve-out on
+  `PublishFlagsTests` is **not spent** — that file is unchanged.
+- E8.S6's own pins went into a new `tests/PWRUHelper.Tests/PackagingTests.cs`: the
+  `ExcludeAssets="native"` attribute read out of the project **XML** (a grep would also match the
+  comment that explains it), a scan that no build path or signing document names `bergamot`, and
+  `IncludeNativeLibrariesForSelfExtract=true` still present in all three paths — parity is already
+  pinned next door, but three files agreeing on a *changed* value would satisfy parity, and a
+  packaging story is exactly where all three would have been edited together.
+- CI-8 holds structurally: the build cannot need the native asset, because it is excluded at the
+  package reference.
+
+### MPL-2.0 — the obligation, discharged where the bytes are
+
+The engine is distributed from a GitHub release, so that is where the licence travels:
+`packaging/LICENSE-MPL-2.0.txt` (the full text) and `packaging/NOTICE-offline-engine.md` (which files
+are covered, and their upstream source form) are both repo files **and** two of the six assets on the
+`offline-engine-v1` release. The About tab carries the one-sentence notice for a user who never opens
+a release page. **SignPath is unaffected** — its Foundation plan requires the *application* to stay
+OSI-licensed, and PWRU Helper stays MIT.
+
+The owner's procedure for creating that release — the six assets, where the bytes come from (the gzip
+GCS mirror the binding's README names) and where the integrity values come from (Remote Settings'
+`decompressedSize` / `decompressedHash`), the PowerShell that computes the four sizes and digests,
+and the test that refuses a half-filled manifest — is **`packaging/offline-engine-release.md`**.
