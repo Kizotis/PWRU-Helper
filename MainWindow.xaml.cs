@@ -585,12 +585,22 @@ public partial class MainWindow : Window
     /// it. The <paramref name="pause"/> is passed in rather than re-read because the caller has just
     /// asked for it, and asking twice would compare two instants of the gates' clock (IS-6).</para>
     ///
-    /// <para><b>I10, and the honest limit on TP-START-04.</b> Nothing calls this before the window
-    /// is up, because nothing issues a request before it: <c>ProviderGates</c> constructs its gates
-    /// at startup and loads <c>provider-state.json</c> on the first <c>TryEnter</c>. So a saved pause
-    /// becomes visible on the first tick AFTER the first request, not literally at first paint —
-    /// making it literally true would mean reading the file before the window is visible, which is
-    /// what I10 forbids and what P1 exists to protect. Flagged in the story for Winston.</para></summary>
+    /// <para><b>I10, and TP-START-04 until E7.S3 lands E6-a.</b> Nothing calls this before the
+    /// window is up, because nothing issues a request before it: <c>ProviderGates</c> constructs its
+    /// gates at startup and loads <c>provider-state.json</c> on the first <c>TryEnter</c>. So TODAY
+    /// a saved pause becomes visible on the first tick AFTER the first request, not at first
+    /// paint.</para>
+    ///
+    /// <para><b>That is a gap with an owner, not a law.</b> Ruling <b>E6-a</b> settled it and
+    /// <b>E7.S3</b> implements it: <c>TranslationChains.EnsureGateStateLoaded()</c> — routed
+    /// through <c>Services/</c>, so <c>OnWindowLoaded</c> still names no <c>ProviderGates</c> and
+    /// TP-START-02's scan still passes — called from <c>OnWindowLoaded</c> on a POOL thread, AFTER
+    /// first paint. A saved pause is then on screen within about a second of the window rather than
+    /// after the first request, and the chip may read "checking…" for that second. Do not close the
+    /// gap any earlier than that: reading the file BEFORE first paint is what I10 forbids and what
+    /// P1 exists to protect, and it is why <c>ProviderGates.EnsureLoaded</c>'s own comment rejects a
+    /// warm-up that names the registry from the startup path — E6-a routes around that comment, it
+    /// does not overrule it.</para></summary>
     internal void EnsureCountdownRunning(ChainPause pause)
     {
         if (!_countdownTimer.IsEnabled) _countdownTimer.Start();
@@ -621,11 +631,23 @@ public partial class MainWindow : Window
     /// else.</para>
     ///
     /// <para>Internal so the tests can drive it with a <c>ChainPause</c> of their own: nothing in
-    /// this story may sleep (CI-3), and nothing in it may reach the process-global gates.</para></summary>
+    /// this story may sleep (CI-3), and nothing in it may reach the process-global gates.</para>
+    ///
+    /// <para><b>E7.S3, read this before you add the chip.</b> There is exactly ONE stop condition
+    /// here — <c>!AllPaused</c> — and the <c>_liveCts</c> guard below returns WITHOUT stopping,
+    /// because today the only thing that clears <c>_liveCts</c> is <c>StopLive</c> and it stops the
+    /// countdown itself. The moment a second site starts this timer while LIVE is off (the chip is
+    /// exactly that site) the guard becomes a 1 Hz poll that paints nothing and cannot stop, for as
+    /// long as the pause lasts — which is NFR7's "never runs idle" broken by a caller rather than by
+    /// this method. Widen the condition deliberately when you add that caller: the tick must stop
+    /// when it has NOTHING left to paint, not when LIVE is off. It is not widened here because the
+    /// only headless way to pin AC 1's lifetime is a window with no loop, so a
+    /// <c>_liveCts</c>-shaped stop would need a test seam this story has no use for. Flagged for
+    /// Winston in the review.</para></summary>
     internal void CountdownTick(ChainPause pause)
     {
         if (!pause.AllPaused) { _countdownTimer.Stop(); return; }
-        if (_liveCts == null) return;
+        if (_liveCts == null) return;   // see the E7.S3 note above: returns, does NOT stop
 
         int? left = LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now);
         SetIfChanged(ScreenReadStatus, LivePausedStatus(left));

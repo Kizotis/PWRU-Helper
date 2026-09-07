@@ -503,14 +503,24 @@ public partial class MainWindow
 
     /// <summary>The <c>{t}</c> of every paused sentence, in §2.4's four bands (amendment A9):
     /// <c>about to retry</c> under five seconds · <c>0:58</c> to ninety · <c>about 4 min</c> above
-    /// it, rounded UP so the number never promises the gate will reopen sooner than it will · and
-    /// <c>about 30 min</c> at the display cap. Null in, null out, for the case where there is
-    /// nothing honest to count down to.
+    /// it, rounded UP inside the band so the number never promises the gate will reopen sooner than
+    /// it will · and <c>about 30 min</c> at the display cap. Null in, null out, for the case where
+    /// there is nothing honest to count down to.
+    ///
+    /// <para><b>The cap is the one place the number IS an understatement, and §2.4 asks for it
+    /// anyway</b> (review). <c>TranslationPolicy.QuotaOpenMinutes</c> is <b>60</b> while the display
+    /// cap is 30, and <see cref="LiveTickPolicy.CountdownSeconds"/> only drops the number above an
+    /// hour — so the first half of a quota block renders a frozen <c>about 30 min</c> for a wait
+    /// that is really up to twice that. That is AC 2 as written ("at the 30-minute cap it renders
+    /// <c>about 30 min</c>") and it is deliberately not "fixed" here; the collision between §2.4's
+    /// cap and a 60-minute quota window is flagged for Sally and Winston rather than settled by a
+    /// formatter. Do not read the "rounded UP" promise above as covering it.</para>
     ///
     /// <para><b>Culture-invariant on purpose.</b> The <c>:</c> of a locale-aware time format is the
-    /// culture's <c>TimeSeparator</c> and its digits are the culture's digits — on a
-    /// Russian-language Windows that is a real defect, and it is the same reason E2.S6's review made
-    /// the gate log invariant.</para>
+    /// culture's <c>TimeSeparator</c> — on a Russian-language Windows that is a real defect, and it
+    /// is the same reason E2.S6's review made the gate log invariant. (Not the digits: .NET ignores
+    /// <c>NativeDigits</c> when formatting an integer, so the separator is the whole of the risk —
+    /// corrected at review, where the test that pins this said otherwise.)</para>
     ///
     /// <para>Shared by the LIVE status above, by read-once (E5.S4), by the About tab's key test
     /// (E6.S5) and by E7.S3's chip, so none of them can come to disagree about what a countdown

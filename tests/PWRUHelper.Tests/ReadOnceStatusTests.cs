@@ -211,12 +211,17 @@ public class ReadOnceStatusTests
 
         var pause = chain.PauseNow();
         var status = ReadOnceSummary.Status(lines, 0, error,
-            MainWindow.CountdownText(LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now)));
+            MainWindow.CountdownJoinText(LiveTickPolicy.CountdownSeconds(pause.RetryAt, pause.Now)));
 
         // The "{t}" moved with E7.S2's bands (§2.4 / amendment A9): a soft cooldown is inside the
         // m:ss band, so it now reads "0:05" rather than "5 s". Updated deliberately — the sentence
         // itself is untouched, only the countdown it joins.
-        var softCooldown = MainWindow.CountdownText(TranslationPolicy.SoftCooldownSecs);
+        //
+        // Through CountdownJoinText, which is what PausedTryAgainIn (MainWindow.Ocr.cs) actually
+        // calls (review). The two agree at five seconds, so composing through CountdownText passed
+        // while pinning a path that no longer ships — and a CountdownJoinText that answered null for
+        // everything would have left this green while read-once silently lost its countdown.
+        var softCooldown = MainWindow.CountdownJoinText(TranslationPolicy.SoftCooldownSecs);
         Assert.Equal("0:05", softCooldown);
         Assert.Equal($"Read {lines} line(s) — all engines are paused. Try again in {softCooldown}.",
                      status);
