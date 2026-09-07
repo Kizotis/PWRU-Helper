@@ -621,6 +621,12 @@
                             <PasswordBox x:Name="DeepLKeyBox" Width="300" VerticalContentAlignment="Center"/>
                             <Button Content="Save" Style="{StaticResource GhostButton}" Padding="12,4"
                                     Margin="8,0,0,0" Click="DeepLSaveKey_Click"/>
+                            <!-- E6.S5. Content is set in CODE (SetKeyTestLabels) and not here: the
+                                 two labels differ on purpose — ruling E6-b makes DeepL's check free
+                                 and Azure's cost a few characters — and AC 3's honesty rule needs
+                                 exactly one home for that copy, which is UserMessages (GAP-4). -->
+                            <Button x:Name="DeepLTestButton" Style="{StaticResource GhostButton}"
+                                    Padding="12,4" Margin="8,0,0,0" Click="DeepLTestKey_Click"/>
                         </StackPanel>
                         <TextBlock x:Name="DeepLStatus" Margin="0,6,0,0" FontSize="12"
                                    Foreground="{StaticResource TextMutedBrush}"/>
@@ -654,6 +660,11 @@
                             </ComboBox>
                             <Button Content="Save" Style="{StaticResource GhostButton}" Padding="12,4"
                                     Margin="8,0,0,0" Click="AzureSaveKey_Click"/>
+                            <!-- …and its asymmetric twin: Azure has no free way to check a key, so
+                                 this one sends one tiny translation and its label says so (AC 3).
+                                 Label and ToolTip both come from UserMessages, in code. -->
+                            <Button x:Name="AzureTestButton" Style="{StaticResource GhostButton}"
+                                    Padding="12,4" Margin="8,0,0,0" Click="AzureTestKey_Click"/>
                         </StackPanel>
                         <TextBlock x:Name="AzureStatus" Margin="0,6,0,0" FontSize="12"
                                    Foreground="{StaticResource TextMutedBrush}"/>

@@ -169,6 +169,12 @@ public partial class MainWindow : Window
         InitializeComponent();                  // fires change handlers — _restoringSettings guards them
         _toastTimer.Tick += (_, _) => { Toast.Visibility = Visibility.Collapsed; _toastTimer.Stop(); };
 
+        // E6.S5 — the two "Test key" labels, from the copy deck, once. Not in the XAML (GAP-4) and
+        // not in UpdateEngineStatusUi: a refresh landing mid-test would rewrite a label the
+        // in-flight finally is about to restore. Nothing persisted, so _restoringSettings does not
+        // apply — but it must run after InitializeComponent, because the buttons exist only then.
+        SetKeyTestLabels();
+
         OcrResults.ItemsSource = _ocrItems;
         OcrCommandBox.Text = $"Add-WindowsCapability -Online -Name \"{OcrCapability}\"";
         ShowAppVersion();

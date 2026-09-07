@@ -96,6 +96,12 @@ internal sealed class HttpProviderCore
     /// A test may hand in its own gate, exactly as it hands in its own handler.</summary>
     private ProviderGate Gate => _gate ?? ProviderGates.For(_options.ProviderId);
 
+    /// <summary>The gate's own clock, for a caller that has to say how long a pause still has to
+    /// run (E6.S5's key test). Subtracting our own <c>UtcNow</c> from a gate's instant is the
+    /// two-clocks bug IS-6 and <see cref="ProviderGate.Now"/> exist to prevent, so the one clock
+    /// that produced the instant is the one that must measure it.</summary>
+    internal DateTimeOffset Now => Gate.Now();
+
     /// <summary>This provider's key scrubber, or null when it has no key. Built once per provider
     /// rather than per emit: a closure allocated on every failed request is a footprint cost for
     /// nothing, and a keyless provider must not allocate one at all.</summary>

@@ -420,6 +420,139 @@ public partial class MainWindow
             : UserMessages.AzureKeyClearedToast());
     }
 
+    // ============================================================
+    //  E6.S5 — "Test key"
+    // ============================================================
+
+    /// <summary>
+    /// The two labels and Azure's cost tooltip, set ONCE, from the constructor. Not from
+    /// <see cref="UpdateEngineStatusUi"/>: that method runs on every save and every region change,
+    /// and a refresh landing while the other button reads "Testing…" would rewrite a label the
+    /// in-flight <c>finally</c> is about to restore. They are not persisted state either, so
+    /// <c>_restoringSettings</c> has nothing to say about them (I12).
+    ///
+    /// <para>The copy is <see cref="UserMessages"/>' and not the XAML's (ruling GAP-4): the labels
+    /// differ — DeepL's check is free, Azure's is not — and AC 3's "the copy must not claim a free
+    /// check that is not free" needs exactly one place to be right.</para>
+    /// </summary>
+    private void SetKeyTestLabels()
+    {
+        DeepLTestButton.Content = UserMessages.TestKeyLabel();
+        AzureTestButton.Content = UserMessages.TestKeyLabelCosts();
+        AzureTestButton.ToolTip = UserMessages.TestKeyCostsTooltip();
+    }
+
+    /// <summary>
+    /// DeepL's check, which spends nothing (<c>GET /v2/usage</c>, ruling E6-b).
+    ///
+    /// <para>The key is read off the BOX and handed in as a parameter, so this path cannot write
+    /// <c>_settings</c> even by accident: AC 1's "a failed test does not clear the key" is a
+    /// property of the method's shape and not of its discipline. Nothing here is persisted, so no
+    /// <c>_restoringSettings</c> guard and no <c>SettingsVersion</c> step (I12/I13).</para>
+    /// </summary>
+    private async void DeepLTestKey_Click(object sender, RoutedEventArgs e)
+    {
+        var key = (DeepLKeyBox.Password ?? "").Trim();
+        if (key.Length == 0)
+        {
+            // Nothing to test, and §3.7's "cleared" row is what the line already says when there is
+            // no key — so the refresh IS the answer, and no request is made to earn it.
+            UpdateDeepLStatus();
+            return;
+        }
+
+        await RunKeyTestAsync(DeepLTestButton, DeepLStatus, ProviderIds.DeepL, "",
+            ct => new DeepLTranslator(key).TestKeyAsync(ct));
+    }
+
+    /// <summary>
+    /// Azure's check, which sends one five-character translation and whose button says so (AC 3).
+    /// The half-entered credential is refused by the same predicate the Save button uses, because
+    /// a key with no region is a guaranteed 401 that would cost a real gate strike (E6.S3 AC 5).
+    /// </summary>
+    private async void AzureTestKey_Click(object sender, RoutedEventArgs e)
+    {
+        var key = (AzureKeyBox.Password ?? "").Trim();
+        var region = ReadAzureRegion();
+
+        if (key.Length == 0)
+        {
+            AzureStatus.Text = UserMessages.AzureNoKeyStatus();
+            return;
+        }
+
+        var problem = TranslationChains.AzureCredentialProblem(key, region);
+        if (problem != null)
+        {
+            AzureStatus.Text = problem;
+            return;
+        }
+
+        await RunKeyTestAsync(AzureTestButton, AzureStatus, ProviderIds.Azure, region,
+            ct => new AzureTranslator(key, region).TestKeyAsync(ct));
+    }
+
+    /// <summary>
+    /// The in-flight state both buttons share (AC 1): disabled, relabelled, bounded, and put back
+    /// in a <c>finally</c> — and the result rendered into the block's own status line,
+    /// <b>never</b> a <c>MessageBox</c> (UX principle 3, NFR12, <c>ux</c> §4.3's control table).
+    ///
+    /// <para><b>The <c>finally</c> is not optional.</b> A throw between the relabel and the restore
+    /// leaves the button permanently "Testing…" and disabled, with no way back but a restart — the
+    /// same failure class E5.S4's review found with <c>_readingOnce</c> sitting above its
+    /// <c>try</c>. For the same reason the label is captured rather than assumed: the two buttons
+    /// carry different text.</para>
+    ///
+    /// <para><b>Re-entrancy</b> is the button itself — a second press while one is in flight finds
+    /// it disabled and returns. This is not the shared-OCR-engine case that needed a field.</para>
+    ///
+    /// <para><b>Bounded</b>, because a test that hangs leaves the button dead: one
+    /// <c>CancellationTokenSource</c> over the same 12 s a single request gets. <b>I3</b> applies to
+    /// the catch — an <c>HttpClient</c> timeout is an <c>OperationCanceledException</c> whose token
+    /// is NOT cancelled, so the filter asks the SOURCE and never the exception type. There is no
+    /// cancel gesture on this button, so a cancelled token can only be the budget (or the window
+    /// closing, where nothing is left to read) and it is rendered as the timeout it is — exactly
+    /// what read-once does with its own budget.</para>
+    ///
+    /// <para><c>internal</c> so the suite can drive it with its own probe: the failure path, the
+    /// restored label and the untouched settings are the assertions that matter here, and none of
+    /// them may need a network.</para>
+    /// </summary>
+    /// <param name="budget">The bound, injectable for the suite alone (IS-7's rule: a test may
+    /// never assert a timing by waiting for one — CI-3). Production passes nothing and gets the
+    /// 12 s a single request already gets.</param>
+    internal async Task RunKeyTestAsync(Button button, TextBlock status, string providerId,
+        string region, Func<CancellationToken, Task<KeyTestResult>> probe, TimeSpan? budget = null)
+    {
+        if (!button.IsEnabled) return;              // a test is already running — the button is the flag
+
+        var label = button.Content;                 // restore EXACTLY what was there (the labels differ)
+        button.IsEnabled = false;
+        button.Content = UserMessages.TestingLabel();
+        using var cts = new CancellationTokenSource(
+            budget ?? TimeSpan.FromSeconds(TranslationPolicy.RequestTimeoutSeconds));
+        try
+        {
+            var result = await probe(cts.Token);
+            status.Text = UserMessages.KeyTestSentence(providerId, result, region,
+                CountdownText(result.SecondsUntilRetry));
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+            status.Text = UserMessages.KeyTestSentence(providerId,
+                KeyTestResult.Failed(TranslationErrorKind.Timeout), region, null);
+        }
+        catch (Exception ex)
+        {
+            status.Text = UserMessages.KeyTestSentence(providerId, ex, region);
+        }
+        finally
+        {
+            button.Content = label;
+            button.IsEnabled = true;
+        }
+    }
+
     /// <summary>
     /// The About tab's engine lines, refreshed in one place. Called explicitly from
     /// <c>ApplySettings</c> (where every change handler is suppressed, so a side effect that is not
@@ -428,6 +561,12 @@ public partial class MainWindow
     /// <para>Deliberately small, with one job: <b>E6.S4</b> adds the read opt-in's side effect and
     /// <b>E7.S7</b> grows it into §4.2's "In use now" + chain block. One method, so three stories
     /// extend it instead of fighting over three.</para>
+    ///
+    /// <para><b>Who owns the two status lines</b> (E6.S5, and it is the rule that keeps a test
+    /// result from being erased half a second later): this method and the Save handlers write the
+    /// <i>configured</i> state — what the app will do with the key it has. A <b>Test</b> result
+    /// overwrites that with what a real request just found out, and the next Save, region change or
+    /// restart resets it. Neither is suppressed for the other.</para>
     /// </summary>
     private void UpdateEngineStatusUi()
     {

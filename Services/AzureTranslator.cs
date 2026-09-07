@@ -152,6 +152,58 @@ public class AzureTranslator : ITranslator
         return outp;
     }
 
+    // =============================================================================================
+    //  E6.S5 — "Test key", the half that is not free, and says so
+    // =============================================================================================
+
+    /// <summary>The five ASCII characters a key test spends. Fixed, short and English so the cost
+    /// is the same for every user and nothing of theirs travels.</summary>
+    internal const string TestKeyProbeText = "hello";
+
+    /// <summary>
+    /// Validate the key and the region the only way Azure allows: <b>one tiny real translation</b>.
+    ///
+    /// <para>Ruling <b>E6-b</b>, and the reason the button's label carries the cost. <c>ux</c> §3.7
+    /// assumed a free probe existed — "DeepL <c>/usage</c>, Azure <c>/languages</c> or an
+    /// equivalent" — but <c>/languages</c> is the PUBLIC metadata endpoint: it takes no subscription
+    /// key at all, so a 200 from it proves the internet works and says nothing whatever about the
+    /// user's key or region. There is no documented authenticated free probe on the Translator
+    /// plane, so the check is a real request through the normal path, and AC 3's own fallback
+    /// applies: the copy must not claim a free check that is not free.</para>
+    ///
+    /// <para><b>Through <see cref="HttpProviderCore"/>, deliberately</b> (the story's OQ-f, recorded
+    /// beside the send). This IS a translation: routing it around the core would send while the gate
+    /// is open — the one thing Epic 2 exists to prevent — and would lose the redaction and the
+    /// §10.1 line with it. That three wrong keys in a row open the user's own Azure gate is correct
+    /// behaviour (ruling E2-a: nothing may lock the user out without a way back, and the way back is
+    /// the Save button's <c>ClearAuthBlock</c>). A test <b>never</b> clears a gate: ruling E2-i gives
+    /// that to a key SAVE alone.</para>
+    ///
+    /// <para>Interactive: a person is watching a button. A genuine cancel travels out untouched
+    /// (I3) — the catches here are typed, and the filtered OCE catch stays in the core.</para>
+    /// </summary>
+    internal async Task<KeyTestResult> TestKeyAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            await TranslateAsync(TestKeyProbeText, "en", "ru", ct).ConfigureAwait(false);
+            return KeyTestResult.Works();
+        }
+        catch (TranslationException ex) when (ex.NotSent)
+        {
+            // Refused by the gate before anything was sent (ruling E3-b). The seconds are counted
+            // here, on the gate's own clock, and formatted by the UI (I2).
+            return KeyTestResult.PausedFor(ex.Kind, LiveTickPolicy.CountdownSeconds(ex.RetryAt, _core.Now));
+        }
+        catch (TranslationException ex)
+        {
+            // Including the three guards above RequestAsync — a missing region, a control character
+            // — which are AuthFailed and cost no request. The About tab refuses those before the
+            // button is ever reached, so this is the belt to that braces.
+            return KeyTestResult.Failed(ex.Kind);
+        }
+    }
+
     /// <summary>
     /// The documented request limits of §7.5, applied: at most
     /// <see cref="TranslationPolicy.AzureMaxTextsPerRequest"/> elements and

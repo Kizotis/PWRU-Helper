@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace PWRUHelper.Services;
 
 /// <summary>
@@ -360,6 +362,146 @@ internal static class UserMessages
     /// ruling <b>E6-e</b> it is the whole gesture — one box cleared removes Azure, region and all —
     /// so the toast speaks for the pair.</summary>
     public static string AzureKeyClearedToast() => "Azure key cleared — using the free engines";
+
+    // ---- "Test key" (ux-mode-degrade.md §3.7, rulings GAP-4 / E6-b) ---------------------------
+    //
+    // METHODS, like every About-tab sentence above them, and for the same reason: the house-rule
+    // tests read every public CONST of this type as a row of the Sentence(kind) table, and none of
+    // these is a row — they are the About tab's own copy, terminated because each is rendered ALONE
+    // on a status line and joins nothing. They also carry §3.7's glyphs (✓ ✕ ⚠ ○), which are
+    // glyphs and not status codes.
+    //
+    // Ruling E6-b is why there are TWO labels. DeepL can be checked for free — `GET /v2/usage` is
+    // authenticated, spends no quota and answers the character count — while Azure has no
+    // authenticated free endpoint at all (`/languages` is PUBLIC and takes no subscription key, so
+    // a 200 from it proves the internet works and nothing about the user's key). Azure's check is
+    // therefore one tiny real translation, and AC 3's rule is that the copy must not claim a free
+    // check that is not free: the label says so, and the tooltip says why.
+
+    /// <summary>DeepL's button. No qualifier, because there is nothing to qualify.</summary>
+    public static string TestKeyLabel() => "Test key";
+
+    /// <summary>Azure's button (AC 3). The cost is in the LABEL and not only in a tooltip: the
+    /// tooltip is what a user reads after deciding to press.</summary>
+    public static string TestKeyLabelCosts() => "Test key (uses a few characters)";
+
+    /// <summary>…and the why, for the user who wonders what is different about this button.</summary>
+    public static string TestKeyCostsTooltip()
+        => "Azure has no free way to check a key, so this sends one tiny translation — it uses a "
+         + "few characters of your quota.";
+
+    /// <summary>The in-flight label. The button is disabled while it shows, so it is also the
+    /// re-entrancy flag; the two labels differ, so the caller restores what was there rather than
+    /// a shared constant.</summary>
+    public static string TestingLabel() => "Testing…";
+
+    /// <summary>
+    /// The one place an outcome becomes a sentence: <c>(provider, result, region) → string</c>,
+    /// pure, so all of §3.7 is asserted headlessly (GAP-4) and the code-behind decides nothing.
+    ///
+    /// <para><paramref name="tryAgainIn"/> is the "{t}" the caller has already rendered, exactly as
+    /// <see cref="ReadOncePaused"/> takes it — formatting a duration is not <c>Services/</c>' job
+    /// (I2), counting the seconds is.</para>
+    ///
+    /// <para><b>The wrong-region row of §3.7 is not shipped, and that is deliberate</b> (see the
+    /// story's Completion Notes). Azure answers a wrong region with the same 401 and the same
+    /// envelope as a wrong key, so the typed pipeline — which is the only thing this function may
+    /// read (T5) — genuinely cannot tell them apart. Inventing a distinction the response does not
+    /// carry is worse than the merged sentence, which already names the region as the thing to
+    /// check.</para>
+    /// </summary>
+    public static string KeyTestSentence(string providerId, KeyTestResult result, string region,
+        string? tryAgainIn)
+    {
+        // The gate refused it, so nothing was sent and the key was never judged. Ruling E6-b: a
+        // paused provider's test says it is paused — reporting a refused key here would send the
+        // player to re-paste a key that is probably fine.
+        if (result.Paused) return KeyTestPaused(providerId, tryAgainIn);
+
+        if (result.Ok)
+            return IsAzure(providerId)
+                ? $"✓ Key works ({region}) — Azure is used for what you write."
+                : Joined("✓ Key works — DeepL is used for what you write.", result.UsageText);
+
+        return result.Kind switch
+        {
+            TranslationErrorKind.AuthFailed => IsAzure(providerId)
+                ? "✕ Azure refused this key. Check the key, and that the region matches your resource."
+                : "✕ DeepL refused this key. Check you pasted all of it (free keys end in :fx).",
+
+            // Azure's row drops §3.7's "resets on the 1st": the reset DAY is not verified anywhere,
+            // and even the monthly allowance is still [UNKNOWN] U4 (E6.S1 has never been run against
+            // a real resource). The sentence keeps what is known and promises no date.
+            TranslationErrorKind.QuotaExhausted => IsAzure(providerId)
+                ? "⚠ Your 2 million free characters for this month are used up."
+                : "⚠ The key works, but the DeepL quota is used up — the free engines are used until it resets.",
+
+            // §3.7's own row, and the reason T4 says this keys off the classifier's Kind and never
+            // off a string match: "no internet" is a transport fact, not a word in a body.
+            TranslationErrorKind.Network => "Could not check the key — no internet connection.",
+
+            // Everything else — a timeout, a 5xx, a rate limit, a body nobody can read. §3.7 has no
+            // row for these, so rather than invent five the deck's own sentence for the Kind is
+            // joined after a colon, exactly as ReadFailed joins it (§3.3's join rule).
+            var kind => Reason(kind),
+        };
+    }
+
+    /// <summary>The same, for a failure that never became a <see cref="KeyTestResult"/> — the
+    /// handler's outermost catch. Same shape as <see cref="For"/>, so an untyped transport failure
+    /// reads exactly like its typed twin.</summary>
+    public static string KeyTestSentence(string providerId, Exception error, string region) => error switch
+    {
+        TranslationException te => KeyTestSentence(providerId, KeyTestResult.Failed(te.Kind), region, null),
+        System.Net.Http.HttpRequestException =>
+            KeyTestSentence(providerId, KeyTestResult.Failed(TranslationErrorKind.Network), region, null),
+        TaskCanceledException =>
+            KeyTestSentence(providerId, KeyTestResult.Failed(TranslationErrorKind.Timeout), region, null),
+        _ => Terminated($"Could not check the key: {LowerAtJoin(error.Message)}"),
+    };
+
+    /// <summary>What DeepL's <c>/v2/usage</c> answered, and the reason that probe is worth making at
+    /// all: it validates the key AND settles the quota row without translating a character.
+    ///
+    /// <para><b>It deliberately does not say "this month".</b> DeepL's current free plan is
+    /// <b>1,000,000 characters in total, non-resetting</b> (<c>benchmark-fournisseurs.md</c> §5.3),
+    /// so a monthly claim would be false for the very users this button exists for. The sentence
+    /// states the two numbers the endpoint actually returned and no period at all.</para></summary>
+    public static string DeepLUsage(long used, long? limit)
+        => limit is { } l
+            ? $"{Number(used)} of {Number(l)} characters used."
+            : $"{Number(used)} characters used.";
+
+    /// <summary>Group separators, culture-independently: the UI is English-only by decision, and a
+    /// French runtime would otherwise render "500 000" in an English sentence.</summary>
+    private static string Number(long n) => n.ToString("N0", CultureInfo.InvariantCulture);
+
+    /// <summary>Ruling E6-b's third clause. It names no failure, because there was none: the call
+    /// was refused before it left the machine.</summary>
+    private static string KeyTestPaused(string providerId, string? tryAgainIn)
+        => tryAgainIn is null
+            ? $"⚠ Not checked — {Display(providerId)} is paused right now."
+            : $"⚠ Not checked — {Display(providerId)} is paused right now. Try again in {tryAgainIn}.";
+
+    /// <summary>The §3.7-less kinds, as the deck's own sentence after a colon.</summary>
+    private static string Reason(TranslationErrorKind? kind)
+    {
+        var sentence = kind is { } k ? Sentence(k) : null;
+        return sentence is null
+            ? "Could not check the key."
+            : Terminated($"Could not check the key: {LowerAtJoin(sentence)}");
+    }
+
+    /// <summary>The two keyed engines by the name the player knows them by. The ids themselves are
+    /// <c>ProviderIds</c>' and never appear in copy (§3's "no provider internal").</summary>
+    private static string Display(string providerId) => IsAzure(providerId) ? "Azure" : "DeepL";
+
+    private static bool IsAzure(string providerId)
+        => string.Equals(providerId, ProviderIds.Azure, StringComparison.Ordinal);
+
+    /// <summary>A second sentence after the first, when there is one.</summary>
+    private static string Joined(string sentence, string? extra)
+        => string.IsNullOrEmpty(extra) ? sentence : sentence + " " + extra;
 
     /// <summary>§3.3's join rule, and it applies to <b>one</b> of the two joins in this file.
     /// A deck sentence continues the clause it is glued to after a COLON — "Could not read the
