@@ -298,8 +298,8 @@ public class CountdownTests
     [Fact]
     public void The_timer_is_stopped_by_the_window_and_by_stopping_live()
     {
-        var main = Code(File.ReadAllText(RepoFile("MainWindow.xaml.cs")));
-        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+        var main = Code(File.ReadAllText(RepoFile("Views/MainWindow.xaml.cs")));
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
 
         // OnClosing's body is not brace-matchable (string literals with braces further down), so it
         // is bounded by two calls that unambiguously bracket this one inside it. Both are unique in
@@ -433,7 +433,7 @@ public class CountdownTests
     [Fact]
     public void The_timers_own_tick_repaints_the_chip_before_it_decides_anything()
     {
-        var main = Code(File.ReadAllText(RepoFile("MainWindow.xaml.cs")));
+        var main = Code(File.ReadAllText(RepoFile("Views/MainWindow.xaml.cs")));
 
         Assert.Contains("internal void CountdownTick(ChainPause pause) => CountdownTick(pause, RefreshEngineChip());",
                         main, StringComparison.Ordinal);
@@ -518,7 +518,7 @@ public class CountdownTests
     [Fact]
     public void TP_RENDER_06_no_row_ever_carries_a_countdown()
     {
-        foreach (var file in new[] { "MainWindow.Live.cs", "MainWindow.Ocr.cs", "MainWindow.xaml.cs" })
+        foreach (var file in new[] { "Views/MainWindow.Live.cs", "Views/MainWindow.Ocr.cs", "Views/MainWindow.xaml.cs" })
         {
             var code = Code(File.ReadAllText(RepoFile(file)));
             foreach (var line in code.Split('\n').Where(l => l.Contains("TranslationBody")))
@@ -535,7 +535,7 @@ public class CountdownTests
     [Fact]
     public void The_tick_paints_one_status_line_per_window_and_no_row()
     {
-        var main = Code(File.ReadAllText(RepoFile("MainWindow.xaml.cs")));
+        var main = Code(File.ReadAllText(RepoFile("Views/MainWindow.xaml.cs")));
         // The TWO-argument overload: E7.S3 split the tick so AC 1's stop rule could be driven
         // without a paused registry, and the one-argument form is now a forwarder that evaluates
         // the chip's answer. This is the body that paints.

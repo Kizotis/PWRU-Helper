@@ -637,7 +637,7 @@ public class ChainTranslatorTests : GatesTestBase
         Assert.Empty(services);
 
         // Non-vacuity, and the placement itself: the expansion happens once, before the split.
-        var live = Code(File.ReadAllText(Path.Combine(root, "MainWindow.Live.cs")));
+        var live = Code(File.ReadAllText(Path.Combine(root, "Views", "MainWindow.Live.cs")));
         Assert.Contains("_slang.Expand(b)", live, StringComparison.Ordinal);
         Assert.True(live.IndexOf("_slang.Expand(b)", StringComparison.Ordinal)
                     < live.IndexOf("IsProbablyRussian", StringComparison.Ordinal));
@@ -653,7 +653,7 @@ public class ChainTranslatorTests : GatesTestBase
     [Fact]
     public async Task I7_the_ru_auto_split_reaches_the_chain_intact()
     {
-        var live = Code(File.ReadAllText(Path.Combine(RepoRoot(), "MainWindow.Live.cs")));
+        var live = Code(File.ReadAllText(Path.Combine(RepoRoot(), "Views", "MainWindow.Live.cs")));
         Assert.Contains("TranslateLinesAsync(ru, \"ru\", target, ct)", live, StringComparison.Ordinal);
         Assert.Contains("TranslateLinesAsync(auto, \"auto\", target, ct)", live, StringComparison.Ordinal);
 

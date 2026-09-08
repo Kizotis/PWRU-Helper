@@ -221,7 +221,7 @@ public class EngineStatusTests
     [Fact]
     public void The_clear_button_routes_through_the_facade_and_never_names_the_store()
     {
-        var code = File.ReadAllText(RepoFile("MainWindow.Translate.cs"));
+        var code = File.ReadAllText(RepoFile("Views/MainWindow.Translate.cs"));
 
         Assert.Contains("TranslationChains.ClearCache()", code, System.StringComparison.Ordinal);
         Assert.DoesNotContain("TranslationCacheStore", code, System.StringComparison.Ordinal);

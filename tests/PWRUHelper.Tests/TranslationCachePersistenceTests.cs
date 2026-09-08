@@ -923,7 +923,7 @@ public class TranslationCachePersistenceTests
 
         // …and the carve-out is not vacuous: the shutdown flush really is there, in OnClosing and
         // nowhere else.
-        var main = Code(File.ReadAllText(Path.Combine(root, "MainWindow.xaml.cs")));
+        var main = Code(File.ReadAllText(Path.Combine(root, "Views", "MainWindow.xaml.cs")));
         Assert.Equal(1, main.Split('\n').Count(l => l.Contains("FlushCache()", StringComparison.Ordinal)));
         Assert.Contains("TranslationChains.FlushCache();",
                         Body(main, "protected override void OnClosing("), StringComparison.Ordinal);

@@ -25,14 +25,22 @@ Free · no account · no setup · Windows 10 & 11
 ### 📖 Phrasebook
 Ready-made Russian phrases and gamer slang. **Click one, it's copied** — paste it in the game chat with `Ctrl+V`. Every phrase shows its meaning and how to say it.
 
-### 👁 Screen OCR
-Draw a box over the game chat. The app reads the Russian text and translates it, message by message. Turn on **live** mode and it keeps translating as new lines arrive. Chat slang is decoded under each line (`ПП = Full Moon Pavilion`).
-
 </td>
 <td width="50%" valign="top">
 
 ### ✍️ Translator
 Type in your language, get Russian instantly — already copied, ready to paste. Paste Russian and it flips the other way.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### 👁 Screen OCR
+Draw a box over the game chat. The app reads the Russian text and translates it, message by message. Turn on **live** mode and it keeps translating as new lines arrive. Chat slang is decoded under each line (`ПП = Full Moon Pavilion`).
+
+</td>
+<td width="50%" valign="top">
 
 ### 👥 Squad builder
 Tick the dungeon, class and role you want and it writes the Russian "looking for group" message for you: `в лега дд хил стук`.
@@ -41,23 +49,37 @@ Tick the dungeon, class and role you want and it writes the Russian "looking for
 </tr>
 </table>
 
-<div align="center">
-<img src="assets/screenshot-phrasebook.png" width="420" alt="Phrasebook"/>&nbsp;&nbsp;
-<img src="assets/screenshot-ocr.png" width="420" alt="Screen OCR"/>
-</div>
+<table>
+<tr>
+<td width="50%" align="center" valign="top">
+<img src="assets/screenshot-phrasebook.png" width="420" alt="The Phrasebook tab, full of Russian phrase cards"/>
+<br/><sub>Click a phrase, it's copied</sub>
+</td>
+<td width="50%" align="center" valign="top">
+<img src="assets/screenshot-ocr.png" width="420" alt="The Screen OCR tab and its settings"/>
+<br/><sub>Read the game chat off the screen</sub>
+</td>
+</tr>
+<tr>
+<td width="50%" align="center" valign="top">
+<img src="assets/screenshot-translator.png" width="420" alt="The Translator tab"/>
+<br/><sub>Type, get Russian</sub>
+</td>
+<td width="50%" align="center" valign="top">
+<img src="assets/screenshot-overlay.png" width="340" alt="The compact always-on-top overlay with a live translated chat feed"/>
+<br/><sub>The compact overlay, translating live</sub>
+</td>
+</tr>
+</table>
 
 ---
 
 ## Download
 
-Two files on the [Releases](../../releases) page — **take the installer if you're not sure**.
-
 | | |
 |---|---|
 | **`PWRUHelper-x.y.z-setup.msi`** ✅ | Classic installer. Small download, Start-menu shortcut, clean uninstall. Starts fast from the first launch. |
 | **`PWRUHelper.exe`** | No installation — one file you can run from anywhere. Big download (≈180 MB) because everything is inside. |
-
-> **First launch after a download or an update can take up to 10 seconds with nothing on screen.** That's Windows checking a file it has never seen. Every launch after that takes about a second.
 
 > Windows may say *"unknown publisher"* — click **More info → Run anyway**. Normal for small free apps.
 
@@ -69,7 +91,6 @@ Two files on the [Releases](../../releases) page — **take the installer if you
 
 - **Free by default.** Nothing to sign up for, nothing to configure.
 - **Never stops.** If a translation engine asks us to slow down, it's paused for a few minutes and the next one takes over on its own. A small coloured dot next to the Translate button tells you which engine is answering.
-- **No line is translated twice.** Repeated chat comes back instantly from a small file on your PC.
 - **Optional keys** (About tab) if you want better wording for what *you* write: **DeepL** or **Azure Translator**. Free stays underneath — if a key runs out, the app falls back on its own.
 - **Optional offline engine.** About tab → **Download the offline engine** (about 50 MB, one time). It translates on your PC with no internet at all, and it only answers when nothing else can. It uses memory only while it is translating, and **Remove** deletes it again.
 
@@ -113,7 +134,7 @@ Work while you're in the game.
 
 ## Made by Kizotis
 
-Free, made on my own time for the community. Ideas and bugs are welcome — just don't expect same-day changes. 🙂
+Free, made on my own time for the community. Ideas and bugs are welcome. 🙂
 
 🟣 [Twitch](https://www.twitch.tv/kizotis) · ▶️ [YouTube](https://www.youtube.com/@kizotis) · 💬 Discord **kizotis** · 🌐 [GitHub](https://github.com/Kizotis)
 

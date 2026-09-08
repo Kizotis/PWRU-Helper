@@ -295,7 +295,7 @@ public class TemplateRenderTests
         Assert.DoesNotContain("Mode=OneWay", trap[0].Value, StringComparison.Ordinal);
 
         var total = 0;
-        foreach (var file in new[] { "MainWindow.xaml", "CompactOverlay.xaml" })
+        foreach (var file in new[] { "Views/MainWindow.xaml", "Views/CompactOverlay.xaml" })
         {
             var runs = Regex.Matches(File.ReadAllText(RepoFile(file)), pattern)
                             .Select(m => m.Value).ToList();

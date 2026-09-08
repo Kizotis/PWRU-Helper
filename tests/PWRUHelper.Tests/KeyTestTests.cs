@@ -575,7 +575,7 @@ public class KeyTestTests : GatesTestBase
     [Fact]
     public void AC1_The_handlers_name_no_MessageBox()
     {
-        var code = Code(File.ReadAllText(RepoFile("MainWindow.Translate.cs")));
+        var code = Code(File.ReadAllText(RepoFile("Views/MainWindow.Translate.cs")));
         Assert.DoesNotContain("MessageBox", code, StringComparison.Ordinal);
         Assert.Contains("RunKeyTestAsync", code, StringComparison.Ordinal);
     }
