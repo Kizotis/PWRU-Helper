@@ -1,5 +1,6 @@
 {
   "_comment": "Perfect World RU chat slang. 'keys' are the Russian (or look-alike) tokens seen in chat; 'meaning' is the English/community reading shown under the translation. Add your own lines any time. 'context': true means it is only decoded when another slang term is on the same line (avoids false hits on the very common word). 'category' (class | dungeon | role) makes the entry appear as a tick-box in the Squad tab — its first key is what gets pasted into chat. 'full' (optional): a RUSSIAN long form used to rewrite the term BEFORE translation so the English reads properly (e.g. 'хил' -> 'лекарь' -> 'healer'); leave it out to keep the term as-is. Only add a 'full' when you're sure of the Russian word — a wrong one makes the translation worse.",
+  "version": 1,
   "entries": [
     { "keys": ["в"], "meaning": "LFM (looking for members)", "context": true },
     { "keys": ["лфг", "lfg"], "meaning": "LFG (looking for group)", "full": "ищу группу" },
