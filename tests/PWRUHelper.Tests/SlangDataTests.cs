@@ -36,20 +36,52 @@ public class SlangDataTests
     }
 
     [Fact]
-    public void Every_full_form_is_a_different_russian_phrase_not_the_term_or_its_english_meaning()
+    public void Every_full_form_is_russian_and_can_actually_rewrite_something()
     {
-        // A "full" is only worth having if it is a DIFFERENT, longer Russian phrase. Rewriting a
-        // term to itself costs a lookup and buys nothing, and a Latin-script "full" would be handed
-        // to a ru->en engine as though it were Russian — the exact mistake the glossary exists to
-        // prevent. Cheap to check, and the check is what makes filling the file safe to do quickly.
+        // A "full" earns its place only if some key it belongs to differs from it, and only if it
+        // is Russian. Both halves cost a shipped bug otherwise: a Latin-script "full" is handed to
+        // a ru->en engine as though it were Russian, and a full equal to EVERY one of its keys is a
+        // lookup and a string replace that can never change anything.
+        //
+        // "every key" and NOT "any key" — the first version of this test got that wrong. An entry
+        // may legitimately carry its own long form among its keys so the glossary decodes the long
+        // form too: `ара` expands to `Пещеры Вечности`, and `Пещеры Вечности` is searchable as
+        // well. Forbidding that rejected 685 sound entries when the full glossary arrived.
         foreach (var entry in SlangGlossary.FromJson(ShippedJson()).Entries.Where(e => e.Full.Length > 0))
         {
-            Assert.False(entry.Keys.Any(k => string.Equals(k, entry.Full, StringComparison.OrdinalIgnoreCase)),
-                $"'{entry.Full}' is the term itself — a full form must be a different Russian expansion.");
+            Assert.False(entry.Keys.All(k => string.Equals(k, entry.Full, StringComparison.OrdinalIgnoreCase)),
+                $"'{entry.Full}' equals every key it has — that rewrite can never fire; drop the full form.");
 
             Assert.True(entry.Full.Any(IsCyrillic),
                 $"'{entry.Full}' has no Cyrillic — a full form is the RUSSIAN long form, not the English meaning.");
         }
+    }
+
+    [Fact]
+    public void A_real_lfm_line_is_rewritten_into_ordinary_russian()
+    {
+        // End-to-end on the SHIPPED glossary, not on a fixture: this is the sentence the whole file
+        // exists for, and it is what the translation engine actually receives.
+        var g = SlangGlossary.FromJson(ShippedJson());
+
+        var expanded = g.Expand("в апа 5-2 нужен хил и танк, стук");
+
+        Assert.Contains("Пещеры Вечности", expanded);   // апа  -> the dungeon's real Russian name
+        Assert.Contains("лекарь", expanded);            // хил  -> healer, the headline case
+        Assert.Contains("напишите мне", expanded);      // стук -> "whisper me for an invite"
+        Assert.DoesNotContain("апа", expanded);
+    }
+
+    [Fact]
+    public void An_ordinary_russian_sentence_is_handed_to_the_engine_untouched()
+    {
+        // The counterpart, and the one that matters more: 1952 entries and 10k keys must not start
+        // rewriting normal speech. `в` and `или` are real prepositions, which is why they are
+        // context-only. A regression here corrupts every message the app translates.
+        var g = SlangGlossary.FromJson(ShippedJson());
+
+        const string ordinary = "он копал яму, погода огонь, я в ярости";
+        Assert.Equal(ordinary, g.Expand(ordinary));
     }
 
     private static bool IsCyrillic(char c) => c >= 'Ѐ' && c <= 'ӿ';
