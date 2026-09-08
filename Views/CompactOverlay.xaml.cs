@@ -32,7 +32,7 @@ public partial class CompactOverlay : Window
 
     /// <summary>The two forms of the heartbeat, named because three call sites write them and one
     /// of them must never write the other (AC 1).</summary>
-    internal const string DotOn = "  ●  LIVE", DotOff = "  ○  LIVE";
+    internal const string DotOn = "●  LIVE", DotOff = "○  LIVE";
 
     /// <summary>Max characters the game accepts in a single chat message. A reply longer than this
     /// is split into word-aligned blocks the user copies and sends one by one. Shared with the

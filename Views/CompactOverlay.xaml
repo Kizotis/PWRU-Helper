@@ -52,7 +52,15 @@
                             Content="⤢" Click="Expand_Click" ToolTip="Back to the full window"
                             AutomationProperties.Name="Back to the full window"/>
                 </StackPanel>
-                <TextBlock x:Name="LiveDot" DockPanel.Dock="Right" Text="  ●  LIVE"
+                <!-- Spacing is the MARGIN, not padding baked into the string. The dot arrived here
+                     as "  ●  LIVE" from the days it trailed the title inside a StackPanel, which
+                     left it with air on its left and none at all on its right — docked, that put
+                     "LIVE" flush against the Read once button. A margin also gives the same 8 px on
+                     both sides whatever the text is, and it is what the main window's LiveIndicator
+                     already does. 8 px matches the chip's, so the header reads on one rhythm:
+                     title · 8 · chip · 8 · LIVE · 8 · buttons. The chip keeps its own right margin so
+                     the gap to the buttons survives LIVE being collapsed. -->
+                <TextBlock x:Name="LiveDot" DockPanel.Dock="Right" Text="●  LIVE" Margin="0,0,8,0"
                            Foreground="{StaticResource AccentBrush}" TextTrimming="CharacterEllipsis"
                            FontWeight="Bold" VerticalAlignment="Center" Visibility="Collapsed"/>
                 <!-- The provider chip, overlay placement: on the header line, right-hand end, beside
