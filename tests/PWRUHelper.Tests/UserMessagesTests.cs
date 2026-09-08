@@ -398,7 +398,7 @@ public class UserMessagesTests : GatesTestBase
         {
             UserMessages.TranslatorTabStatus(MainWindow.Friendly(ex)),
             UserMessages.LiveAutoStopped(5, MainWindow.Friendly(ex)),
-            UserMessages.LiveStarted(), UserMessages.LiveOneReadFailed(),
+            UserMessages.LiveStarted(), UserMessages.LiveWatching(), UserMessages.LiveOneReadFailed(),
             UserMessages.LivePausedNextTry("0:58"), UserMessages.LivePausedAboutToRetry(),
             UserMessages.LivePausedNoCountdown(), UserMessages.LivePausedOverlayNextTry("0:58"),
             UserMessages.LivePausedOverlayAboutToRetry(), UserMessages.LivePausedOverlayNoCountdown(),
@@ -463,6 +463,38 @@ public class UserMessagesTests : GatesTestBase
             Assert.DoesNotContain("  ", line);
             Assert.DoesNotContain("— —", line);
             Assert.Equal(line.Trim(), line);
+        }
+    }
+
+    /// <summary>
+    /// <b>The LIVE running line counts nothing</b> (the owner: the numbers were noise). It used to
+    /// be <c>"🔴 Live — watching (check #7, sees 3 line(s), waiting for new text)…"</c> and, after a
+    /// tick that translated, <c>"🔴 Live — 12 message(s) so far (check #7)."</c> — three numbers
+    /// changing every 700 ms, saying the same thing every time: LIVE is running.
+    ///
+    /// <para>§1's first principle is one message per state, and "watching" is the state whether it
+    /// is check 7 or check 700. What the numbers were for is still on screen: the feed is the record
+    /// of how many messages arrived, and the ● / ○ heartbeat is the proof that checks are still
+    /// happening. Asserted at the deck AND at the loop, because the counters were interpolated at
+    /// the call site — which is how they escaped every scan in this file for four releases.</para>
+    /// </summary>
+    [Fact]
+    public void The_live_running_line_carries_neither_counter()
+    {
+        Assert.Equal("🔴 Live — watching for new text…", UserMessages.LiveWatching());
+        Assert.False(UserMessages.LiveWatching().Any(char.IsDigit), "a running line with a number in it is a counter");
+
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
+        Assert.DoesNotContain("check #", live);
+        Assert.DoesNotContain("message(s) so far", live);
+
+        // …and no status the loop writes is built from either counter. The feed's own total and the
+        // tick number are the two the report is about; a per-tick "{n} new line(s), translating…"
+        // is a different thing — it describes what is happening now, not a running total.
+        foreach (Match m in Regex.Matches(live, @"SetScreenStatus\(([^;]*)\);"))
+        {
+            Assert.DoesNotContain("_ocrItems.Count", m.Groups[1].Value);
+            Assert.DoesNotContain("_liveTicks", m.Groups[1].Value);
         }
     }
 

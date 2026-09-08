@@ -711,6 +711,153 @@ public class PendingRetryTests
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(live, @"RetryGaveUpRow\(\)"));
     }
 
+    /// <summary>
+    /// <b>Restarting LIVE on the SAME area does not wipe the chat</b> (the owner's report: LIVE
+    /// running, Read once, start again — and every line he had was gone, with no way to carry on).
+    ///
+    /// <para>The rule is the one the UI already draws. <c>ToggleLive</c> is the RESUME door — ↻ Resume
+    /// last area, ▶ Live on the overlay, Ctrl+Alt+L — and it continues the session; the picker door
+    /// (<c>LiveButton_Click</c>) has just been handed a new rectangle, and that is a new one.</para>
+    ///
+    /// <para><b>And the wipe is one arm, not two statements.</b> A feed kept while the dedup is
+    /// replaced is the worse bug in the other direction: every message still visible in the game
+    /// chat reads as new and is appended a SECOND time. So both halves are asserted to live inside
+    /// <c>if (freshSession)</c>, and to appear exactly once in the method — the pair may not drift
+    /// apart.</para>
+    /// </summary>
+    [Fact]
+    public void Resuming_the_saved_area_keeps_the_feed_and_the_dedup_together()
+    {
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
+
+        Assert.Contains("StartLive(rect, freshSession: false);", live, StringComparison.Ordinal);
+        Assert.Contains("StartLive(rect, freshSession: true);", live, StringComparison.Ordinal);
+
+        var start = BracedBlock(live, live.IndexOf("private void StartLive(", StringComparison.Ordinal));
+        var fresh = BracedBlock(start, start.IndexOf("if (freshSession)", StringComparison.Ordinal));
+
+        foreach (var wipe in new[] { "_ocrItems.Clear();", "_dedup = new();" })
+        {
+            Assert.Contains(wipe, fresh, StringComparison.Ordinal);
+            Assert.Single(System.Text.RegularExpressions.Regex.Matches(
+                start, System.Text.RegularExpressions.Regex.Escape(wipe)));
+        }
+
+        // The queue's exit changed with the feed surviving: a row that is still on screen is GIVEN
+        // UP rather than dropped, or it would sit on "…" for ever with no loop left to fill it in.
+        // On a fresh session the feed was emptied a few lines above, so nothing is found and the
+        // behaviour is what it always was.
+        Assert.Contains("foreach (var entry in _pendingRetry.Clear())", start, StringComparison.Ordinal);
+        Assert.Contains("if (_ocrItems.Contains(entry.Row)) GiveUpRow(entry.Row);", start,
+                        StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <b>The other half of the resume rule, and its invariant is "registered ⟸ TRANSLATED".</b>
+    /// The resumed loop keeps its dedup, which is what stops it re-translating the chat it already
+    /// did — but a read-once appends rows that dedup has never heard of, so without a registration
+    /// the owner's own flow (LIVE, Read once, resume) shows those messages twice.
+    ///
+    /// <para><b>Registered is not appended</b>, and the difference is the whole test. A remembered
+    /// line makes the resumed loop stay SILENT about a later frame, so it may only ever stand for a
+    /// message the player can read. An earlier version registered before the <c>await</c>, on
+    /// "registered ⟺ appended": one network blip mid-read stamped every row
+    /// <c>(not translated — the engines did not come back)</c> AND registered every line, and the
+    /// resumed loop then never translated any of them for as long as they stayed on screen — the
+    /// invisible failure, which is the one direction this may not fail in.</para>
+    ///
+    /// <para>So the site is BELOW the write that gives the rows their translations, and below both
+    /// catches — positionally and structurally, because "after" alone would still be reachable from
+    /// a catch that fell through. A failed, cancelled or fully paused read registers nothing at all
+    /// and the player gets the visible duplicate.</para>
+    /// </summary>
+    [Fact]
+    public void A_read_once_registers_only_the_lines_it_really_translated()
+    {
+        var ocr = Code(File.ReadAllText(RepoFile("Views/MainWindow.Ocr.cs")));
+        var body = BracedBlock(ocr, ocr.IndexOf(
+            "private async Task<(int Translated, TranslationException? Error)> TranslateSentencesInto(",
+            StringComparison.Ordinal));
+
+        const string register = "_dedup.RememberAlreadyShown(";
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(
+            ocr, System.Text.RegularExpressions.Regex.Escape(register)));
+        Assert.Contains("if (ReadOverlapsTheLiveArea(region))", body, StringComparison.Ordinal);
+
+        int at = body.IndexOf(register, StringComparison.Ordinal);
+        Assert.True(at > body.IndexOf("items[i].TranslationBody = translations[i];", StringComparison.Ordinal),
+                    "a line may only be registered once its row carries the translation");
+
+        // Neither failure exit can reach it: they stand above it AND it is not inside them.
+        foreach (var (name, mark) in new[]
+                 {
+                     ("the cancelled read", "foreach (var it in items) it.TranslationBody = $\"({UserMessages.ReadCancelledRow()})\";"),
+                     ("the failed read",    "foreach (var it in items) GiveUpRow(it);"),
+                 })
+            Assert.True(at > body.IndexOf(mark, StringComparison.Ordinal),
+                        $"{name} must reach its own exit before anything is registered");
+
+        foreach (var handler in new[] { "catch (OperationCanceledException)", "catch (Exception ex)" })
+            Assert.DoesNotContain(register,
+                BracedBlock(body, body.IndexOf(handler, StringComparison.Ordinal)));
+
+        // …and what is handed over is narrowed to what is READABLE ON THE FEED: a real translation
+        // (the app's one definition of that), a row the MaxHistory trim did not evict, and a line
+        // the LIVE filter itself would have kept — LIVE feeds _dedup.Next through LooksLikeText, and
+        // registering what it cannot match only spends the 200-entry memory on fuzzy accidents.
+        var narrow = BracedBlock(ocr, ocr.IndexOf("private List<string> LinesToRememberAsShown(",
+                                                  StringComparison.Ordinal));
+        Assert.Contains("ReadOnceSummary.IsTranslation(translations[i])", narrow, StringComparison.Ordinal);
+        Assert.Contains("_ocrItems.Contains(items[i])", narrow, StringComparison.Ordinal);
+        Assert.Contains("TextMatching.LooksLikeText(sentences[i], minLetters)", narrow, StringComparison.Ordinal);
+
+        // The region rule: overlap with the area a RESUME will use, read without a side effect.
+        int rule = ocr.IndexOf("private bool ReadOverlapsTheLiveArea(", StringComparison.Ordinal);
+        Assert.True(rule >= 0, "the overlap rule was not found in MainWindow.Ocr.cs");
+        var overlap = ocr[rule..(ocr.IndexOf(';', rule) + 1)];
+        Assert.Contains("_settings.LastLiveRegion", overlap, StringComparison.Ordinal);
+        Assert.Contains("IntersectsWith", overlap, StringComparison.Ordinal);
+        Assert.DoesNotContain("SettingsService.Save", overlap);
+        Assert.DoesNotContain("TryGetSavedRegion", overlap);
+    }
+
+    /// <summary>
+    /// <b>Amplifier A7, at the one place the resume rule re-opened it.</b> A batch whose translation
+    /// ARRIVED and whose player pressed ■ in the same breath used to return before writing it: the
+    /// rows kept their "…", they were never on <c>_pendingRetry</c>, and nothing else in the app
+    /// touches a row. <c>StartLive</c>'s unconditional <c>_ocrItems.Clear()</c> swept them on the
+    /// next start — and the resume path deliberately does not clear the feed any more, while the
+    /// dedup now remembers the line, so nothing would ever ask for it again. A "…" that never
+    /// resolves, with no way in the UI to clear the feed, is exactly what makes a player press the
+    /// button again and again.
+    ///
+    /// <para>The window is not theoretical: ■ Stop, closing the window and the auto-stop all cancel
+    /// the token, and a fully cached batch returns between two frames. The rule now matches the
+    /// drain's — the answer was paid for, so it is written wherever the row already is — and a row
+    /// with no answer to write is given up rather than left pending.</para>
+    /// </summary>
+    [Fact]
+    public void A_stop_landing_on_an_answered_batch_still_finishes_every_row()
+    {
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
+        var body = BracedBlock(live, live.IndexOf("private async Task AppendLinesToHistory(",
+                                                  StringComparison.Ordinal));
+
+        const string write = "if (i < translations.Count) items[i].TranslationBody = translations[i];";
+        int at = body.IndexOf(write, StringComparison.Ordinal);
+        Assert.True(at >= 0, "the write that gives every row its ending was not found");
+        Assert.Contains("else GiveUpRow(items[i]);", body, StringComparison.Ordinal);
+
+        // Nothing returns between the answer arriving and the rows it belongs to.
+        Assert.DoesNotContain("if (ct.IsCancellationRequested) return;", body[..at]);
+        // The cancel still skips the SCROLL — finishing a row is not the same as moving the view
+        // under the eyes of someone who has just stopped.
+        int cancel = body.IndexOf("if (ct.IsCancellationRequested) return;", StringComparison.Ordinal);
+        Assert.True(cancel > at, "the cancel check must stand after the rows are finished");
+        Assert.True(body.IndexOf("ResultsScroller?.ScrollToEnd();", cancel, StringComparison.Ordinal) > cancel,
+                    "the only thing after the cancel check is the scroll");
+    }
+
     /// <summary><c>Clear</c> answers what it was holding, which is what lets ■ Stop give those rows
     /// §2.2's given-up sentence instead of leaving them on a "…" nothing will ever resolve.</summary>
     [Fact]

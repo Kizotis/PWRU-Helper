@@ -536,7 +536,7 @@ public class BergamotLifetimeTests : GatesTestBase
         Assert.Contains("ArmOfflineIdleUnload();", Body(live, "private void StopLive()"),
                         StringComparison.Ordinal);
         Assert.Contains("DisarmOfflineIdleUnload();",
-                        Body(live, "private void StartLive(System.Drawing.Rectangle rect)"),
+                        Body(live, "private void StartLive(System.Drawing.Rectangle rect, bool freshSession)"),
                         StringComparison.Ordinal);
 
         // THREE arming sites in the whole app and no more: StopLive (the ONE site a player's gesture

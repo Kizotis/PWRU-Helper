@@ -138,13 +138,35 @@ public class OcrService
             scaled?.Dispose();
         }
 
-        var lines = new List<string>();
+        // NEVER trust result.Lines' ORDER — see OcrLayout for the measurement. The engine happily
+        // reads text it has decided is two columns column-by-column, which on a chat-shaped image
+        // (equal-width nicknames, so every body starts at the same x) hands back every nickname
+        // first and every message body after. Project each line onto its geometry and let
+        // OcrLayout rebuild the reading order. OcrLine itself carries no rectangle, so the line's
+        // box is the union of its words'.
+        var boxes = new List<OcrTextBox>(result.Lines.Count);
         foreach (var line in result.Lines)
         {
             var text = line.Text?.Trim();
-            if (!string.IsNullOrWhiteSpace(text)) lines.Add(text);
+            if (string.IsNullOrWhiteSpace(text)) continue;
+
+            double left = double.MaxValue, top = double.MaxValue, right = double.MinValue, bottom = double.MinValue;
+            foreach (var word in line.Words)
+            {
+                var r = word.BoundingRect;
+                if (r.X < left) left = r.X;
+                if (r.Y < top) top = r.Y;
+                if (r.X + r.Width > right) right = r.X + r.Width;
+                if (r.Y + r.Height > bottom) bottom = r.Y + r.Height;
+            }
+            // A line with no words has no text either (OcrLine.Text is built from them), so the
+            // check above already dropped it — but geometry that never got written would order
+            // wildly, so leave nothing to chance.
+            if (left > right || top > bottom) { left = top = right = bottom = 0; }
+
+            boxes.Add(new OcrTextBox(text!, left, top, right - left, bottom - top));
         }
-        return lines;
+        return OcrLayout.OrderIntoLines(boxes);
     }
 
     private static async Task<SoftwareBitmap> ToSoftwareBitmapAsync(Bitmap bitmap)

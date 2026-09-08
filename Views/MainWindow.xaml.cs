@@ -990,11 +990,14 @@ public partial class MainWindow : Window
     //  THE PROVIDER CHIP (ux-mode-degrade §2.1-§2.3, E7.S3)
     // ============================================================
     //
-    // One TextBlock in three places — the write path, the read path, and a prefix of the compact
-    // overlay's single status line — showing which engine is serving the player and, when one is
-    // paused, how long for. It is the ONLY always-on indicator in the app (§2.2's first reading
-    // rule), which is what lets every status line go quiet and say something only when the state
-    // changes.
+    // One TextBlock in two places — the Translator tab's write path and the compact overlay's
+    // header — showing which engine is serving the player and, when one is paused, how long for. It
+    // is the ONLY always-on indicator in the app (§2.2's first reading rule), which is what lets
+    // every status line go quiet and say something only when the state changes.
+    //
+    // It was three, and both of the others were the same words a second time: a chip beside the
+    // read-once button on the tab that already had one, and OverlayLine's "{chip}  {status}" prefix
+    // on the overlay's status line, a couple of centimetres under the overlay's own chip.
     //
     // The state itself is Services/' (TranslationChains.EngineStatus over ProviderGate.Snapshot()
     // and ChainTranslator.LastOutcome, rulings R-2 / R-3); this file turns it into a glyph, a word,
@@ -1442,24 +1445,66 @@ public partial class MainWindow : Window
     /// "once per switch" needs something to compare a switch against.</summary>
     private string? _lastStateNotice;
 
-    /// <summary>The two main-window surfaces, written from one <see cref="EngineChip"/> — the whole
-    /// of what this feature puts on a control, in one method, so <b>TP-RENDER-03</b> can drive all
-    /// eight states through the real <c>TextBlock</c>s without a chain, a gate or a request.
+    /// <summary>Every chip surface the app has, written from one <see cref="EngineChip"/> — the
+    /// whole of what this feature puts on a control, in one method, so <b>TP-RENDER-03</b> can drive
+    /// all eight states through the real <c>TextBlock</c>s without a chain, a gate or a request.
     ///
-    /// <para>The foreground follows the text through the SAME guard: a resource reference re-applied
-    /// once a second is the churn hint 7 exists to remove, and one comparison for both is what stops
-    /// a cached brush field from disagreeing with the string it belongs to. The tooltip is compared
-    /// as a <c>string</c> — which is also the assertion that it IS one, and therefore that the dark
-    /// <c>ToolTip</c> style in <c>Theme.xaml</c> still applies (AC 4).</para></summary>
+    /// <para>There is <b>one</b> chip on the main window now: <c>WriteChip</c>, on the Translator
+    /// tab. The read path had a second one beside the read-once button, and because this method
+    /// paints both from the same record it was a strict duplicate — the same words twice, a hand
+    /// apart. The second placement that earns its keep is the compact overlay's header, which is the
+    /// only surface on screen while the game is (and which is TOLD, never asked — I2).</para>
+    ///
+    /// <para>The overlay may not exist yet, or may be hidden: painting a hidden window costs one
+    /// guarded comparison, and <c>EnterCompactMode</c> pushes the current state through this method
+    /// again on the way in, so a window opened between two repaints is never blank.</para></summary>
     internal void PaintEngineChip(EngineChip chip, string tooltip)
     {
-        foreach (var surface in new[] { WriteChip, ReadChip })
+        PaintChipSurface(WriteChip, chip, tooltip);
+        _overlay?.SetEngineChip(chip, tooltip);
+    }
+
+    /// <summary>The brush key a chip surface's foreground was last set FROM. An attached property
+    /// rather than a field because this writer is static and serves two windows, and because the
+    /// alternative — inferring the key back out of the resolved <c>Brush</c> — would re-apply the
+    /// reference every time something else cleared the foreground, which is the churn the guard
+    /// below exists to remove.</summary>
+    private static readonly DependencyProperty PaintedBrushKeyProperty =
+        DependencyProperty.RegisterAttached("PaintedBrushKey", typeof(string), typeof(MainWindow));
+
+    /// <summary>The write itself, one surface at a time — shared with the overlay's own
+    /// <c>TextBlock</c> so the two windows cannot come to paint one chip two ways.
+    ///
+    /// <para><b>The guard compares what it protects: the label AND the brush key.</b> It used to
+    /// compare the label alone and let the foreground ride on it, which was wrong for a reason no
+    /// docstring should have claimed away — <b>two states can render the same string in different
+    /// colours</b>. §3.0 rule 2 drops the <c>· backup</c> suffix when the name already carries it, so
+    /// a chain SERVING from <c>google-gtx</c> (healthy, teal) and one that FELL BACK to it
+    /// (degraded, gold) both say <c>● Google (backup)</c>; with only the string compared, the second
+    /// left the first's colour standing — the app saying "degraded" in the healthy colour, or the
+    /// reverse, until some other state happened to change the words. Reachable whenever
+    /// <c>google-dict</c> is skipped for an expired window and then tried and fails.</para>
+    ///
+    /// <para>The churn the guard exists for is untouched (NFR7, hint 7): at 1 Hz above the
+    /// ninety-second band neither half changes for fifty-nine ticks in a row and this method assigns
+    /// nothing at all. The key is remembered rather than read back off the control, so a repaint is
+    /// still a comparison and not a repair. The tooltip is compared as a <c>string</c> — which is
+    /// also the assertion that it IS one, and therefore that the dark <c>ToolTip</c> style in
+    /// <c>Theme.xaml</c> still applies (AC 4).</para></summary>
+    internal static void PaintChipSurface(TextBlock surface, EngineChip chip, string tooltip)
+    {
+        var painted = (string?)surface.GetValue(PaintedBrushKeyProperty);
+        // Both halves through one write: the text is compared first (SetIfChanged answers whether it
+        // wrote), the key second, and either one changing re-applies the resource reference — a
+        // cached key that disagreed with the colour on screen would be the same bug wearing a hat.
+        if (SetIfChanged(surface, chip.Label)
+            || !string.Equals(painted, chip.BrushKey, StringComparison.Ordinal))
         {
-            if (SetIfChanged(surface, chip.Label))
-                surface.SetResourceReference(TextBlock.ForegroundProperty, chip.BrushKey);
-            if (!string.Equals(surface.ToolTip as string, tooltip, StringComparison.Ordinal))
-                surface.ToolTip = tooltip;
+            surface.SetValue(PaintedBrushKeyProperty, chip.BrushKey);
+            surface.SetResourceReference(TextBlock.ForegroundProperty, chip.BrushKey);
         }
+        if (!string.Equals(surface.ToolTip as string, tooltip, StringComparison.Ordinal))
+            surface.ToolTip = tooltip;
     }
 
     /// <summary>Repaint the chip from the events that already exist — a translation finishing, LIVE
@@ -1472,28 +1517,6 @@ public partial class MainWindow : Window
     {
         if (RefreshEngineChip() && !_countdownTimer.IsEnabled) _countdownTimer.Start();
     }
-
-    /// <summary>The compact overlay's half of AC 1: the chip is a <b>prefix of the one status
-    /// line</b>, "shown only when not healthy" — the window is 360 px wide and a healthy chain needs
-    /// no words there.
-    ///
-    /// <para>It is suppressed a second time when the chip carries a countdown, and that is E7.S2's
-    /// AC 4 again: the overlay has ONE line, the status half of it is already stepping a clock while
-    /// the chain is paused, and two clocks on one line is exactly what "at most one countdown per
-    /// window" forbids. <c>MainWindow</c> composes, <c>CompactOverlay</c> renders (I2).</para>
-    ///
-    /// <para>An empty status stays empty: <c>SetStatus</c> collapses the line on an empty string,
-    /// and a chip prefix must not resurrect a line the overlay had deliberately hidden.</para></summary>
-    internal string OverlayLine(string status)
-        => OverlayLine(ChipFor(TranslationChains.EngineStatus(_settings, _readChain, _gateStateKnown)),
-                       status);
-
-    /// <summary>The composition itself, pure, so all eight states can be asserted without a window
-    /// (the impure half above is one line: which chip).</summary>
-    internal static string OverlayLine(EngineChip chip, string status)
-        => string.IsNullOrEmpty(status) || chip.IsHealthy || chip.HasClock
-            ? status
-            : chip.Label + "  " + status;
 
     /// <summary>The repaint guard (AC 3, UX hint 7): assign <c>.Text</c> only when the rendered
     /// string differs from what the surface already shows. Above 90 s the band changes only on a

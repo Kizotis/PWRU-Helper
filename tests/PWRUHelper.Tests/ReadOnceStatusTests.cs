@@ -536,7 +536,11 @@ public class ReadOnceStatusTests
         Assert.NotNull(m);
 
         Assert.Equal(typeof(Task<(int, TranslationException?)>), m!.ReturnType);
-        Assert.Equal(new[] { typeof(List<string>), typeof(string), typeof(CancellationToken) },
+        // The region is the third parameter since the resume rule: the rows this method appends are
+        // registered with the LIVE dedup when the read overlapped the area a resume will use, and
+        // the decision needs the rectangle that was read. ct stays last.
+        Assert.Equal(new[] { typeof(List<string>), typeof(string), typeof(System.Drawing.Rectangle),
+                             typeof(CancellationToken) },
                      m.GetParameters().Select(p => p.ParameterType).ToArray());
 
         // The tuple element names, which are the readable half of the contract.
@@ -551,7 +555,7 @@ public class ReadOnceStatusTests
 
         // …and the caller really branches on it, rather than awaiting and then printing Done.
         var ocr = Code(File.ReadAllText(RepoFile("Views/MainWindow.Ocr.cs")));
-        Assert.Contains("var (translated, error) = await TranslateSentencesInto(sentences, target, cts.Token);",
+        Assert.Contains("var (translated, error) = await TranslateSentencesInto(sentences, target, rect, cts.Token);",
                         ocr, StringComparison.Ordinal);
         // E5-g added the fourth argument: the "{t}" of a paused read, rendered by the code-behind
         // because formatting a countdown stays out of Services/ (I2). E7.S1 / amendment A7 added the
@@ -581,6 +585,61 @@ public class ReadOnceStatusTests
     // =============================================================================================
     //  A8 / ruling E5-g — the cancel affordance: the read-once button IS the cancel (E7.S5)
     // =============================================================================================
+
+    /// <summary>
+    /// <b>What a read-once may tell the LIVE dedup, driven for real.</b> The resumed loop stays
+    /// silent about anything remembered here, so a line may only be remembered when the player can
+    /// READ it: the three exclusions are three ways of showing him nothing while suppressing it.
+    ///
+    /// <list type="number">
+    /// <item>A line the read did not translate — a per-line "(…)", a give-up row, a cancelled row.
+    ///       Remembering one hides a message that says, on screen, that it was never translated.</item>
+    /// <item>A row the <c>MaxHistory</c> trim evicted while the same loop appended the later ones
+    ///       (a read of more than 50 sentences does that to itself): nothing on screen at all.</item>
+    /// <item>A line the LIVE filter would have dropped. The loop feeds <c>_dedup.Next</c> through
+    ///       <c>LooksLikeText</c>, so an entry it can never match on purpose only spends the
+    ///       200-entry memory and absorbs fuzzy matches by accident.</item>
+    /// </list>
+    ///
+    /// <para>Through the real window, because the last two conditions are questions about
+    /// <c>_ocrItems</c> and about the sliders' shipped defaults — a pure-function version would
+    /// prove neither.</para>
+    /// </summary>
+    [Fact]
+    public void Only_a_translated_line_that_is_still_on_the_feed_is_remembered_for_a_resume()
+    {
+        using var temp = new TempSettings(NoSettings);
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+            var sentences = new List<string>
+            {
+                "Reyna: В ХХ4-1 Ежа прист",     // translated, on the feed        → remembered
+                "Wups: В ТС легу 2ДД",          // the engines did not come back  → not
+                "proBlemka: ТС ЛЕГА 2 ДД",      // evicted by the MaxHistory trim → not
+                "!!!",                          // no letters: below LooksLikeText → not
+            };
+            var items = sentences.Select(_ => new OcrResultItem()).ToList();
+            foreach (var it in items) window.LiveItems.Add(it);
+            window.LiveItems.Remove(items[2]);          // …the trim, in one line
+
+            var translations = new List<string>
+            {
+                "Reyna: at XX4-1, Ezha arrived",
+                $"({UserMessages.RetryGaveUpRow()})",
+                "proBlemka: LFM legendary 2 DD",        // a real translation — only the eviction excludes it
+                "!!!",
+            };
+
+            var m = typeof(MainWindow).GetMethod("LinesToRememberAsShown",
+                                                 BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(m);
+            var shown = (List<string>)m!.Invoke(window, new object[] { sentences, items, translations })!;
+
+            Assert.Equal(new[] { sentences[0] }, shown);
+        });
+    }
 
     /// <summary>
     /// <b>The gesture, on both surfaces.</b> E5.S4 wired three cancel routes and shipped none of them

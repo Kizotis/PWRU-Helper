@@ -337,6 +337,22 @@ internal static class UserMessages
     public static string LiveStarted()
         => "🔴 Live — watching the area. Translations appear when new text shows up.";
 
+    /// <summary>§3.2's <b>running</b> row, and it is the line a LIVE session spends almost all of
+    /// its time on: the loop is reading the area and nothing new has shown up yet.
+    ///
+    /// <para><b>It carries no counters</b> (the owner's report). It used to be
+    /// <c>"🔴 Live — watching (check #7, sees 3 line(s), waiting for new text)…"</c>, with a
+    /// sibling <c>"🔴 Live — 12 message(s) so far (check #7)."</c> after a tick that translated
+    /// — three numbers that change every 700 ms and that the player can do nothing with. A status
+    /// line says what STATE the app is in (§1's first principle), and the state is the same whether
+    /// it is check 7 or check 700: the feed is the record of how many messages arrived, and the
+    /// ● / ○ heartbeat beside it is the proof that checks are still happening.</para>
+    ///
+    /// <para>One sentence for the tick that saw nothing new AND for the tick that has just finished
+    /// translating, because they are one state — the loop is watching. 32 characters, so it also
+    /// fits the overlay's 40-character line; <c>SetScreenStatus</c> writes both surfaces.</para></summary>
+    public static string LiveWatching() => "🔴 Live — watching for new text…";
+
     /// <summary>§3.2's "one failed read, still trying" row, which replaces "Live hiccup ({reason}) —
     /// retrying…". The reason is deliberately gone: a hiccup the loop is already retrying is a
     /// STATE, and §1's first principle is one message per state — the sentence that names a failing

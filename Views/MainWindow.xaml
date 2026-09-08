@@ -307,12 +307,10 @@
                                  both forms, exactly as SetKeyTestLabels does for the key boxes. -->
                             <Button x:Name="SelectAreaButton" Style="{StaticResource AccentButton}"
                                     Padding="10,3" Click="SelectArea_Click"/>
-                            <!-- The provider chip, read path. It sits BESIDE LiveIndicator and not
-                                 inside it: LiveIndicator is Collapsed unless LIVE is running, and
-                                 the chip is the app's only always-on indicator (§2.2). -->
-                            <TextBlock x:Name="ReadChip" VerticalAlignment="Center" Margin="12,0,0,0"
-                                       Foreground="{StaticResource TextMutedBrush}"
-                                       AutomationProperties.Name="Translation engine status"/>
+                            <!-- No chip here. It used to sit beside LiveIndicator, but PaintEngineChip
+                                 writes every surface from ONE EngineChip, so this tab rendered the same
+                                 words twice, a hand apart. The Translator tab's chip is WriteChip, above;
+                                 the always-on placement while playing is the compact overlay's header. -->
                             <TextBlock x:Name="LiveIndicator" Text="● LIVE" Foreground="{StaticResource AccentBrush}"
                                        FontWeight="Bold" VerticalAlignment="Center" Margin="12,0,0,0" Visibility="Collapsed"/>
                             <Button x:Name="StopLiveButton" Content="■ Stop" Style="{StaticResource GhostButton}"

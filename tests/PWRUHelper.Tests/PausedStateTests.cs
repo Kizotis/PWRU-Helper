@@ -489,10 +489,10 @@ public class PausedStateTests
     [Fact]
     public void The_recovery_notice_rides_on_the_next_running_line_and_replaces_nothing()
     {
-        Assert.Equal("🔴 Live — watching (check #7)…  Back on Google.",
-                     MainWindow.WithNotice("🔴 Live — watching (check #7)…", "Back on Google."));
-        Assert.Equal("🔴 Live — watching (check #7)…",
-                     MainWindow.WithNotice("🔴 Live — watching (check #7)…", null));
+        Assert.Equal("🔴 Live — watching for new text…  Back on Google.",
+                     MainWindow.WithNotice("🔴 Live — watching for new text…", "Back on Google."));
+        Assert.Equal("🔴 Live — watching for new text…",
+                     MainWindow.WithNotice("🔴 Live — watching for new text…", null));
 
         using var temp = new TempSettings(NoSettings);
 
@@ -554,8 +554,8 @@ public class PausedStateTests
         Assert.Contains("…  ", line, StringComparison.Ordinal);
 
         // A pair that fits is joined untouched — the bound is a ceiling, not a formatter.
-        Assert.Equal("🔴 Live — watching (check #7)…  Back on Google.",
-                     MainWindow.WithNotice("🔴 Live — watching (check #7)…", "Back on Google."));
+        Assert.Equal("🔴 Live — watching for new text…  Back on Google.",
+                     MainWindow.WithNotice("🔴 Live — watching for new text…", "Back on Google."));
 
         // Nothing to ride on: the notice is the line, rather than two spaces and a sentence.
         Assert.Equal("Back on Google.", MainWindow.WithNotice("", "Back on Google."));

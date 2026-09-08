@@ -91,13 +91,51 @@ public sealed class LiveDedup
         foreach (var x in confirmed)
         {
             outLines.Add(x.line);
-            var e = BestMatch(x.sig, x.digits, matchThreshold);
-            if (e != null) e.LastSeen = _tick;
-            else _seen.Add(new Entry { Sig = x.sig, Digits = x.digits, LastSeen = _tick });
+            Remember(x.sig, x.digits, matchThreshold);
         }
 
         Prune();
         return outLines;
+    }
+
+    /// <summary>
+    /// Remember lines that reached the feed WITHOUT coming through <see cref="Next"/> — today, the
+    /// ones a read-once appended while the loop was stopped — so that resuming the loop does not
+    /// translate and append them a second time.
+    ///
+    /// <para>It is the other half of "the feed survives a resume" (<c>MainWindow.StartLive</c>): the
+    /// dedup's memory is what makes keeping the feed safe, and a read-once puts rows in that feed
+    /// which this filter has never heard of. Every line handed here is a line that is ON the feed,
+    /// translated — so a later frame that matches one of them is a message the player can already
+    /// read, and skipping it is the de-duplication, not a loss.</para>
+    ///
+    /// <para><b>No frame is invented.</b> This does not touch <c>_tick</c> and does not touch the
+    /// confirmation buffer: the entries are stamped with the CURRENT frame index, exactly as an
+    /// emitted line is, so they age out on the same clock as everything the loop saw itself. A
+    /// stopped loop draws no frames, which is why "the read happened between two frames" is an
+    /// honest thing to say — and why the caller does not have to know how the ageing works.</para>
+    /// </summary>
+    public void RememberAlreadyShown(IReadOnlyList<string> lines, double matchThreshold)
+    {
+        foreach (var l in lines)
+        {
+            var sig = TextMatching.Signature(l);
+            if (sig.Length == 0) continue;              // pure punctuation/emoji, as in Next
+            Remember(sig, TextMatching.MeaningfulDigits(l), matchThreshold);
+        }
+        Prune();
+    }
+
+    /// <summary>Mark one signature as a message that is being shown: refresh the entry that already
+    /// stands for it, or record a new one. Shared by the emit loop and by
+    /// <see cref="RememberAlreadyShown"/> so the two cannot come to remember a line differently —
+    /// the resume path depends on a read-once's line being remembered the same way the loop's own
+    /// would have been.</summary>
+    private void Remember(string sig, string digits, double threshold)
+    {
+        var e = BestMatch(sig, digits, threshold);
+        if (e != null) e.LastSeen = _tick;
+        else _seen.Add(new Entry { Sig = sig, Digits = digits, LastSeen = _tick });
     }
 
     /// <summary>
