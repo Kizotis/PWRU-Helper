@@ -127,7 +127,7 @@ Work while you're in the game.
 - **Game chat takes 78 characters.** Longer translations are marked where to cut; the overlay splits them into numbered blocks.
 - **Black capture in full-screen?** Play windowed / borderless, or switch *Capture method* to *Windows Graphics*.
 - **Something looks off after an update?** Screen OCR tab → **↺ Reset to recommended settings**.
-- **Add your own phrases or slang:** edit `phrases.json`, `slang.json` or `squad.json` next to the app (or in `%AppData%\PWRUHelper`).
+- **Add your own phrases or slang:** edit `phrases.json`, `slang.json` or `squad.json` next to the app (or in `%AppData%\PWRUHelper`). An update that ships a newer list replaces your copy and keeps yours next to it as `.bak`, so nothing you wrote is lost.
 - **Problem?** About tab → **📋 Copy error report** and paste it to me on Discord.
 
 ---
