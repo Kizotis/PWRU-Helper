@@ -256,6 +256,19 @@ public partial class CompactOverlay : Window
             reading ? UserMessages.CancelReadLabel() : UserMessages.ReadOnceLabel());
     }
 
+    /// <summary>The chip, in this window's header — <b>rendered, never composed</b>. The one
+    /// <see cref="EngineChip"/> <c>MainWindow.RefreshEngineChip</c> built for the whole app is handed
+    /// here by <c>MainWindow.PaintEngineChip</c>, exactly as <see cref="SetStatus"/> and
+    /// <see cref="SetPaused"/> are handed their facts (I2): this window learns nothing about tiers,
+    /// pauses or countdowns and could not disagree with the Translator tab if it tried.
+    ///
+    /// <para>The write goes through <c>MainWindow.PaintChipSurface</c> — the SAME method that paints
+    /// the main window's chip — so the repaint guard, the <c>SetResourceReference</c> foreground
+    /// (never a literal colour, UX-DR18) and the <c>string</c> tooltip that keeps <c>Theme.xaml</c>'s
+    /// dark <c>ToolTip</c> style applying are one implementation and not two.</para></summary>
+    internal void SetEngineChip(EngineChip chip, string tooltip)
+        => MainWindow.PaintChipSurface(EngineChipText, chip, tooltip);
+
     private void Expand_Click(object sender, RoutedEventArgs e) => _owner.ExitCompactMode();
 
     private void ReplyBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)

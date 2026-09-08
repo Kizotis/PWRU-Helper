@@ -391,12 +391,15 @@ public class LivePauseTests
 
     /// <summary>
     /// The heartbeat freezes while paused (AC 1 / the R-02 zombie indicator): the skipped branch
-    /// does not write <c>LiveIndicator</c> and does not advance <c>_liveTicks</c>, which is the one
-    /// counter that drives BOTH the ● / ○ blink and the "check #n" a player reads as progress. A
-    /// paused app made no check, so neither moves.
+    /// does not write <c>LiveIndicator</c> and does not advance <c>_liveTicks</c>. A paused app made
+    /// no check, so the ● / ○ blink does not move.
+    ///
+    /// <para><c>_liveTicks</c> used to drive a second surface too — the "check #n" a player read as
+    /// progress. That counter is gone from the status line (the owner: it was noise), so the blink
+    /// is now the field's only reader; the freeze itself is unchanged and is what this pins.</para>
     /// </summary>
     [Fact]
-    public void The_heartbeat_and_the_check_number_freeze_while_paused()
+    public void The_heartbeat_freezes_while_paused()
     {
         var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
         var body = BracedBlock(live, live.IndexOf("if (pause.AllPaused)", StringComparison.Ordinal));

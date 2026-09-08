@@ -303,7 +303,7 @@ public partial class MainWindow
             // ReadOnceSummary reaches it only when every line read carries a translation, which is
             // UX hint 4 and the whole of DoD V1.5. The counts come from what the rows ACTUALLY got,
             // never from lines — reading N lines has never meant translating N lines.
-            var (translated, error) = await TranslateSentencesInto(sentences, target, cts.Token);
+            var (translated, error) = await TranslateSentencesInto(sentences, target, rect, cts.Token);
             // _liveCts is amendment A7's fork: the E5.S3 retry queue is drained by the LIVE
             // loop, so "they fill in when one is back" is a promise only a read taken with the loop
             // running can keep. (It is null on every path today — read-once stops the loop first —
@@ -431,7 +431,7 @@ public partial class MainWindow
     /// <c>Done — N line(s) translated.</c> print over a list of "(no internet connection)" rows
     /// (V1.5, amplifier A7).</para></summary>
     private async Task<(int Translated, TranslationException? Error)> TranslateSentencesInto(
-        List<string> sentences, string target, CancellationToken ct)
+        List<string> sentences, string target, System.Drawing.Rectangle region, CancellationToken ct)
     {
         // APPENDS to the feed — it used to Clear() it first. Reading once from the compact overlay
         // is meant to drop an answer INTO the live flow you are watching, not to wipe the flow to
@@ -516,6 +516,41 @@ public partial class MainWindow
         }
         for (int i = 0; i < items.Count && i < translations.Count; i++)
             items[i].TranslationBody = translations[i];
+
+        // ---- and only NOW is the LIVE dedup told what this read put on the feed -------------------
+        // The other half of "resuming LIVE keeps the feed" (StartLive). The resumed loop reuses the
+        // dedup it had, which is what stops it re-translating the chat it has already done — but a
+        // read-once appends rows that dedup has never heard of, so without this the owner's own flow
+        // (LIVE, Read once, resume) shows those messages twice.
+        //
+        // THE INVARIANT IS "registered ⟸ TRANSLATED", and it is not the same as "appended". A line
+        // may license the loop to stay silent about a later frame only if the player can READ it on
+        // the feed: a row that says "(not translated — the engines did not come back)" is a message
+        // he has not been told, and remembering it would suppress it for as long as it stays on
+        // screen — the invisible failure, and the one direction this may not fail in. So the call
+        // sits below the write above and below both catches: a read that failed, was cancelled or
+        // was paused reaches its own exit and registers NOTHING, and the player gets the duplicate.
+        // (An earlier version of this stood before the await, on "registered ⟺ appended". A network
+        // blip mid-read was enough to blind the resumed loop to every line of it, permanently.)
+        //
+        // What is handed over is narrowed one more time, by LinesToRememberAsShown: on the feed
+        // still, and readable by the LIVE filter. Both are the same rule as the sentence above —
+        // nothing may be remembered that the player cannot see.
+        //
+        // The region test is INTERSECTION, not equality, and that is deliberate. The ⟳ read-once the
+        // player actually uses (SelectAreaAndReadOnceAsync, from the overlay) opens the picker, so
+        // the rectangle he drags over the chat is never pixel-equal to the saved LIVE one and an
+        // equality test would close nothing at all on the path this exists for; only Ctrl+Alt+R
+        // reads the saved area exactly. Overlapping it is the evidence that the two reads are about
+        // the same text — a read of a quest window or an item tooltip does not touch the chat box,
+        // and with no such evidence nothing is registered and the player gets the duplicate rather
+        // than a silent skip.
+        //
+        // It asks _settings.LastLiveRegion because that IS the area a resume starts from
+        // (ToggleLive → TryGetSavedRegion), and therefore the area _dedup's memory is about.
+        if (ReadOverlapsTheLiveArea(region))
+            _dedup.RememberAlreadyShown(LinesToRememberAsShown(sentences, items, translations),
+                                        SensitivityThreshold());
         // Not items.Count, and not sentences.Count: TranslateBodiesAsync fills a gap with the
         // (expanded) source text rather than a null, and a provider's per-line fallback (E3.S8)
         // returns "(…)" placeholders for the lines it could not do. ReadOnceSummary holds the app's
@@ -538,6 +573,57 @@ public partial class MainWindow
         ct.ThrowIfCancellationRequested();
         return new TranslationException(kind, UserMessages.Sentence(kind) ?? ex.Message);
     }
+
+    /// <summary>Which of a read-once's lines the LIVE dedup may be told about: the ones the player
+    /// can actually READ on the feed. Three conditions, and every one of them is the same rule —
+    /// a remembered line makes the resumed loop stay silent about a later frame, so it may only ever
+    /// stand for a message that is on screen, translated.
+    ///
+    /// <list type="number">
+    /// <item><b>It really is a translation.</b> <see cref="ReadOnceSummary.IsTranslation"/> is the
+    ///       app's one definition of that (the very test <c>CachingTranslator.IsCacheable</c>
+    ///       applies before it stores anything): a per-line "(…)" placeholder, a give-up row and a
+    ///       cancelled row are all failures wearing a row's clothes. Read from
+    ///       <paramref name="translations"/> and not from the row, because the row's own "…" would
+    ///       pass that test — it is non-empty and unparenthesised on purpose (I4).</item>
+    /// <item><b>The row survived.</b> The append loop trims the feed to <c>MaxHistory</c>, so a read
+    ///       returning more than 50 sentences has already evicted its own first rows; remembering
+    ///       one of those would suppress a message with nothing on screen to justify it.
+    ///       <c>Contains</c> on a class with no <c>Equals</c> is reference equality, which is the
+    ///       comparison meant — the same one the retry drain uses.</item>
+    /// <item><b>The LIVE filter would keep it.</b> The loop feeds <c>_dedup.Next</c> lines that
+    ///       passed <c>LooksLikeText(l, MinFragmentLetters())</c>; read-once keeps everything with a
+    ///       character in it. Registering the difference would put entries in a 200-slot memory that
+    ///       the loop can never match on purpose, and only ever absorb a fuzzy match by
+    ///       accident.</item>
+    /// </list>
+    ///
+    /// <para>The three lists are index-parallel by construction (<c>TranslateSentencesInto</c> builds
+    /// them together from <paramref name="sentences"/>); the bound is belt and braces on that.</para></summary>
+    private List<string> LinesToRememberAsShown(List<string> sentences, List<OcrResultItem> items,
+                                                List<string> translations)
+    {
+        int minLetters = MinFragmentLetters();
+        var shown = new List<string>();
+        for (int i = 0; i < items.Count && i < translations.Count && i < sentences.Count; i++)
+            if (ReadOnceSummary.IsTranslation(translations[i])
+                && _ocrItems.Contains(items[i])
+                && TextMatching.LooksLikeText(sentences[i], minLetters))
+                shown.Add(sentences[i]);
+        return shown;
+    }
+
+    /// <summary>Does a read-once rectangle overlap the area LIVE will resume on? The one question
+    /// behind telling <c>_dedup</c> about a read-once's lines (see <c>TranslateSentencesInto</c>):
+    /// overlapping the saved LIVE box is the evidence that the two reads are about the same text.
+    ///
+    /// <para>Pure-ish and separate so the rule is one readable line rather than three inside a
+    /// translation method, and so a reader can see what it does NOT do: it never writes settings,
+    /// unlike <c>TryGetSavedRegion</c>, which drops a stale region as a side effect. A read is not
+    /// the moment to decide that the player's saved LIVE area has expired.</para></summary>
+    private bool ReadOverlapsTheLiveArea(System.Drawing.Rectangle read)
+        => _settings.LastLiveRegion is { Length: 4 } r
+           && read.IntersectsWith(new System.Drawing.Rectangle(r[0], r[1], r[2], r[3]));
 
     /// <summary>Ctrl+Alt+R: read the saved area once (no live loop). If live is already
     /// running we leave it alone; if there's no saved area we surface the picker.</summary>

@@ -51,7 +51,8 @@ public partial class MainWindow
     {
         if (_selectingRegion || _readingOnce) return;   // a read-once owns the shared OCR engine
         if (_liveCts != null) { StopLive(); return; }
-        if (TryGetSavedRegion(out var rect)) { StartLive(rect); return; }
+        // RESUME — the same area, so the feed the player is reading survives (see StartLive).
+        if (TryGetSavedRegion(out var rect)) { StartLive(rect, freshSession: false); return; }
 
         // Nothing saved (or it was off-screen) — bring the full window up to pick an area.
         if (_overlay is { IsVisible: true }) ExitCompactMode(); else BringToFront();
@@ -84,12 +85,26 @@ public partial class MainWindow
         if (_liveCts != null) { StopLive(); return; }
 
         var region = await SelectRegionAsync();
-        if (region is { } rect) StartLive(rect);
+        // A NEW area was just dragged — that is a new session, and it starts with an empty feed.
+        if (region is { } rect) StartLive(rect, freshSession: true);
     }
 
     private void ResumeLive_Click(object sender, RoutedEventArgs e) => ToggleLive();
 
-    private void StartLive(System.Drawing.Rectangle rect)
+    /// <summary>Start the loop on <paramref name="rect"/>.
+    ///
+    /// <para><paramref name="freshSession"/> is the whole of "does this wipe the chat", and it is a
+    /// distinction the UI already draws: <b>selecting an area</b> (▶ on the Screen OCR tab, which
+    /// opens the picker) starts a new session, while <b>resuming the saved one</b> (↻ Resume last
+    /// area, ▶ Live on the overlay, Ctrl+Alt+L — all three go through <see cref="ToggleLive"/>)
+    /// carries on the one that was interrupted.</para>
+    ///
+    /// <para>The owner's report is the resume half: LIVE running, Read once, start again — and
+    /// every line he had was gone, with no way to carry on without losing the chat. Read-once had
+    /// already settled the same question the same way (<c>MainWindow.Ocr.cs</c>: "wiping the history
+    /// to show one answer threw away the live lines the user was reading — most obviously from the
+    /// overlay, where the feed IS the window").</para></summary>
+    private void StartLive(System.Drawing.Rectangle rect, bool freshSession)
     {
         if (_readingOnce) return;   // a read-once is driving the shared OCR engine — don't race it
 
@@ -120,15 +135,47 @@ public partial class MainWindow
         if (!IsOcrReady()) { ShowOcrPackNeeded("then start live again — your area is remembered."); return; }
 
         _liveRegion = rect;
-        _dedup = new();
-        _liveTicks = 0;
-        _ocrItems.Clear();
-        // The feed has just been emptied, so every row the queue could be holding is gone. Clearing
-        // it here as well as in StopLive is belt and braces on the one property that matters: an
-        // entry can only ever point at a row that is on the screen in front of the player. What it
-        // was holding is discarded rather than given up (StopLive does the opposite) for that same
-        // reason: there is nothing left to write on — _ocrItems.Clear() ran on the line above.
-        _pendingRetry.Clear();
+        _liveTicks = 0;   // the heartbeat's phase; nothing on screen counts ticks any more
+
+        if (freshSession)
+        {
+            // A new area is a new session: the lines on screen are about somewhere else, and a
+            // dedup still remembering the OLD area would only suppress the new one's first frames.
+            // The two are cleared TOGETHER, and that is not a detail — see the paragraph below.
+            _ocrItems.Clear();
+            _dedup = new();
+        }
+        // …and on a RESUME neither is touched, which is the same decision read the other way round.
+        // _dedup is what remembers the lines already translated: hand the loop a fresh one while the
+        // feed survives and every message still visible in the game chat reads as new and is
+        // appended a SECOND time — the duplicated row §9.3 calls worse than the outage. Keeping the
+        // dedup is not an optimisation here, it is what makes keeping the feed safe.
+        //
+        // Its memory is stale by however long the player was away, and that is safe in the one
+        // direction that matters: LiveDedup ages by FRAMES (ReappearAfterFrames), and a stopped loop
+        // draws none — so every line it holds still counts as "on screen" when the loop comes back,
+        // and it errs towards saying nothing rather than towards saying it twice. The narrow cost is
+        // a message that scrolled off AND was re-posted during the gap: it is read as still-here and
+        // skipped. A missed re-post is a line the player can still read in the game; a duplicated
+        // feed is a line he has to read twice in ours.
+        //
+        // The queue is cleared on BOTH paths — StopLive has already emptied and answered it on every
+        // route that reaches here, so this stays belt and braces on the one property that matters:
+        // an entry may only ever point at a row that is in front of the player. What the surviving
+        // feed changes is what an entry is worth on the way out. With the feed emptied there was
+        // nothing left to write on and dropping it silently was right; a row that is still on screen
+        // would instead sit on "…" for ever with no loop left to fill it in, so it is given up,
+        // exactly as StopLive gives up the ones it finds. On a fresh session _ocrItems was emptied
+        // in the arm above, nothing is found, and the behaviour is what it always was.
+        //
+        // It is NOT what keeps A7's "…" out of the feed, though, and reading it that way is how a
+        // hole stayed open: the queue is empty on every route into this method, so this loop finds
+        // nothing on either path. Every row is finished where it is answered — AppendLinesToHistory
+        // writes or gives up each one of its own, the drain does the same, and ■ Stop empties the
+        // queue — which is what makes "no row waits for a loop that ended" true.
+        foreach (var entry in _pendingRetry.Clear())
+            if (_ocrItems.Contains(entry.Row)) GiveUpRow(entry.Row);
+
         SetLiveUi(true);
         MainTabs.SelectedIndex = TabTranslator;
         SetScreenStatus(UserMessages.LiveStarted());
@@ -241,12 +288,14 @@ public partial class MainWindow
         // not stretch to a notice, so it is the main window's line that carries it.
         ScreenReadStatus.Text = WithNotice(msg, _stateNotice);
         _stateNotice = null;
-        // The overlay's third placement of the chip (E7.S3 AC 1): it has no TextBlock of its own
-        // there — the window is 360 px wide — so MainWindow composes "{chip}  {status}" and the
-        // overlay renders it (I2). OverlayLine returns the status untouched when the chain is
-        // healthy ("shown only when not healthy") and when the chip is carrying a countdown, which
-        // is E7.S2's AC 4: one line, one clock.
-        _overlay?.SetStatus(OverlayLine(msg));
+        // The status, and ONLY the status. This used to be OverlayLine(msg), which prefixed the
+        // line with the engine chip whenever the chain was degraded — written for an overlay that
+        // had nowhere else to put it. That window now carries a real chip in its header, painted
+        // from the same EngineChip by PaintEngineChip, two centimetres from this line: the prefix
+        // had become the same words twice on one 360 px window, which is the duplication the
+        // Translator tab's second chip was removed for (UX-DR19). It said nothing the header does
+        // not — same label, same source — so nothing had to move to make room for its removal.
+        _overlay?.SetStatus(msg);
     }
 
     /// <summary>§3.2's "resumed" row, as a join: <i>the normal running line, plus §3.5's one-time
@@ -378,10 +427,11 @@ public partial class MainWindow
                     pausedWait = LiveTickPolicy.BackoffWaitMs(CurrentLiveIntervalMs(), backoffSteps);
                     backoffSteps = LiveTickPolicy.NextBackoffSteps(backoffSteps, LiveTickOutcome.Paused);
 
-                    // _liveTicks is NOT advanced, and that one decision covers both things it drives:
-                    // the ● / ○ heartbeat freezes (a blinking indicator over a stopped loop is the
-                    // R-02 zombie, at exactly the moment it would matter most), and the "check #n"
-                    // the player reads as progress does not count a check that never happened.
+                    // _liveTicks is NOT advanced, so the ● / ○ heartbeat freezes: a blinking
+                    // indicator over a stopped loop is the R-02 zombie, at exactly the moment it
+                    // would matter most. (It used to freeze a second thing too, the "check #n" the
+                    // player read as progress; that counter is gone — see UserMessages.LiveWatching
+                    // — and the heartbeat is now the only reader of this field.)
                     // The fuller "○  LIVE (paused)" form and the overlay's own 600 ms blink timer
                     // are E7.S4's — this loop does not reach into CompactOverlay.
                     //
@@ -485,16 +535,14 @@ public partial class MainWindow
                         await AppendLinesToHistory(confirmed, target, ct);
                         if (ct.IsCancellationRequested) break;
                         outcome = LiveTickOutcome.Translated;   // AppendLinesToHistory throws on failure
-                        SetScreenStatus($"🔴 Live — {_ocrItems.Count} message(s) so far (check #{_liveTicks}).");
                     }
-                    else
-                    {
-                        // Reassure the user it's really working even before the first message
-                        // (a calm chat can be silent for minutes) — and show it's reading text.
-                        SetScreenStatus(_ocrItems.Count == 0
-                            ? $"🔴 Live — watching (check #{_liveTicks}, sees {lines.Count} line(s), waiting for new text)…"
-                            : $"🔴 Live — {_ocrItems.Count} message(s) so far (check #{_liveTicks}).");
-                    }
+                    // ONE running line for both arms, and it counts nothing (the owner's report):
+                    // the message total and the check number changed every 700 ms and said the same
+                    // thing every time — LIVE is running. A tick that has just translated is in the
+                    // same state as a tick that saw nothing new: watching. The feed already says how
+                    // many messages arrived and the ● / ○ heartbeat says the checks are still
+                    // happening, so nothing is lost but the noise on the line the player reads.
+                    SetScreenStatus(UserMessages.LiveWatching());
                     // ONE outcome, both counters. `consecutiveErrors = 0` used to sit here (and,
                     // before E5.S1, at the end of the whole try) and ran on every non-throwing tick
                     // — empty ones included — so a calm chat forgave a real failure streak between
@@ -797,9 +845,27 @@ public partial class MainWindow
             // increment and the status line its sentence, whichever branch above ran.
             throw;
         }
+        // ---- every row this batch created gets an ending, INCLUDING on a cancel ------------------
+        // This used to be `if (ct.IsCancellationRequested) return;` on the line above, and it left a
+        // row that had just been answered stuck on "…" for ever: ■ Stop, a window close or the
+        // auto-stop landing between the response arriving and this continuation running is enough,
+        // and a fully cached batch makes that window almost instant. StartLive's unconditional
+        // _ocrItems.Clear() used to sweep those rows on the next start — the resume path deliberately
+        // does not clear the feed any more, and the dedup has remembered the line, so nothing was
+        // ever coming for it and nothing would ever ask again. That is amplifier A7 exactly, the
+        // "…" that never resolves, and there is no "clear the feed" button to escape it with.
+        //
+        // So the answer is WRITTEN even if the player has stopped since — the same rule the drain
+        // already follows ("the answer was paid for and writing it in place costs nothing"), and the
+        // rows are already on both feeds, so writing them scrolls nothing and re-orders nothing. A
+        // row with no answer to write (a short result list — TranslateBodiesAsync fills its gaps, so
+        // this is belt and braces) is given up instead: nothing is coming for it either way.
+        for (int i = 0; i < items.Count; i++)
+            if (i < translations.Count) items[i].TranslationBody = translations[i];
+            else GiveUpRow(items[i]);
+        // The scroll is the one thing a cancel still skips: the player has stopped, and moving the
+        // view under his eyes is not part of finishing a row he no longer asked for.
         if (ct.IsCancellationRequested) return;
-        for (int i = 0; i < items.Count && i < translations.Count; i++)
-            items[i].TranslationBody = translations[i];
         ResultsScroller?.ScrollToEnd();
     }
 

@@ -17,16 +17,29 @@
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <!-- ===== Header (drag to move) ===== -->
-            <Grid Grid.Row="0" x:Name="HeaderBar" Background="Transparent"
-                  MouseLeftButtonDown="Header_MouseDown">
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="PWRU" FontWeight="Bold" Foreground="{StaticResource AccentBrush}"/>
-                    <TextBlock Text=" Helper" FontWeight="Bold" Foreground="{StaticResource TextBrush}"/>
-                    <TextBlock x:Name="LiveDot" Text="  ●  LIVE" Foreground="{StaticResource AccentBrush}"
-                               FontWeight="Bold" VerticalAlignment="Center" Visibility="Collapsed"/>
-                </StackPanel>
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+            <!-- ===== Header (drag to move) =====
+                 A DOCK PANEL, and it has to be one: this header used to be a single-cell Grid with
+                 a left group and a right group overlapping in the same cell, which is fine only
+                 while their widths happen to add up. They stopped adding up the day the chip
+                 arrived — at the shipped 360 px with LIVE running, "● Google" painted over 40 of
+                 the 45 px of "● LIVE", and at MinWidth 240 the buttons already sat on top of the
+                 title before the chip existed.
+                 Docking makes the header safe BY CONSTRUCTION and in a PRIORITY ORDER a Grid
+                 cannot express: every child gets a rectangle of its own out of what is left, in
+                 declaration order, so what runs out of room is decided here rather than by whose
+                 turn it is to be painted last. Measured (TP-RENDER-09, both widths):
+                   1. the buttons  — interactive, and a column layout pushed them off the window
+                                     edge instead (⤢ ended at x=479 on a 240 px window);
+                   2. ● LIVE       — R-02's promise that the loop is alive, 45 px, fixed;
+                   3. the chip     — trims to an ellipsis, and its full state is one hover away
+                                     and on the status line below;
+                   4. the title    — decoration, and the only thing here the player already knows.
+                 The two title Runs are one TextBlock now for exactly that reason: a StackPanel
+                 does not clip, so its parts would have gone on painting outside their own slot. -->
+            <DockPanel Grid.Row="0" x:Name="HeaderBar" Background="Transparent"
+                       MouseLeftButtonDown="Header_MouseDown">
+                <StackPanel x:Name="HeaderButtons" DockPanel.Dock="Right" Orientation="Horizontal"
+                            VerticalAlignment="Center">
                     <!-- Copy from the deck, not from here (A8): this button becomes the cancel while
                          a read is in flight — see MainWindow.SetReadOnceCancelMode. -->
                     <Button x:Name="ReadOnceButton" Style="{StaticResource GhostButton}" Padding="8,2"
@@ -39,7 +52,25 @@
                             Content="⤢" Click="Expand_Click" ToolTip="Back to the full window"
                             AutomationProperties.Name="Back to the full window"/>
                 </StackPanel>
-            </Grid>
+                <TextBlock x:Name="LiveDot" DockPanel.Dock="Right" Text="  ●  LIVE"
+                           Foreground="{StaticResource AccentBrush}" TextTrimming="CharacterEllipsis"
+                           FontWeight="Bold" VerticalAlignment="Center" Visibility="Collapsed"/>
+                <!-- The provider chip, overlay placement: on the header line, right-hand end, beside
+                     the buttons — the one always-on indicator (§2.2) on the window the player
+                     actually looks at while the game is up. Text, foreground and tooltip are all
+                     written from MainWindow.PaintEngineChip (SetEngineChip below): the main window
+                     composes, this window renders (I2). MaxWidth 130 is the longest label the app
+                     can produce (S8's "● Google (backup) · DeepL quota out", 127.9 px measured), so
+                     a window with room shows the whole state and never a mystery ellipsis. -->
+                <TextBlock x:Name="EngineChipText" DockPanel.Dock="Right" VerticalAlignment="Center"
+                           FontSize="11" MaxWidth="130" TextTrimming="CharacterEllipsis" Margin="8,0,8,0"
+                           Foreground="{StaticResource TextMutedBrush}"
+                           AutomationProperties.Name="Translation engine status"/>
+                <TextBlock x:Name="TitleText" VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"><Run Text="PWRU" FontWeight="Bold"
+                           Foreground="{StaticResource AccentBrush}"/><Run Text=" Helper" FontWeight="Bold"
+                           Foreground="{StaticResource TextBrush}"/></TextBlock>
+            </DockPanel>
 
             <!-- ===== Live status line ===== -->
             <TextBlock x:Name="OverlayStatus" Grid.Row="1" TextWrapping="Wrap" FontSize="11"

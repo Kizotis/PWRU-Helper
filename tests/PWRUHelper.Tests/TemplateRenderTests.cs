@@ -9,6 +9,7 @@ using System.Threading;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -330,6 +331,19 @@ public class TemplateRenderTests
         Assert.Contains("namespace PWRUHelper;", File.ReadAllText(path), StringComparison.Ordinal);
     }
 
+    /// <summary>An overlay attached to the window the way <c>EnterCompactMode</c> attaches one, so
+    /// <c>PaintEngineChip</c> really reaches it — without <c>Show()</c>-ing a 360 px always-on-top
+    /// window on a build agent (CI-3). The field is the seam because the wiring under test is
+    /// "MainWindow paints every surface it has", and a case that called the overlay's own renderer
+    /// would pass with that wiring cut.</summary>
+    private static CompactOverlay AttachOverlay(MainWindow window)
+    {
+        var overlay = new CompactOverlay(window);
+        typeof(MainWindow).GetField("_overlay", BindingFlags.Instance | BindingFlags.NonPublic)!
+                          .SetValue(window, overlay);
+        return overlay;
+    }
+
     private static string RepoFile(string relative)
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
@@ -371,8 +385,15 @@ public class TemplateRenderTests
     ///
     /// <para><b>Three renders with a state loop, not twenty-four windows</b> (CI-4: this collection
     /// is one STA thread with a &lt; 15 s budget). One <c>MainWindow</c>, one layout pass per state,
-    /// and the surfaces are the REAL <c>WriteChip</c> and <c>ReadChip</c> from the XAML — a chip
-    /// renamed or dropped fails here rather than at the user.</para>
+    /// and the surfaces are the REAL <c>WriteChip</c> and the overlay's REAL <c>EngineChipText</c>
+    /// from the XAML — a chip renamed or dropped fails here rather than at the user.</para>
+    ///
+    /// <para>The read path's own chip is gone (it said what <c>WriteChip</c> said, a hand away on
+    /// the same tab); the second placement is the compact overlay's header, and it is driven here
+    /// through the REAL wiring — <c>PaintEngineChip</c> reaching the overlay <c>MainWindow</c>
+    /// holds — rather than by calling the overlay's renderer, so a chip that stops being pushed
+    /// fails here too. The field is set rather than <c>EnterCompactMode</c> called: showing a 360 px
+    /// always-on-top window on a build agent is what CI-3 forbids.</para>
     ///
     /// <para><b>I15, satisfied by construction and asserted anyway.</b> The chip is a plain
     /// <c>TextBlock.Text</c> assignment with no binding at all — that is the deliberate choice, and
@@ -381,13 +402,14 @@ public class TemplateRenderTests
     /// quietly turned into one.</para>
     /// </summary>
     [Fact]
-    public void TP_RENDER_03_the_chip_renders_in_every_state_on_both_main_window_placements()
+    public void TP_RENDER_03_the_chip_renders_in_every_state_on_both_placements()
     {
         using var _ = new TempSettings("""{ "SettingsVersion": 3 }""");
 
         StaTestHost.Run(() =>
         {
             var window = new MainWindow();
+            var overlay = AttachOverlay(window);
 
             var errors = new BindingErrorListener();
             PresentationTraceSources.Refresh();
@@ -399,7 +421,7 @@ public class TemplateRenderTests
                 {
                     window.PaintEngineChip(chip, "Google  ● ready");
 
-                    foreach (var surface in new[] { window.WriteChip, window.ReadChip })
+                    foreach (var surface in new[] { window.WriteChip, overlay.EngineChipText })
                     {
                         surface.Measure(new Size(1000, 1000));
                         surface.Arrange(new Rect(0, 0, 1000, 1000));
@@ -429,37 +451,34 @@ public class TemplateRenderTests
     }
 
     /// <summary>
-    /// The third placement (AC 1): the compact overlay has no chip control — the window is 360 px
-    /// wide — so <c>MainWindow</c> composes <c>"{chip}  {status}"</c> and the overlay renders it.
-    /// Shown <b>only when not healthy</b>, and not at all while the chip is carrying a countdown,
-    /// because the overlay's ONE line is already stepping LIVE's clock then (E7.S2's AC 4).
+    /// The third placement (AC 1) is now a REAL chip, in the overlay's header — so the status line
+    /// below it carries the status and nothing else.
+    ///
+    /// <para>It used to be a composed prefix (<c>MainWindow.OverlayLine</c>, <c>"{chip}  {status}"</c>)
+    /// because that window had no chip control to put the state on. It has one now, painted from the
+    /// same <see cref="EngineChip"/> by <c>PaintEngineChip</c>, a couple of centimetres above: the
+    /// prefix had become the same label twice on one 360 px window — the duplication UX-DR19 names,
+    /// and the same one the Translator tab's second chip was removed for. Both halves are pinned
+    /// here so a revert is loud: the composer is gone, and the loop hands the overlay <c>msg</c>.</para>
     /// </summary>
     [Fact]
-    public void The_overlay_prefixes_its_one_status_line_only_when_the_chain_is_not_healthy()
+    public void The_overlay_status_line_carries_no_chip_prefix_because_the_header_has_a_chip()
     {
-        var states = EveryState().ToList();      // S1..S8, in §2.1's order
-        var healthy = states[0];
-        var backup = states[1];
-        var allPaused = states[4];
-        Assert.True(healthy.IsHealthy && backup.Text.Contains("(backup)") && allPaused.HasClock,
-                    "EveryState() no longer yields S1, S2 and S5 where this case expects them");
+        var main = File.ReadAllText(RepoFile("Views/MainWindow.xaml.cs"));
+        var live = File.ReadAllText(RepoFile("Views/MainWindow.Live.cs"));
 
-        Assert.Equal("Reading…", MainWindow.OverlayLine(healthy, "Reading…"));
-        Assert.Equal("● Google (backup)  Reading…", MainWindow.OverlayLine(backup, "Reading…"));
-        // One clock per window: the status line already has one.
-        Assert.Equal("○ Live paused — back in 0:58",
-                     MainWindow.OverlayLine(allPaused, "○ Live paused — back in 0:58"));
-        // An empty status stays empty — SetStatus collapses the line on it, and a chip prefix must
-        // not resurrect a line the overlay had deliberately hidden.
-        Assert.Equal("", MainWindow.OverlayLine(backup, ""));
+        Assert.DoesNotContain("string OverlayLine(", main);
+        Assert.Contains("_overlay?.SetStatus(msg);", live, StringComparison.Ordinal);
+        // The header chip is the surface that carries the state now, and it is TOLD (I2).
+        Assert.Contains("_overlay?.SetEngineChip(chip, tooltip);", main, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// The overlay end of the same rule, through the real <c>SetStatus</c>: a prefixed line is
-    /// visible and carries both halves, and the visibility contract is untouched.
+    /// The overlay end of the same rule, through the real <c>SetStatus</c>: the line it is handed is
+    /// the line it shows, and the visibility contract is untouched.
     /// </summary>
     [Fact]
-    public void The_overlay_renders_the_composed_line_it_is_handed()
+    public void The_overlay_renders_the_status_it_is_handed()
     {
         using var _ = new TempSettings("""{ "SettingsVersion": 3 }""");
 
@@ -468,11 +487,15 @@ public class TemplateRenderTests
             var overlay = new CompactOverlay(new MainWindow());
             var backup = EveryState().ToList()[1];      // S2 — a fallback is not healthy
 
-            overlay.SetStatus(MainWindow.OverlayLine(backup, "🔴 Live — watching…"));
-            Assert.Equal("● Google (backup)  🔴 Live — watching…", overlay.OverlayStatus.Text);
+            // Degraded chain, and the status line STILL says only what the status says: the chip
+            // beside it is where "Google (backup)" is read, once.
+            overlay.SetEngineChip(backup, "why");
+            overlay.SetStatus(UserMessages.LiveWatching());
+            Assert.Equal(UserMessages.LiveWatching(), overlay.OverlayStatus.Text);
             Assert.Equal(Visibility.Visible, overlay.OverlayStatus.Visibility);
+            Assert.Equal(backup.Label, overlay.EngineChipText.Text);
 
-            overlay.SetStatus(MainWindow.OverlayLine(backup, ""));
+            overlay.SetStatus("");
             Assert.Equal(Visibility.Collapsed, overlay.OverlayStatus.Visibility);
         });
     }
@@ -498,7 +521,6 @@ public class TemplateRenderTests
             var window = new MainWindow();
 
             Assert.Equal("○ checking…", window.WriteChip.Text);
-            Assert.Equal("○ checking…", window.ReadChip.Text);
             Assert.False(window.CountdownRunning,
                          "a window that has not painted yet must not be running a countdown (I10)");
         });
@@ -620,6 +642,7 @@ public class TemplateRenderTests
         StaTestHost.Run(() =>
         {
             var window = new MainWindow();
+            var overlay = AttachOverlay(window);
             var states = EveryState().ToList();
 
             window.PaintEngineChip(states[0], "tooltip");
@@ -628,25 +651,316 @@ public class TemplateRenderTests
 
             // The tripwire: only PaintEngineChip writes this back.
             window.WriteChip.ClearValue(TextBlock.ForegroundProperty);
-            window.ReadChip.ClearValue(TextBlock.ForegroundProperty);
+            overlay.EngineChipText.ClearValue(TextBlock.ForegroundProperty);
 
             // The same second, re-rendered — fifty-nine of every sixty ticks above 90 s.
             window.PaintEngineChip(states[0], "tooltip");
             Assert.Equal(DependencyProperty.UnsetValue,
                          window.WriteChip.ReadLocalValue(TextBlock.ForegroundProperty));
             Assert.Equal(DependencyProperty.UnsetValue,
-                         window.ReadChip.ReadLocalValue(TextBlock.ForegroundProperty));
+                         overlay.EngineChipText.ReadLocalValue(TextBlock.ForegroundProperty));
             Assert.Equal(states[0].Label, window.WriteChip.Text);
 
             // …and a state that really did change goes through, on both surfaces, in full.
             window.PaintEngineChip(states[5], "tooltip");
             Assert.Equal(states[5].Label, window.WriteChip.Text);
-            Assert.Equal(states[5].Label, window.ReadChip.Text);
+            Assert.Equal(states[5].Label, overlay.EngineChipText.Text);
             Assert.NotEqual(DependencyProperty.UnsetValue,
                             window.WriteChip.ReadLocalValue(TextBlock.ForegroundProperty));
             Assert.NotEqual(DependencyProperty.UnsetValue,
-                            window.ReadChip.ReadLocalValue(TextBlock.ForegroundProperty));
+                            overlay.EngineChipText.ReadLocalValue(TextBlock.ForegroundProperty));
         });
+    }
+
+    /// <summary>
+    /// <b>The overlay's header chip is the SAME chip</b> — one composer, two surfaces. The main
+    /// window builds one <see cref="EngineChip"/> and writes both, so the tab the player left and
+    /// the 360 px window in front of the game cannot come to say two different things about one
+    /// state (principle 1).
+    ///
+    /// <para>The three properties are asserted together because they are written together: the
+    /// label, the foreground as a THEME resource reference (never a literal colour — UX-DR18), and
+    /// a tooltip that is a <c>string</c>, which is what keeps <c>Theme.xaml</c>'s dark
+    /// <c>ToolTip</c> style applying to it (AC 4).</para>
+    /// </summary>
+    [Fact]
+    public void The_overlay_header_chip_says_what_the_main_chip_says()
+    {
+        using var _ = new TempSettings("""{ "SettingsVersion": 3 }""");
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+            var overlay = AttachOverlay(window);
+
+            foreach (var chip in EveryState())
+            {
+                window.PaintEngineChip(chip, "Google  ● ready");
+
+                Assert.Equal(window.WriteChip.Text, overlay.EngineChipText.Text);
+                Assert.Equal(chip.Label, overlay.EngineChipText.Text);
+                Assert.Equal(Application.Current.Resources[chip.BrushKey],
+                             overlay.EngineChipText.Foreground);
+                Assert.Equal(window.WriteChip.ToolTip,
+                             Assert.IsType<string>(overlay.EngineChipText.ToolTip));
+            }
+        });
+    }
+
+    /// <summary>
+    /// <b>The same words in a different colour still repaint.</b> The repaint guard compared the
+    /// LABEL and let the foreground ride on it, which held only while a label implied a state — and
+    /// it does not: §3.0 rule 2 drops the <c>· backup</c> suffix from a name that already carries
+    /// one, so a chain SERVING from <c>google-gtx</c> (healthy, teal) and one that FELL BACK to it
+    /// (degraded, gold) both render <c>● Google (backup)</c> with the same glyph. Painting the
+    /// second after the first left the first's colour on screen: the app saying "degraded" in the
+    /// healthy colour until some later state happened to change the words.
+    ///
+    /// <para>Both directions, on both surfaces, and the premise is asserted first — if the two
+    /// labels ever stop being identical this case is proving nothing and says so.</para>
+    /// </summary>
+    [Fact]
+    public void Two_states_with_one_label_and_two_brushes_do_not_share_a_stale_colour()
+    {
+        using var _ = new TempSettings("""{ "SettingsVersion": 3 }""");
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+            var overlay = AttachOverlay(window);
+            var states = EveryState().ToList();
+
+            var fellBack = states[1];       // S2  — degraded: google-dict was skipped
+            var serving = states[^1];       // S1′ — healthy: google-gtx answered on its own
+            Assert.Equal(fellBack.Label, serving.Label);
+            Assert.NotEqual(fellBack.BrushKey, serving.BrushKey);
+            Assert.True(serving.IsHealthy && !fellBack.IsHealthy);
+
+            foreach (var (first, second) in new[] { (fellBack, serving), (serving, fellBack) })
+            {
+                window.PaintEngineChip(first, "tooltip");
+                window.PaintEngineChip(second, "tooltip");
+
+                foreach (var surface in new[] { window.WriteChip, overlay.EngineChipText })
+                    Assert.Equal(Application.Current.Resources[second.BrushKey], surface.Foreground);
+            }
+        });
+    }
+
+    /// <summary>
+    /// <b>TP-RENDER-10 — the overlay header never paints two things on top of each other.</b>
+    ///
+    /// <para>It did. The header was a single-cell <c>Grid</c> holding a left group and a right group
+    /// that overlapped whenever their widths stopped adding up, and adding the chip is what made
+    /// them stop: at the shipped 360 px with LIVE running, <c>● Google</c> (x 91.1→136.1) painted
+    /// over 40 of the 44.8 px of <c>● LIVE</c> (x 86.3→131.1) — in the one state the overlay exists
+    /// for. At <c>MinWidth</c> 240 the buttons already sat on the title before the chip existed.</para>
+    ///
+    /// <para><b>Docked, in a priority order</b> (see the XAML): the buttons keep their full width,
+    /// then <c>● LIVE</c>, then the chip, and the title takes what is left and trims. A column
+    /// layout was measured too and rejected: with <c>Auto</c> columns the over-constrained header
+    /// pushes the buttons off the window instead of over the title — the <c>⤢</c> button ended at
+    /// x=479 on a 240 px window, unreachable. Docking is the only WPF panel that expresses "who
+    /// gives way first".</para>
+    ///
+    /// <para><b>What is asserted, in two strengths.</b> The layout SLOTS are disjoint at both widths
+    /// and in every state — that is the by-construction claim, and it is exact. The PAINTED boxes
+    /// are disjoint too, up to one allowance that WPF makes unavoidable: a <c>TextBlock</c> trimmed
+    /// past its own <c>…</c> still renders that <c>…</c>, so two labels squeezed into a few pixels
+    /// bleed by up to their two ellipses (19.0 px for the chip against the LIVE dot, measured from
+    /// the real typefaces). Anything that is not a trimmed label — the buttons — is allowed nothing,
+    /// and the case asserts up front that the allowance is smaller than the 40 px overdraw it exists
+    /// to catch. What it replaces at 240 is a 107 px overdraw of the title by the buttons.</para>
+    /// </summary>
+    [Fact]
+    public void TP_RENDER_10_the_overlay_header_lays_out_without_overlap_at_both_widths()
+    {
+        using var _ = new TempSettings("""{ "SettingsVersion": 3 }""");
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+            var overlay = AttachOverlay(window);
+            var root = (FrameworkElement)overlay.Content;
+
+            // Every state §2.1 has, including the longest label the app can produce — found rather
+            // than guessed, so a copy change that grows a chip is measured here rather than sailing
+            // past this case.
+            var states = EveryState().ToList();
+
+            // …and the allowance below is not what makes this pass. The review measured the shipped
+            // Grid at 360 with LIVE on: "● Google" at 91.1→136.1 over "● LIVE" at 86.3→131.1, a
+            // 40.0 px overdraw. Two ellipses are 19.0 px, so that geometry fails this case by more
+            // than double — the case is not green by construction.
+            Assert.True(131.1 - 91.1 > EllipsisWidth(overlay.LiveDot) + EllipsisWidth(overlay.EngineChipText),
+                        "the ellipsis allowance has grown large enough to cover the overdraw this "
+                        + "case exists for");
+
+            foreach (var width in new[] { 240.0, 360.0 })
+            foreach (var live in new[] { true, false })
+            foreach (var chip in states)
+            {
+                overlay.LiveDot.Visibility = live ? Visibility.Visible : Visibility.Collapsed;
+                window.PaintEngineChip(chip, "tooltip");
+
+                root.Measure(new Size(width, double.PositiveInfinity));
+                root.Arrange(new Rect(0, 0, width, root.DesiredSize.Height));
+                root.UpdateLayout();
+
+                var where = $"at {width}px, LIVE {(live ? "on" : "off")}, chip \"{chip.Label}\"";
+                // Left to right, which on this DockPanel is the REVERSE of the docking order: the
+                // first child docked Right is the rightmost, so the priority list (buttons, dot,
+                // chip, title) reads back as title, chip, dot, buttons on screen.
+                var groups = new List<(string Name, FrameworkElement El)>
+                {
+                    ("title", overlay.TitleText),
+                    ("chip", overlay.EngineChipText),
+                    ("buttons", overlay.HeaderButtons),
+                };
+                if (live) groups.Insert(2, ("LIVE dot", overlay.LiveDot));
+
+                // 1. The slots — the panel's own rectangles. Disjoint by construction, exactly.
+                for (int i = 1; i < groups.Count; i++)
+                {
+                    var (leftName, left) = groups[i - 1];
+                    var (rightName, right) = groups[i];
+                    var a = LayoutInformation.GetLayoutSlot(left);
+                    var b = LayoutInformation.GetLayoutSlot(right);
+                    Assert.True(a.Right <= b.Left + 0.01,
+                        $"{where}: the {leftName} slot ({a.Left:0.0}→{a.Right:0.0}) runs into the "
+                        + $"{rightName} slot ({b.Left:0.0}→{b.Right:0.0})");
+                }
+
+                // 2. What is actually painted, in window coordinates. A label squeezed past its own
+                // "…" still renders that — a trimmed TextBlock has no narrower form — so two
+                // neighbours may bleed into each other by their two ellipses and by nothing else.
+                // That is a two-character allowance derived from the real typefaces (19.0 px for
+                // the chip against the LIVE dot), not a fudge: the overdraw this case exists for
+                // was 40.0 px, and anything that is not a trimmed label is allowed nothing at all.
+                var boxes = groups.Select(g => (g.Name, g.El, Box: PaintedX(g.El, root))).ToList();
+                for (int i = 1; i < boxes.Count; i++)
+                {
+                    var (leftName, leftEl, a) = boxes[i - 1];
+                    var (rightName, rightEl, b) = boxes[i];
+                    double overlap = a.Right - b.Left;
+                    double allowed = EllipsisWidth(leftEl) + EllipsisWidth(rightEl) + 0.01;
+                    Assert.True(overlap <= allowed,
+                        $"{where}: {leftName} ({a.Left:0.0}→{a.Right:0.0}) paints {overlap:0.0}px "
+                        + $"over {rightName} ({b.Left:0.0}→{b.Right:0.0}); allowed {allowed:0.0}");
+                }
+
+                // 3. …and nothing is pushed off the window, which is how the column layout failed:
+                // the buttons are the one group here the player has to be able to hit.
+                var buttons = PaintedX(overlay.HeaderButtons, root);
+                Assert.True(buttons.Right <= width - 8.5,
+                    $"{where}: the buttons end at {buttons.Right:0.0} on a {width}px window");
+                Assert.True(buttons.Right - buttons.Left >= 200,
+                    $"{where}: the buttons were squeezed to {buttons.Right - buttons.Left:0.0}px — "
+                    + "they are interactive and may not be the thing that gives way");
+            }
+        });
+    }
+
+    /// <summary>The painted box of one header element, in window coordinates.</summary>
+    private static (double Left, double Right) PaintedX(FrameworkElement el, FrameworkElement root)
+    {
+        var x = el.TransformToAncestor(root).Transform(new Point(0, 0)).X;
+        return (x, x + el.ActualWidth);
+    }
+
+    /// <summary>How wide a <c>…</c> is in this element's own typeface — the floor a trimmed
+    /// <c>TextBlock</c> cannot render below, and therefore the whole of the bleed a crushed header
+    /// label can have. Zero for anything that is not a label: the button group is never trimmed and
+    /// is never allowed to overlap anything. Measured from the real control, so a font change moves
+    /// the allowance rather than invalidating it.</summary>
+    private static double EllipsisWidth(FrameworkElement element)
+    {
+        if (element is not TextBlock source) return 0;
+
+        var probe = new TextBlock
+        {
+            Text = "…",
+            FontFamily = source.FontFamily,
+            FontSize = source.FontSize,
+            FontWeight = source.FontWeight,
+        };
+        probe.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        return probe.DesiredSize.Width;
+    }
+
+    /// <summary>
+    /// <b>The chip is right the moment the overlay opens</b>, not at the next repaint. The 1 Hz tick
+    /// assigns nothing while the rendered string is unchanged (that is the guard above), so a window
+    /// opened between two repaints would sit there blank for up to a minute. <c>EnterCompactMode</c>
+    /// therefore pushes the state through the one composer after <c>Show()</c> — the same door
+    /// <c>SetPaused</c> and <c>SetReadOnceCancelMode</c> already go through, and for the same reason.
+    ///
+    /// <para>Source-level for the door itself, because the alternative is <c>Show()</c>-ing a 360 px
+    /// always-on-top window on a build agent (CI-3); what it renders is pinned by the STA cases
+    /// above. The call is also one-way: <c>MainWindow</c> tells, the overlay does not ask (I2).</para>
+    /// </summary>
+    [Fact]
+    public void The_chip_is_pushed_to_the_overlay_when_it_opens_and_is_never_asked_for()
+    {
+        var compact = File.ReadAllText(RepoFile("Views/MainWindow.Compact.cs"));
+        int show = compact.IndexOf("_overlay.Show();", StringComparison.Ordinal);
+        int push = compact.IndexOf("UpdateEngineChip();", StringComparison.Ordinal);
+        Assert.True(show > 0, "EnterCompactMode no longer shows the overlay");
+        Assert.True(push > show,
+                    "the overlay is not handed the current chip after it is shown — its header "
+                    + "would stay blank until the rendered string next changes");
+
+        // One composer, one direction: PaintEngineChip hands the record it already built to an
+        // overlay that may not exist yet, and CompactOverlay renders it without asking anything.
+        var main = File.ReadAllText(RepoFile("Views/MainWindow.xaml.cs"));
+        Assert.Contains("_overlay?.SetEngineChip(chip, tooltip);", main, StringComparison.Ordinal);
+
+        var overlay = File.ReadAllText(RepoFile("Views/CompactOverlay.xaml.cs"));
+        Assert.Contains("MainWindow.PaintChipSurface(EngineChipText, chip, tooltip);", overlay,
+                        StringComparison.Ordinal);
+        Assert.DoesNotContain("ChipFor(", overlay, StringComparison.Ordinal);
+        Assert.DoesNotContain("EngineStatus(", overlay, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <b>The placements themselves</b> — the Translator tab shows the chip ONCE. It used to declare
+    /// a second <c>TextBlock</c> beside the read-once button, and since one method paints every
+    /// surface from one record the two were always identical: the same words, a hand apart on one
+    /// tab. The second placement that earns its keep is the overlay's header, on the line with the
+    /// title and the buttons — which is where a player mid-fight is looking.
+    ///
+    /// <para>The overlay's header is a <c>DockPanel</c>, and <b>declaration order there is the
+    /// priority order</b> — what gives way first when 360 px is not enough (TP-RENDER-10 measures
+    /// what that produces). Pinned as source because it is a decision, not an accident: buttons,
+    /// then <c>● LIVE</c>, then the chip, then the title.</para>
+    /// </summary>
+    [Fact]
+    public void The_translator_tab_declares_one_chip_and_the_overlay_header_declares_the_other()
+    {
+        var main = File.ReadAllText(RepoFile("Views/MainWindow.xaml"));
+        Assert.Contains("x:Name=\"WriteChip\"", main, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReadChip", main, StringComparison.Ordinal);
+
+        var overlay = File.ReadAllText(RepoFile("Views/CompactOverlay.xaml"));
+        int chip = overlay.IndexOf("x:Name=\"EngineChipText\"", StringComparison.Ordinal);
+        int header = overlay.IndexOf("x:Name=\"HeaderBar\"", StringComparison.Ordinal);
+        int buttons = overlay.IndexOf("x:Name=\"HeaderButtons\"", StringComparison.Ordinal);
+        int dot = overlay.IndexOf("x:Name=\"LiveDot\"", StringComparison.Ordinal);
+        int title = overlay.IndexOf("x:Name=\"TitleText\"", StringComparison.Ordinal);
+        Assert.True(header > 0 && header < buttons && buttons < dot && dot < chip && chip < title,
+                    "the header docks in priority order — buttons, LIVE dot, chip, title — and the "
+                    + "chip sits inside it");
+        Assert.Contains("<DockPanel Grid.Row=\"0\" x:Name=\"HeaderBar\"", overlay, StringComparison.Ordinal);
+
+        var element = overlay[chip..overlay.IndexOf("/>", chip, StringComparison.Ordinal)];
+        // Written from code like the main window's (RefreshEngineChip): no Text literal here and no
+        // {Binding} either — a Run.Text binding would be TwoWay by default and would need a render
+        // case of its own (I15). The only colour it names is a theme brush, for the moment before
+        // the first paint.
+        Assert.DoesNotContain("Text=\"", element, StringComparison.Ordinal);
+        Assert.DoesNotContain("{Binding", element, StringComparison.Ordinal);
+        Assert.Contains("{StaticResource ", element, StringComparison.Ordinal);
+        Assert.Contains("Translation engine status", element, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -991,6 +1305,13 @@ public class TemplateRenderTests
             new(StringComparer.Ordinal)
             { [ProviderIds.Azure] = Blocked(3600, TranslationErrorKind.QuotaExhausted) },
             keys, Answered(ProviderIds.GoogleDict, ProviderIds.Azure)));                       // S8
+
+        // S1 again, with the BACKUP tier answering on its own — healthy, because nothing was
+        // skipped: google-dict's window expired, the chain tried it, it answered nothing this time
+        // and google-gtx served. §3.0 rule 2 then drops the "· backup" suffix from a name that
+        // already carries it, so this state's LABEL is S2's to the byte and its BRUSH is not.
+        // It is appended, not inserted: cases in this file index S1, S2 and S6 by position.
+        yield return MainWindow.ChipFor(Of(none, free, Answered(ProviderIds.GoogleGtx)));      // S1′
     }
 
     // Render one DataTemplate against a real item via a ContentControl (which applies its template

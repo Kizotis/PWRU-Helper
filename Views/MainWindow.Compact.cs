@@ -52,6 +52,11 @@ public partial class MainWindow
         // reading while the player goes compact, and a "👁 Read once" button over a read in flight
         // is the second press doing nothing all over again.
         SetReadOnceCancelMode(_readingOnce);
+        // …and the engine chip, through the same door and for the same reason: PaintEngineChip
+        // writes every surface, but this one was not on screen at the last repaint and the next may
+        // be a minute away (the 1 Hz tick assigns nothing while the rendered string is unchanged).
+        // One composer, pushed at the door — the overlay's header is blank for no frame.
+        UpdateEngineChip();
         _overlay.Activate();
         Hide();
     }
