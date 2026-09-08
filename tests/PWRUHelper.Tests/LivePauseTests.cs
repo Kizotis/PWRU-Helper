@@ -359,7 +359,7 @@ public class LivePauseTests
     [Fact]
     public void TP_LIVE_01_the_skipped_tick_captures_nothing_ocrs_nothing_and_never_touches_the_dedup()
     {
-        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
 
         int ask = live.IndexOf("_readChain.PauseNow()", StringComparison.Ordinal);
         int branch = live.IndexOf("if (pause.AllPaused)", StringComparison.Ordinal);
@@ -398,7 +398,7 @@ public class LivePauseTests
     [Fact]
     public void The_heartbeat_and_the_check_number_freeze_while_paused()
     {
-        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
         var body = BracedBlock(live, live.IndexOf("if (pause.AllPaused)", StringComparison.Ordinal));
 
         Assert.DoesNotContain("LiveIndicator", body);
@@ -416,7 +416,7 @@ public class LivePauseTests
     [Fact]
     public void The_paused_status_goes_out_through_the_two_surface_helper()
     {
-        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
         var body = BracedBlock(live, live.IndexOf("if (pause.AllPaused)", StringComparison.Ordinal));
 
         Assert.Contains("SetScreenStatus(LivePausedStatus(", body);
@@ -432,7 +432,7 @@ public class LivePauseTests
     [Fact]
     public void The_paused_loop_adds_no_timer_of_its_own()
     {
-        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
 
         Assert.DoesNotContain("DispatcherTimer", live);
         Assert.Contains("int wait = pausedWait", live);
@@ -454,7 +454,7 @@ public class LivePauseTests
     [Fact]
     public void The_skipped_tick_sets_the_wait_and_the_wait_is_cancellable()
     {
-        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
         var body = BracedBlock(live, live.IndexOf("if (pause.AllPaused)", StringComparison.Ordinal));
 
         Assert.Contains("pausedWait = LiveTickPolicy.BackoffWaitMs(CurrentLiveIntervalMs(), backoffSteps)",
@@ -527,7 +527,7 @@ public class LivePauseTests
     [Fact]
     public void The_reset_that_forgave_every_calm_tick_is_gone()
     {
-        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
 
         Assert.DoesNotContain("consecutiveErrors", live);
         Assert.Contains("var errors = new LiveErrorTracker();", live, StringComparison.Ordinal);
@@ -547,7 +547,7 @@ public class LivePauseTests
     [Fact]
     public void The_catch_classifies_the_failure_before_it_counts_it()
     {
-        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
 
         Assert.Contains("if (errors.Record(LiveTickPolicy.Classify(ex)))", live, StringComparison.Ordinal);
         // The old hard-coded trigger is gone with it: five is a graded constant now, read inside
@@ -571,7 +571,7 @@ public class LivePauseTests
     [Fact]
     public void The_stop_still_names_the_reason_and_leaves_the_ui_cleaned_up()
     {
-        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
 
         int reason = live.IndexOf("SetScreenStatus(UserMessages.LiveAutoStopped(",
                                   StringComparison.Ordinal);

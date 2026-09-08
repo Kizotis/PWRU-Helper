@@ -407,7 +407,7 @@ public class OfflineModelStoreTests : GatesTestBase
     [Fact]
     public void No_startup_path_asks_the_model_store_anything()
     {
-        var main = File.ReadAllText(RepoFile("MainWindow.xaml.cs"));
+        var main = File.ReadAllText(RepoFile("Views/MainWindow.xaml.cs"));
 
         foreach (var member in new[] { "public MainWindow()", "private void ApplySettings()" })
         {

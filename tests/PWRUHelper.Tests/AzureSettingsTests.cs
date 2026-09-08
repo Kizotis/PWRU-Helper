@@ -230,7 +230,7 @@ public class AzureSettingsTests
     [Fact]
     public void TP_SET_06_Every_new_change_handler_bails_while_settings_are_being_restored()
     {
-        var source = Code(File.ReadAllText(RepoFile("MainWindow.Translate.cs")));
+        var source = Code(File.ReadAllText(RepoFile("Views/MainWindow.Translate.cs")));
 
         // Both of E6's persisted controls, and E6.S4's is the one the rule was written for: a
         // CheckBox raises Checked during InitializeComponent() exactly as the combo raises
@@ -253,7 +253,7 @@ public class AzureSettingsTests
     [Fact]
     public void TP_SET_07_ApplySettings_applies_the_engine_status_side_effect_explicitly()
     {
-        var body = Code(Body(File.ReadAllText(RepoFile("MainWindow.xaml.cs")),
+        var body = Code(Body(File.ReadAllText(RepoFile("Views/MainWindow.xaml.cs")),
                              "private void ApplySettings()"));
 
         Assert.Contains("UpdateEngineStatusUi();", body, StringComparison.Ordinal);
@@ -524,7 +524,7 @@ public class AzureSettingsTests
     [Fact]
     public void Every_key_save_handler_lifts_that_provider_account_scoped_block()
     {
-        var translate = Code(File.ReadAllText(RepoFile("MainWindow.Translate.cs")));
+        var translate = Code(File.ReadAllText(RepoFile("Views/MainWindow.Translate.cs")));
 
         foreach (var (handler, providerId) in new[]
                  {
@@ -856,7 +856,7 @@ public class AzureSettingsTests
     {
         // The structural half: whatever silences the combo inside the save handler, it is not the
         // restore guard. A scan, because "did not raise a flag" is not observable at runtime.
-        var saveBody = Body(Code(File.ReadAllText(RepoFile("MainWindow.Translate.cs"))),
+        var saveBody = Body(Code(File.ReadAllText(RepoFile("Views/MainWindow.Translate.cs"))),
                             "private void AzureSaveKey_Click(");
         Assert.DoesNotContain("_restoringSettings", saveBody, StringComparison.Ordinal);
         Assert.Contains("finally { _suppressAzureRegionHandler = false; }", saveBody, StringComparison.Ordinal);
@@ -919,7 +919,7 @@ public class AzureSettingsTests
     [Fact]
     public void AC7_The_error_report_is_the_log_and_never_a_key()
     {
-        var body = Code(Body(File.ReadAllText(RepoFile("MainWindow.xaml.cs")),
+        var body = Code(Body(File.ReadAllText(RepoFile("Views/MainWindow.xaml.cs")),
                              "private async void CopyErrorReport_Click("));
 
         Assert.Contains("Logging.ReadRecent()", body, StringComparison.Ordinal);

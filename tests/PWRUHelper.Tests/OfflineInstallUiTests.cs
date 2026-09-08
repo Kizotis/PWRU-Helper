@@ -77,7 +77,7 @@ public class OfflineInstallUiTests : GatesTestBase
         }, writers);
 
         // …and the two really are the two gestures, not two lines of one of them.
-        var offline = Code(File.ReadAllText(RepoFile("MainWindow.Offline.cs")));
+        var offline = Code(File.ReadAllText(RepoFile("Views/MainWindow.Offline.cs")));
         Assert.Contains("OfflineFallbackEnabled = true;",
             Body(offline, "private async void OfflineEngine_Click("), StringComparison.Ordinal);
         Assert.Contains("OfflineFallbackEnabled = false;",
@@ -87,7 +87,7 @@ public class OfflineInstallUiTests : GatesTestBase
         // decision, and one of these two actions costs 50 MB of somebody's connection. Comments
         // stripped, because the block's own comment explains the ruling by name — which is the
         // documentation doing its job, not a control.
-        var xaml = XamlCode(File.ReadAllText(RepoFile("MainWindow.xaml")));
+        var xaml = XamlCode(File.ReadAllText(RepoFile("Views/MainWindow.xaml")));
         Assert.DoesNotContain("OfflineFallback", xaml, StringComparison.Ordinal);
         Assert.DoesNotContain("OfflineEngineCheck", xaml, StringComparison.Ordinal);
         foreach (Match m in Regex.Matches(xaml, @"<CheckBox[^>]*x:Name=""(\w+)"""))
@@ -169,8 +169,8 @@ public class OfflineInstallUiTests : GatesTestBase
         //    failure path, and a background caller would have nothing to say through it.
         var allowed = new Dictionary<string, string[]>(StringComparer.Ordinal)
         {
-            ["MainWindow.Live.cs"] = Array.Empty<string>(),
-            ["MainWindow.Ocr.cs"] = new[]
+            ["Views/MainWindow.Live.cs"] = Array.Empty<string>(),
+            ["Views/MainWindow.Ocr.cs"] = new[]
             {
                 "private void ResetTuning_Click(",
                 "private async Task<System.Drawing.Rectangle?> SelectRegionAsync(",
@@ -219,7 +219,7 @@ public class OfflineInstallUiTests : GatesTestBase
         // …and the two dialogs this story adds are reachable from the About tab's own gestures and
         // nowhere else: one Click handler for consent, one private method for Remove that only that
         // handler calls.
-        var offline = Code(File.ReadAllText(RepoFile("MainWindow.Offline.cs")));
+        var offline = Code(File.ReadAllText(RepoFile("Views/MainWindow.Offline.cs")));
         Assert.Equal(1, Occurrences(Body(offline, "private async void OfflineEngine_Click("),
                                     "MessageBox.Show(this,"));
         Assert.Equal(1, Occurrences(Body(offline, "private void RemoveOfflineEngine("),
@@ -231,7 +231,7 @@ public class OfflineInstallUiTests : GatesTestBase
 
         // The nudge is a status-line sentence chosen by a pure function, which is what makes it
         // structurally incapable of becoming a dialog or a toast.
-        var main = Code(File.ReadAllText(RepoFile("MainWindow.xaml.cs")));
+        var main = Code(File.ReadAllText(RepoFile("Views/MainWindow.xaml.cs")));
         Assert.Contains("UserMessages.AllPausedOfflineNudge()",
                         Body(main, "internal static string? StateNotice("), StringComparison.Ordinal);
         Assert.Equal(1, Occurrences(main, "UserMessages.AllPausedOfflineNudge()"));
@@ -284,7 +284,7 @@ public class OfflineInstallUiTests : GatesTestBase
 
             // E7.S7 left the heading and the row; this story filled that block in rather than adding
             // a second one. One heading, one row TextBlock, both named.
-            var xaml = File.ReadAllText(RepoFile("MainWindow.xaml"));
+            var xaml = File.ReadAllText(RepoFile("Views/MainWindow.xaml"));
             Assert.Equal(1, Occurrences(xaml, "Text=\"Offline engine (optional)\""));
             Assert.Equal(1, Occurrences(xaml, "x:Name=\"OfflineEngineText\""));
 
@@ -383,7 +383,7 @@ public class OfflineInstallUiTests : GatesTestBase
 
         // …and it is the row's real chooser: what is still on disk decides, not what the delete
         // claimed to free.
-        var handler = Body(Code(File.ReadAllText(RepoFile("MainWindow.Offline.cs"))),
+        var handler = Body(Code(File.ReadAllText(RepoFile("Views/MainWindow.Offline.cs"))),
                            "private void RemoveOfflineEngine()");
         Assert.Contains("_offlineStore.BytesOnDisk", handler, StringComparison.Ordinal);
         Assert.Contains("UserMessages.OfflineRemoveIncomplete(left)", handler, StringComparison.Ordinal);

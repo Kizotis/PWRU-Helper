@@ -4,7 +4,7 @@
         xmlns:local="clr-namespace:PWRUHelper"
         Title="PWRU Helper" Height="720" Width="640"
         MinHeight="480" MinWidth="460"
-        Icon="assets/icon.png"
+        Icon="pack://application:,,,/PWRUHelper;component/assets/icon.png"
         Background="{StaticResource BackgroundBrush}"
         Topmost="True">
 

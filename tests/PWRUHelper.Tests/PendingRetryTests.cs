@@ -134,7 +134,7 @@ public class PendingRetryTests
         Assert.False(PendingRetryQueue<OcrResultItem>.IsRetryable(new OperationCanceledException()));
         Assert.False(PendingRetryQueue<OcrResultItem>.IsRetryable(new TaskCanceledException()));
 
-        var ocr = Code(File.ReadAllText(RepoFile("MainWindow.Ocr.cs")));
+        var ocr = Code(File.ReadAllText(RepoFile("Views/MainWindow.Ocr.cs")));
         int cancelCatch = ocr.IndexOf(
             "catch (OperationCanceledException) when (ct.IsCancellationRequested)",
             ocr.IndexOf("private async Task<(int Translated, TranslationException? Error)> TranslateSentencesInto(",
@@ -286,7 +286,7 @@ public class PendingRetryTests
         Assert.Equal(50, TranslationPolicy.PendingRetryCapacity);
 
         var declared = System.Text.RegularExpressions.Regex.Match(
-            File.ReadAllText(RepoFile("MainWindow.xaml.cs")), @"MaxHistory\s*=\s*(\d+)\s*;");
+            File.ReadAllText(RepoFile("Views/MainWindow.xaml.cs")), @"MaxHistory\s*=\s*(\d+)\s*;");
         Assert.True(declared.Success, "MainWindow must still declare MaxHistory");
         Assert.Equal(TranslationPolicy.PendingRetryCapacity.ToString(), declared.Groups[1].Value);
     }
@@ -332,11 +332,11 @@ public class PendingRetryTests
     [Fact]
     public void Nothing_enqueues_past_the_wrapper_that_answers_the_dropped_row()
     {
-        foreach (var file in new[] { "MainWindow.Ocr.cs", "MainWindow.xaml.cs" })
+        foreach (var file in new[] { "Views/MainWindow.Ocr.cs", "Views/MainWindow.xaml.cs" })
             Assert.DoesNotContain("_pendingRetry.Enqueue(", Code(File.ReadAllText(RepoFile(file))),
                                   StringComparison.Ordinal);
 
-        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
         var wrapper = BracedBlock(live, live.IndexOf("private void EnqueueForRetry(", StringComparison.Ordinal));
         Assert.Contains("_pendingRetry.Enqueue(row, body, target, attempts)", wrapper, StringComparison.Ordinal);
         Assert.Contains("_ocrItems.Contains(dropped.Row)", wrapper, StringComparison.Ordinal);
@@ -476,7 +476,7 @@ public class PendingRetryTests
     [Fact]
     public void The_requeue_decision_in_the_window_is_the_one_mirrored_here()
     {
-        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
         var body = BracedBlock(live, live.IndexOf("private void RequeueOrGiveUp(", StringComparison.Ordinal));
 
         Assert.Contains("LiveTickPolicy.Classify(ex) != LiveTickOutcome.Refused", body, StringComparison.Ordinal);
@@ -527,7 +527,7 @@ public class PendingRetryTests
 
         // …and the UI's pending text is never handed to the cache at all: the enqueue writes it onto
         // the ROW, and the only string that reaches a Store is a translator's return value.
-        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
         int enqueue = live.IndexOf("EnqueueForRetry(items[i]", StringComparison.Ordinal);
         Assert.True(enqueue > 0, "the failure branch must enqueue the row it just marked pending");
     }
@@ -592,7 +592,7 @@ public class PendingRetryTests
     [Fact]
     public void The_drain_runs_before_the_capture_and_never_touches_the_collection()
     {
-        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
 
         int drain = live.IndexOf("await DrainPendingRetryAsync(ct)", StringComparison.Ordinal);
         int capture = live.IndexOf("ScreenCapture.Capture", StringComparison.Ordinal);
@@ -635,7 +635,7 @@ public class PendingRetryTests
     [Fact]
     public void The_drain_leaves_no_entry_behind_on_any_exit()
     {
-        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
         var body = BracedBlock(live, live.IndexOf("private async Task<bool> DrainPendingRetryAsync(",
                                                   StringComparison.Ordinal));
 
@@ -670,7 +670,7 @@ public class PendingRetryTests
     [Fact]
     public void The_queue_stores_the_raw_body_and_the_dedup_is_not_touched()
     {
-        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
         int enqueue = live.IndexOf("EnqueueForRetry(items[i]", StringComparison.Ordinal);
 
         Assert.Contains("EnqueueForRetry(items[i], parts[i].Body, target);",
@@ -696,7 +696,7 @@ public class PendingRetryTests
     [Fact]
     public void TP_LIVE_12_StopLive_clears_the_queue_and_gives_up_the_rows_it_held()
     {
-        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
         var stop = BracedBlock(live, live.IndexOf("private void StopLive()", StringComparison.Ordinal));
 
         Assert.Contains("foreach (var entry in _pendingRetry.Clear()) GiveUpRow(entry.Row);",
@@ -737,7 +737,7 @@ public class PendingRetryTests
     [Fact]
     public void This_story_adds_no_new_binding_to_either_feed()
     {
-        foreach (var file in new[] { "MainWindow.xaml", "CompactOverlay.xaml" })
+        foreach (var file in new[] { "Views/MainWindow.xaml", "Views/CompactOverlay.xaml" })
         {
             var xaml = File.ReadAllText(RepoFile(file));
             Assert.DoesNotContain("PendingRetry", xaml);
@@ -794,7 +794,7 @@ public class PendingRetryTests
     [Fact]
     public void E5_f_the_catch_applies_the_back_off_it_classified()
     {
-        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
 
         Assert.Contains("var outcome = LiveTickPolicy.Classify(ex);", live, StringComparison.Ordinal);
         Assert.Contains("if (outcome == LiveTickOutcome.Refused)\n                    pausedWait = "

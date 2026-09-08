@@ -30,11 +30,15 @@ _This file contains critical rules and patterns that AI agents must follow when 
 
 ### Code Layout
 
-- `MainWindow.xaml.cs` = core (fields, ctor, lifecycle, hotkeys, shared helpers). Domain logic in partials: `MainWindow.Phrasebook.cs` / `.Squad.cs` / `.Translate.cs` / `.Ocr.cs` / `.Live.cs` / `.Compact.cs` / `.Update.cs`.
+- `Views/` = every window, its code-behind, the theme and the converters. **Namespaces did NOT change** — everything under `Views/` is still `namespace PWRUHelper` and `x:Class="PWRUHelper.MainWindow"`; C# needs no folder/namespace match.
+- `Views/MainWindow.xaml.cs` = core (fields, ctor, lifecycle, hotkeys, shared helpers). Domain logic in partials, same folder: `MainWindow.Phrasebook.cs` / `.Squad.cs` / `.Translate.cs` / `.Ocr.cs` / `.Live.cs` / `.Compact.cs` / `.Offline.cs` / `.Update.cs`.
 - `Services/` = pure-ish, unit-testable classes (translation pipeline, capture backends, OCR, dedup, slang, settings, logging, update).
+- Repo ROOT keeps only what must be there: `PWRUHelper.csproj` (25 test files find the root by walking up to it), `App.xaml` / `App.xaml.cs` (the WPF application definition), `OcrResultItem.cs`, `AssemblyInfo.cs`, `app.manifest`, the three `.bat` scripts and the docs. No `.sln` — adding one breaks `dotnet run` and both build scripts.
 - `OcrResultItem.cs` lives at repo ROOT with namespace `PWRUHelper` (NOT `.Models`) — the render test depends on this; do not move it.
-- Windows: `CompactOverlay`, `SelectionOverlay`. Tabs order: Phrasebook(0) · Squad(1) · Translator(2) · Screen OCR(3) · About(4).
-- Theme: `Theme.xaml`, pwonline.ru dark-navy palette (bg `#071c2f`, panel `#0e2c47`, red `#a01116`, teal `#278eb4`, gold `#ffdc50`, text `#f4eddd`). The dark ToolTip style in Theme.xaml is load-bearing.
+- Windows: `Views/CompactOverlay`, `Views/SelectionOverlay`. Tabs order: Phrasebook(0) · Squad(1) · Translator(2) · Screen OCR(3) · About(4).
+- Theme: `Views/Theme.xaml`, pwonline.ru dark-navy palette (bg `#071c2f`, panel `#0e2c47`, red `#a01116`, teal `#278eb4`, gold `#ffdc50`, text `#f4eddd`). The dark ToolTip style in Theme.xaml is load-bearing.
+- **XAML resource URIs must be absolute now that the windows sit in a subfolder.** A relative `assets/icon.png` resolved against `Views/` and threw at load (the build stayed green — it is a runtime pack-URI failure); `MainWindow.xaml` uses `pack://application:,,,/PWRUHelper;component/assets/icon.png`, and `App.xaml` points at `Views/MainWindow.xaml` / `Views/Theme.xaml`.
+- Tests read these sources by path (`RepoFile("Views/MainWindow.Live.cs")`, `Path.Combine(root, "Views", …)`) — re-homing a view means fixing those literals too.
 
 ## Critical Implementation Rules
 

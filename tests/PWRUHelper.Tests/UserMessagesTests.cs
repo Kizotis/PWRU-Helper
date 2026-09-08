@@ -644,7 +644,7 @@ public class UserMessagesTests : GatesTestBase
     [Fact]
     public void The_code_behind_holds_no_copy_of_its_own()
     {
-        var friendly = File.ReadAllText(RepoFile("MainWindow.xaml.cs"));
+        var friendly = File.ReadAllText(RepoFile("Views/MainWindow.xaml.cs"));
 
         Assert.Contains("UserMessages.For(ex, TryAgainIn(ex))", friendly);
         foreach (var s in Sentences())
@@ -670,8 +670,8 @@ public class UserMessagesTests : GatesTestBase
     /// allows.</para>
     /// </summary>
     [Theory]
-    [InlineData("MainWindow.Live.cs")]
-    [InlineData("MainWindow.Ocr.cs")]
+    [InlineData("Views/MainWindow.Live.cs")]
+    [InlineData("Views/MainWindow.Ocr.cs")]
     public void A_feed_row_carries_no_failure_sentence(string file)
     {
         var code = Code(File.ReadAllText(RepoFile(file)));
@@ -1146,7 +1146,7 @@ public class UserMessagesTests : GatesTestBase
                          "Translation service error (HTTP 418). Please try again later."));
 
         // The prefix is gone from the call site too, not just from the deck.
-        var code = Code(File.ReadAllText(RepoFile("MainWindow.Translate.cs")));
+        var code = Code(File.ReadAllText(RepoFile("Views/MainWindow.Translate.cs")));
         Assert.DoesNotContain("\"Failed: ", code);
         Assert.Contains("TranslateStatus.Text = UserMessages.TranslatorTabStatus(Friendly(ex));", code);
     }
@@ -1280,10 +1280,10 @@ public class UserMessagesTests : GatesTestBase
     /// own line, which §3.2 keeps.</para>
     /// </summary>
     [Theory]
-    [InlineData("MainWindow.Live.cs")]
-    [InlineData("MainWindow.Ocr.cs")]
-    [InlineData("MainWindow.Translate.cs")]
-    [InlineData("CompactOverlay.xaml.cs")]
+    [InlineData("Views/MainWindow.Live.cs")]
+    [InlineData("Views/MainWindow.Ocr.cs")]
+    [InlineData("Views/MainWindow.Translate.cs")]
+    [InlineData("Views/CompactOverlay.xaml.cs")]
     public void No_status_line_holds_a_sentence_of_its_own(string file)
     {
         var known = new[]

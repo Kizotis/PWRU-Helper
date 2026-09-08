@@ -962,7 +962,7 @@ public class BergamotTranslatorTests : GatesTestBase
         // Non-vacuity: the expansion really is upstream, in the two call sites that own it, so this
         // scan is asserting an absence that means something.
         var root = RepoRoot();
-        foreach (var caller in new[] { "MainWindow.Live.cs", "MainWindow.Translate.cs" })
+        foreach (var caller in new[] { "Views/MainWindow.Live.cs", "Views/MainWindow.Translate.cs" })
             Assert.Contains(".Expand(", File.ReadAllText(System.IO.Path.Combine(root, caller)),
                 StringComparison.Ordinal);
     }

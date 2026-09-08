@@ -916,7 +916,7 @@ public class ChainCompositionTests : GatesTestBase
 
         // …and the builders really are what the constructor reaches first: the three Build… calls
         // sit above InitializeComponent, so the first store of the session is CacheFor's.
-        var main = Code(File.ReadAllText(Path.Combine(root, "MainWindow.xaml.cs")));
+        var main = Code(File.ReadAllText(Path.Combine(root, "Views", "MainWindow.xaml.cs")));
         Assert.True(main.IndexOf("BuildWriteChain();", StringComparison.Ordinal)
                     < main.IndexOf("InitializeComponent()", StringComparison.Ordinal),
             "the write chain is built before InitializeComponent, so it owns the store's flag");
@@ -1141,7 +1141,7 @@ public class ChainCompositionTests : GatesTestBase
     public void The_warm_up_is_called_from_OnWindowLoaded_on_the_pool_and_from_nowhere_else()
     {
         var root = RepoRoot();
-        var main = Code(File.ReadAllText(Path.Combine(root, "MainWindow.xaml.cs")));
+        var main = Code(File.ReadAllText(Path.Combine(root, "Views", "MainWindow.xaml.cs")));
 
         var loaded = BracedBlock(main, main.IndexOf("private async void OnWindowLoaded(",
                                                    StringComparison.Ordinal));
@@ -1201,9 +1201,9 @@ public class ChainCompositionTests : GatesTestBase
     public void LIVE_reads_through_the_Background_chain_and_read_once_through_the_Interactive_one()
     {
         var root = RepoRoot();
-        var live = Code(File.ReadAllText(Path.Combine(root, "MainWindow.Live.cs")));
-        var ocr = Code(File.ReadAllText(Path.Combine(root, "MainWindow.Ocr.cs")));
-        var main = Code(File.ReadAllText(Path.Combine(root, "MainWindow.xaml.cs")));
+        var live = Code(File.ReadAllText(Path.Combine(root, "Views", "MainWindow.Live.cs")));
+        var ocr = Code(File.ReadAllText(Path.Combine(root, "Views", "MainWindow.Ocr.cs")));
+        var main = Code(File.ReadAllText(Path.Combine(root, "Views", "MainWindow.xaml.cs")));
 
         Assert.Contains("_readTranslator, ct)", live, StringComparison.Ordinal);
         Assert.DoesNotContain("_readOnceTranslator", live, StringComparison.Ordinal);
@@ -1251,7 +1251,7 @@ public class ChainCompositionTests : GatesTestBase
         // …and the write chain's rebuild, which is AC 2's source-level companion: the key-save
         // handler builds a new CHAIN, and the store it caches into is TranslationChains' — so a
         // merge that dropped the sharing could not compile past this line without also changing it.
-        var translate = Code(File.ReadAllText(Path.Combine(root, "MainWindow.Translate.cs")));
+        var translate = Code(File.ReadAllText(Path.Combine(root, "Views", "MainWindow.Translate.cs")));
         Assert.Contains("private ITranslator BuildWriteChain() => TranslationChains.BuildWrite(_settings, _offlineTier);",
             translate, StringComparison.Ordinal);
 

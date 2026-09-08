@@ -530,8 +530,8 @@ public class BergamotLifetimeTests : GatesTestBase
     [Fact]
     public void StopLive_arms_it_StartLive_disarms_it_and_OnClosing_does_both()
     {
-        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
-        var main = Code(File.ReadAllText(RepoFile("MainWindow.xaml.cs")));
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
+        var main = Code(File.ReadAllText(RepoFile("Views/MainWindow.xaml.cs")));
 
         Assert.Contains("ArmOfflineIdleUnload();", Body(live, "private void StopLive()"),
                         StringComparison.Ordinal);

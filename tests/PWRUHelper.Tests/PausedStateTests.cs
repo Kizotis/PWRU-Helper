@@ -230,7 +230,7 @@ public class PausedStateTests
     [Fact]
     public void There_is_exactly_one_place_that_starts_the_heartbeat()
     {
-        var overlay = Code(File.ReadAllText(RepoFile("CompactOverlay.xaml.cs")));
+        var overlay = Code(File.ReadAllText(RepoFile("Views/CompactOverlay.xaml.cs")));
 
         Assert.Equal(1, Occurrences(overlay, "_beat.Start()"));
         Assert.Contains("if (BeatShouldRun(visible, _paused)) _beat.Start();", overlay,
@@ -254,8 +254,8 @@ public class PausedStateTests
     [Fact]
     public void The_pause_reaches_the_overlay_as_a_one_way_call()
     {
-        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
-        var compact = Code(File.ReadAllText(RepoFile("MainWindow.Compact.cs")));
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
+        var compact = Code(File.ReadAllText(RepoFile("Views/MainWindow.Compact.cs")));
 
         var body = BracedBlock(live, live.IndexOf("internal void SetLivePaused(bool paused)",
                                                   StringComparison.Ordinal));
@@ -278,7 +278,7 @@ public class PausedStateTests
     [Fact]
     public void The_skipped_branch_is_untouched_and_the_running_branch_unfreezes()
     {
-        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
         var skipped = BracedBlock(live, live.IndexOf("if (pause.AllPaused)", StringComparison.Ordinal));
 
         Assert.DoesNotContain("SetLivePaused", skipped);
@@ -427,7 +427,7 @@ public class PausedStateTests
     [Fact]
     public void The_toast_route_and_its_lifetime_are_the_main_windows()
     {
-        var main = Code(File.ReadAllText(RepoFile("MainWindow.xaml.cs")));
+        var main = Code(File.ReadAllText(RepoFile("Views/MainWindow.xaml.cs")));
 
         Assert.Contains("if (_overlay is { IsVisible: true }) _overlay.ShowToast(message);", main,
                         StringComparison.Ordinal);
@@ -442,7 +442,7 @@ public class PausedStateTests
         // COUNTDOWN, as `_countdownTimer`'s own remark says, not one timer in the process.
         Assert.Equal(3, Occurrences(main, "new() { Interval ="));
         Assert.Equal(1, Occurrences(main, "private readonly DispatcherTimer _offlineIdleTimer ="));
-        Assert.Equal(1, Occurrences(Code(File.ReadAllText(RepoFile("CompactOverlay.xaml.cs"))),
+        Assert.Equal(1, Occurrences(Code(File.ReadAllText(RepoFile("Views/CompactOverlay.xaml.cs"))),
                                     "DispatcherTimer"));
     }
 
@@ -512,7 +512,7 @@ public class PausedStateTests
     [Fact]
     public void The_notice_is_compared_before_it_is_written()
     {
-        var main = Code(File.ReadAllText(RepoFile("MainWindow.xaml.cs")));
+        var main = Code(File.ReadAllText(RepoFile("Views/MainWindow.xaml.cs")));
         var body = BracedBlock(main, main.IndexOf("internal bool RefreshEngineChip()", StringComparison.Ordinal));
 
         Assert.Contains("if (notice is not null && !string.Equals(notice, _lastStateNotice, StringComparison.Ordinal))",
@@ -658,7 +658,7 @@ public class PausedStateTests
                      MainWindow.StateNotice(s3, chip, wasDegraded: false));
 
         // …so there is no second S3 sentence anywhere, and nothing to render one from.
-        foreach (var file in new[] { "MainWindow.Live.cs", Path.Combine("Services", "UserMessages.cs") })
+        foreach (var file in new[] { Path.Combine("Views", "MainWindow.Live.cs"), Path.Combine("Services", "UserMessages.cs") })
             Assert.Equal(0, Occurrences(Code(File.ReadAllText(RepoFile(file))), ", using "));
     }
 

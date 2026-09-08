@@ -841,7 +841,7 @@ public class ProviderStateStoreTests : GatesTestBase
         // before first paint again. OnClosing's Flush() is the ONE permitted reference outside
         // Services/ (ruling E2-e) and is carved out explicitly.
         var root = RepoRoot();
-        var main = File.ReadAllText(Path.Combine(root, "MainWindow.xaml.cs"));
+        var main = File.ReadAllText(Path.Combine(root, "Views", "MainWindow.xaml.cs"));
 
         foreach (var member in new[] { "public MainWindow()", "private void ApplySettings()",
                                        "private async void OnWindowLoaded(" })

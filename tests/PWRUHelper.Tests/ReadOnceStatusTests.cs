@@ -280,7 +280,7 @@ public class ReadOnceStatusTests
     [Fact]
     public void TP_ONCE_04_nothing_is_decided_before_the_capture_any_more()
     {
-        var ocr = Code(File.ReadAllText(RepoFile("MainWindow.Ocr.cs")));
+        var ocr = Code(File.ReadAllText(RepoFile("Views/MainWindow.Ocr.cs")));
 
         int method = ocr.IndexOf("private async Task ReadRegionOnceAsync(", StringComparison.Ordinal);
         int flag = ocr.IndexOf("_readingOnce = true;", method, StringComparison.Ordinal);
@@ -354,9 +354,9 @@ public class ReadOnceStatusTests
     [Fact]
     public void TP_ONCE_05_the_token_is_created_from_the_budget_and_cancelled_by_the_three_things_AC2_names()
     {
-        var ocr = Code(File.ReadAllText(RepoFile("MainWindow.Ocr.cs")));
-        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
-        var main = Code(File.ReadAllText(RepoFile("MainWindow.xaml.cs")));
+        var ocr = Code(File.ReadAllText(RepoFile("Views/MainWindow.Ocr.cs")));
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
+        var main = Code(File.ReadAllText(RepoFile("Views/MainWindow.xaml.cs")));
 
         Assert.Contains("new CancellationTokenSource(", ocr, StringComparison.Ordinal);
         Assert.Contains("TimeSpan.FromSeconds(TranslationPolicy.ReadOnceBudgetSeconds)", ocr, StringComparison.Ordinal);
@@ -396,7 +396,7 @@ public class ReadOnceStatusTests
     [Fact]
     public void TP_ONCE_05_a_budget_expiry_is_a_failure_and_a_persons_stop_says_so()
     {
-        var ocr = Code(File.ReadAllText(RepoFile("MainWindow.Ocr.cs")));
+        var ocr = Code(File.ReadAllText(RepoFile("Views/MainWindow.Ocr.cs")));
 
         Assert.Contains("catch (OperationCanceledException) when (cts.IsCancellationRequested)",
                         ocr, StringComparison.Ordinal);
@@ -437,7 +437,7 @@ public class ReadOnceStatusTests
     [Fact]
     public void A_press_after_the_budget_already_fired_does_not_relabel_the_timeout()
     {
-        var ocr = Code(File.ReadAllText(RepoFile("MainWindow.Ocr.cs")));
+        var ocr = Code(File.ReadAllText(RepoFile("Views/MainWindow.Ocr.cs")));
         var cancel = BracedBlock(ocr, ocr.IndexOf("private void CancelReadOnce()", StringComparison.Ordinal));
 
         Assert.Contains("if (!cts.IsCancellationRequested) _readOnceStopped = true;", cancel, StringComparison.Ordinal);
@@ -455,7 +455,7 @@ public class ReadOnceStatusTests
     [Fact]
     public void A_cancel_during_the_capture_or_the_ocr_is_observed_before_any_row_is_created()
     {
-        var ocr = Code(File.ReadAllText(RepoFile("MainWindow.Ocr.cs")));
+        var ocr = Code(File.ReadAllText(RepoFile("Views/MainWindow.Ocr.cs")));
 
         int look = ocr.IndexOf("cts.Token.ThrowIfCancellationRequested();", StringComparison.Ordinal);
         int empty = ocr.IndexOf("if (sentences.Count == 0)", StringComparison.Ordinal);
@@ -499,8 +499,8 @@ public class ReadOnceStatusTests
     [Fact]
     public void TP_ONCE_06_a_second_read_once_cancels_the_first_and_starts_nothing()
     {
-        var ocr = Code(File.ReadAllText(RepoFile("MainWindow.Ocr.cs")));
-        var live = Code(File.ReadAllText(RepoFile("MainWindow.Live.cs")));
+        var ocr = Code(File.ReadAllText(RepoFile("Views/MainWindow.Ocr.cs")));
+        var live = Code(File.ReadAllText(RepoFile("Views/MainWindow.Live.cs")));
 
         var body = BracedBlock(ocr, ocr.IndexOf("private async Task ReadRegionOnceAsync(", StringComparison.Ordinal));
         // The FIRST statement of the method — first, because everything else it does (the OCR-pack
@@ -550,7 +550,7 @@ public class ReadOnceStatusTests
         Assert.Contains("Error", names);
 
         // …and the caller really branches on it, rather than awaiting and then printing Done.
-        var ocr = Code(File.ReadAllText(RepoFile("MainWindow.Ocr.cs")));
+        var ocr = Code(File.ReadAllText(RepoFile("Views/MainWindow.Ocr.cs")));
         Assert.Contains("var (translated, error) = await TranslateSentencesInto(sentences, target, cts.Token);",
                         ocr, StringComparison.Ordinal);
         // E5-g added the fourth argument: the "{t}" of a paused read, rendered by the code-behind
@@ -653,7 +653,7 @@ public class ReadOnceStatusTests
     [Fact]
     public void A8_the_cancel_guard_is_the_first_line_of_the_button_path()
     {
-        var ocr = Code(File.ReadAllText(RepoFile("MainWindow.Ocr.cs")));
+        var ocr = Code(File.ReadAllText(RepoFile("Views/MainWindow.Ocr.cs")));
         var body = BracedBlock(ocr, ocr.IndexOf("internal async Task SelectAreaAndReadOnceAsync()",
                                                 StringComparison.Ordinal));
 
@@ -667,7 +667,7 @@ public class ReadOnceStatusTests
 
         // The overlay's button reaches the same method, so ■ cancels a read from compact mode too —
         // one entry point for both surfaces, which is what stops them drifting apart.
-        var overlay = Code(File.ReadAllText(RepoFile("CompactOverlay.xaml.cs")));
+        var overlay = Code(File.ReadAllText(RepoFile("Views/CompactOverlay.xaml.cs")));
         Assert.Contains("await _owner.SelectAreaAndReadOnceAsync();", overlay, StringComparison.Ordinal);
     }
 
@@ -684,8 +684,8 @@ public class ReadOnceStatusTests
     [Fact]
     public void A8_the_cancel_mode_never_disables_and_the_copy_lives_in_the_deck()
     {
-        var ocr = Code(File.ReadAllText(RepoFile("MainWindow.Ocr.cs")));
-        var overlay = Code(File.ReadAllText(RepoFile("CompactOverlay.xaml.cs")));
+        var ocr = Code(File.ReadAllText(RepoFile("Views/MainWindow.Ocr.cs")));
+        var overlay = Code(File.ReadAllText(RepoFile("Views/CompactOverlay.xaml.cs")));
 
         foreach (var (name, source) in new[] { ("MainWindow.Ocr.cs", ocr), ("CompactOverlay.xaml.cs", overlay) })
         {
@@ -699,10 +699,10 @@ public class ReadOnceStatusTests
             .Where(f => Code(File.ReadAllText(f)).Contains("SetReadOnceEnabled(", StringComparison.Ordinal))
             .Select(Path.GetFileName));
 
-        foreach (var xaml in new[] { "MainWindow.xaml", "CompactOverlay.xaml" })
+        foreach (var xaml in new[] { "Views/MainWindow.xaml", "Views/CompactOverlay.xaml" })
         {
             var text = File.ReadAllText(RepoFile(xaml));
-            int button = text.IndexOf(xaml == "MainWindow.xaml" ? "x:Name=\"SelectAreaButton\""
+            int button = text.IndexOf(xaml == "Views/MainWindow.xaml" ? "x:Name=\"SelectAreaButton\""
                                                                 : "x:Name=\"ReadOnceButton\"",
                                       StringComparison.Ordinal);
             Assert.True(button > 0, $"{xaml} no longer declares the read-once button");
@@ -739,7 +739,7 @@ public class ReadOnceStatusTests
     [Fact]
     public void A8_a_press_during_the_cancel_window_cannot_start_a_second_read()
     {
-        var ocr = Code(File.ReadAllText(RepoFile("MainWindow.Ocr.cs")));
+        var ocr = Code(File.ReadAllText(RepoFile("Views/MainWindow.Ocr.cs")));
         var read = BracedBlock(ocr, ocr.IndexOf("private async Task ReadRegionOnceAsync(",
                                                 StringComparison.Ordinal));
 
@@ -780,7 +780,7 @@ public class ReadOnceStatusTests
     [Fact]
     public void A8_the_label_is_written_with_the_flag_and_pushed_when_the_overlay_opens()
     {
-        var ocr = Code(File.ReadAllText(RepoFile("MainWindow.Ocr.cs")));
+        var ocr = Code(File.ReadAllText(RepoFile("Views/MainWindow.Ocr.cs")));
         var read = BracedBlock(ocr, ocr.IndexOf("private async Task ReadRegionOnceAsync(",
                                                 StringComparison.Ordinal));
 
@@ -793,7 +793,7 @@ public class ReadOnceStatusTests
         var unwind = BracedBlock(read, read.IndexOf("finally", StringComparison.Ordinal));
         Assert.Contains("SetReadOnceCancelMode(reading: false);", unwind, StringComparison.Ordinal);
 
-        var compact = Code(File.ReadAllText(RepoFile("MainWindow.Compact.cs")));
+        var compact = Code(File.ReadAllText(RepoFile("Views/MainWindow.Compact.cs")));
         var enter = BracedBlock(compact, compact.IndexOf("internal void EnterCompactMode()",
                                                          StringComparison.Ordinal));
         Assert.Contains("SetReadOnceCancelMode(_readingOnce);", enter, StringComparison.Ordinal);
