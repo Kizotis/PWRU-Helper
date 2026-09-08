@@ -27,7 +27,7 @@ Even unsigned, listing the hash lets careful users verify the download. Add the 
 of this to each release's notes:
 
 ```powershell
-Get-FileHash .\PWRUHelper.exe, .\PWRUHelper-0.7.0-setup.msi -Algorithm SHA256 |
+Get-FileHash .\PWRUHelper.exe, .\PWRUHelper-0.15.2-setup.msi -Algorithm SHA256 |
   Format-Table Hash, Path -AutoSize
 ```
 
@@ -35,20 +35,39 @@ Get-FileHash .\PWRUHelper.exe, .\PWRUHelper-0.7.0-setup.msi -Algorithm SHA256 |
 `winget install Kizotis.PWRUHelper` is a clean path for technical players. The MSI
 (perMachine, stable `UpgradeCode`, MIT-licensed) is a good fit.
 
-Easiest is **wingetcreate**, which fills in the SHA-256 and MSI ProductCode for you
-from the release URL:
+> ### ⚠️ PWRU Helper has NEVER been submitted to winget-pkgs
+> `Kizotis.PWRUHelper` does not exist in the `microsoft/winget-pkgs` repository — no
+> version of it has ever been published. Everything below that says *update* only works
+> on a package winget already knows about, so **the very first submission must be done
+> by hand with `wingetcreate new`.** That includes the "Submit to winget" release-workflow
+> step: it runs `wingetcreate update` and will fail until the package exists.
+
+**Step 1 — the one-time first submission (manual, by you):**
 
 ```powershell
 winget install Microsoft.WingetCreate
-wingetcreate update Kizotis.PWRUHelper `
-  --version 0.7.0 `
-  --urls "https://github.com/Kizotis/PWRU-Helper/releases/download/v0.7.0/PWRUHelper-0.7.0-setup.msi" `
-  --submit    # opens a PR to microsoft/winget-pkgs
+wingetcreate new "https://github.com/Kizotis/PWRU-Helper/releases/download/v0.15.2/PWRUHelper-0.15.2-setup.msi"
+# It prompts for the metadata, then opens the PR to microsoft/winget-pkgs.
 ```
 
-**First time only:** the package doesn't exist on winget yet, so do the initial
-submission by hand with `wingetcreate new` (walks you through it) instead of `update`.
-After that, `update` — and the automation below — keep it current.
+The hand-written manifests in `packaging/winget/` are kept current (they match v0.15.2)
+and can be pasted straight into `wingetcreate new`'s prompts — or submitted as-is by
+forking `microsoft/winget-pkgs` and dropping them in
+`manifests/k/Kizotis/PWRUHelper/0.15.2/`. Check them first with:
+
+```powershell
+winget validate --manifest packaging\winget
+```
+
+**Step 2 — every release after that** is a plain `update`, which fills in the SHA-256
+and the MSI ProductCode for you from the release URL:
+
+```powershell
+wingetcreate update Kizotis.PWRUHelper `
+  --version 0.15.2 `
+  --urls "https://github.com/Kizotis/PWRU-Helper/releases/download/v0.15.2/PWRUHelper-0.15.2-setup.msi" `
+  --submit    # opens a PR to microsoft/winget-pkgs
+```
 
 ### Automated on every release
 The Release workflow has a **"Submit to winget"** step that runs `wingetcreate update … --submit`
@@ -60,18 +79,27 @@ for each tagged release. It's **opt-in and safe**:
 
 With the secret set, tagging `vX.Y.Z` publishes the release **and** opens the winget PR
 automatically. Without it, the step just prints these instructions and the release still
-succeeds. (Remember: the *first* package version must be submitted once by hand as above,
-because `update` only works on a package winget already knows.)
+succeeds. **This automation cannot bootstrap the package**: until the manual
+`wingetcreate new` submission of Step 1 has been merged into `microsoft/winget-pkgs`,
+the step has nothing to update and will fail.
 
-Hand-authored manifest templates are in `packaging/winget/` for reference / manual edits —
-but the MSI `ProductCode` changes on every WiX build (`Product Id="*"`), so let wingetcreate
-read it from the actual released file rather than hard-coding it.
+The manifests in `packaging/winget/` are hand-maintained and currently pinned to **0.15.2**
+(the values were read from the real released MSI). Two fields are version-specific and must
+be refreshed for every new version:
+
+- `InstallerSha256` — `Get-FileHash <msi> -Algorithm SHA256`
+- `ProductCode` — WiX regenerates it on **every** build (the `<Package>` element has no fixed
+  `ProductCode`), so it must be read from the actual released `.msi`, never guessed.
+
+The `UpgradeCode` `{B7D1F3A2-6E54-4C9B-8A1D-2F0C7E5A9B34}` is the opposite: fixed forever in
+`installer/Product.wxs`, so it stays the same in every manifest.
+`wingetcreate update` refreshes both version-specific fields for you.
 
 To read the ProductCode of a built MSI yourself:
 
 ```powershell
 $i = New-Object -ComObject WindowsInstaller.Installer
-$db = $i.GetType().InvokeMember('OpenDatabase','InvokeMethod',$null,$i,@('PWRUHelper-0.7.0-setup.msi',0))
+$db = $i.GetType().InvokeMember('OpenDatabase','InvokeMethod',$null,$i,@('PWRUHelper-0.15.2-setup.msi',0))
 $v  = $db.GetType().InvokeMember('OpenView','InvokeMethod',$null,$db,@("SELECT Value FROM Property WHERE Property='ProductCode'"))
 $v.GetType().InvokeMember('Execute','InvokeMethod',$null,$v,$null)
 $r = $v.GetType().InvokeMember('Fetch','InvokeMethod',$null,$v,$null)

@@ -1,18 +1,34 @@
-# Installer manifest TEMPLATE. Replace <...> placeholders, or (recommended) let
-# `wingetcreate` fill InstallerSha256 + ProductCode from the released MSI URL.
+# Installer manifest for the WiX v5 MSI (perMachine, fixed UpgradeCode + MajorUpgrade).
+# WiX regenerates the MSI ProductCode on EVERY build, so it is version-specific and must be
+# re-read from the actual released .msi for each version (see packaging/DISTRIBUTION.md).
+# `wingetcreate update` fills InstallerSha256 + ProductCode automatically — prefer it.
 PackageIdentifier: Kizotis.PWRUHelper
-PackageVersion: 0.7.0
+PackageVersion: 0.15.2
+Platform:
+  - Windows.Desktop
+# .NET 8 WPF app targeting net8.0-windows10.0.19041.0 (needs the Windows 10 2004 OCR engine).
+MinimumOSVersion: 10.0.19041.0
 InstallerType: wix
 Scope: machine
 InstallModes:
   - interactive
   - silent
   - silentWithProgress
+# The MSI carries MajorUpgrade, so it removes the previous version itself.
 UpgradeBehavior: install
+ReleaseDate: 2026-09-07
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/Kizotis/PWRU-Helper/releases/download/v0.7.0/PWRUHelper-0.7.0-setup.msi
-    InstallerSha256: <SHA256 OF THE RELEASED .msi>
-    ProductCode: '<{PRODUCT-CODE-GUID} FROM THE RELEASED .msi>'
+    InstallerUrl: https://github.com/Kizotis/PWRU-Helper/releases/download/v0.15.2/PWRUHelper-0.15.2-setup.msi
+    InstallerSha256: 45746CAA47D47380BA3885D8552EB79608D32E1AF63C816C29284E85578FA408
+    ProductCode: '{FA87F594-3EBE-4552-B805-E9B06751B6E6}'
+    AppsAndFeaturesEntries:
+      - DisplayName: PWRU Helper
+        Publisher: Kizotis
+        DisplayVersion: 0.15.2.0
+        ProductCode: '{FA87F594-3EBE-4552-B805-E9B06751B6E6}'
+        # Fixed forever (installer/Product.wxs) — lets winget correlate every version.
+        UpgradeCode: '{B7D1F3A2-6E54-4C9B-8A1D-2F0C7E5A9B34}'
+        InstallerType: wix
 ManifestType: installer
 ManifestVersion: 1.6.0

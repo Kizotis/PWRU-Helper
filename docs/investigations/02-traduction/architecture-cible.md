@@ -1,7 +1,9 @@
 # 02 — P2 · Target architecture (translation path)
 
 _Phase 2 · author: **Winston** (BMAD System Architect), workflow **CA — Create Architecture** ·
-baseline commit `4759712` = `main` v0.14.0 · 2026-09-06 · status: **target — Phase 2 (design frozen, not implemented)**._
+baseline commit `4759712` = `main` v0.14.0 · 2026-09-06 · status: **implemented** — the P2 rebuild shipped in v0.15.0 (releases A.0–B) and v0.15.2
+(the offline tier, §7.6). Read it as the description of the system as built; the dated
+annotations inside record where the outcome diverged from the design._
 
 **Inputs.** `project-context.md` (hard rules) · `docs/investigations/README.md` (Phase 0/1 consolidations, the owner's
 answers and his five Phase-2 decisions) · `02-traduction/analyse-implementation-actuelle.md` (§2 volume model,
@@ -42,7 +44,7 @@ copy (the `02-traduction/` UX deliverable, written in parallel).
 | WGC session caching | Declined; unrelated. |
 | A generic "provider framework", a plugin model, a provider registry loaded from JSON | Rule of Three. Six concrete providers, one shared HTTP helper, one chain type. Nothing more. |
 | User-Agent rotation, `client=` rotation as a *primary* strategy, JA3/TLS impersonation, forced HTTP/2, proxies, VPN advice | Folklore against an IP+client-id-keyed counter; `mecanismes…` Q6 and "Explicitly not worth building". |
-| New NuGet packages | Only one, and only in a prototype: `BergamotTranslatorSharp` (§7.6). Azure uses a raw `HttpClient` POST — see §7.5 for why. |
+| New NuGet packages | Only one, and only for the offline tier: `BergamotTranslatorSharp` (§7.6). It shipped in **v0.15.2**, referenced with `ExcludeAssets="native"` so nothing native enters the build output. Azure uses a raw `HttpClient` POST — see §7.5 for why. |
 | Splash screen, ReadyToRun, trimming, AOT, single-file compression, shipping fewer releases | Owner-banned or measured worse; see §13. |
 | DPAPI-encrypted API keys | Noted as optional later hardening in §12, not now. |
 
@@ -99,7 +101,7 @@ flowchart TB
     P3["GoogleGtxTranslator"]
     P4["AzureTranslator"]
     P5["DeepLTranslator"]
-    P6["BergamotTranslator<br/>prototype only"]
+    P6["BergamotTranslator<br/>optional offline tier"]
     LOG["Logging"]
   end
 
@@ -154,7 +156,7 @@ flowchart TB
 | `GoogleGtxTranslator` | `Services/GoogleGtxTranslator.cs` | Today's `TranslationService`, renamed, demoted to a late tier, typed errors. | Being the default. |
 | `AzureTranslator` | `Services/AzureTranslator.cs` | Azure AI Translator F0/S1 over raw `HttpClient`. | — |
 | `DeepLTranslator` | `Services/DeepLTranslator.cs` | Unchanged behaviour; error construction goes through `Kind`. | Ever being reachable from the read path (I8). |
-| `BergamotTranslator` | `Services/BergamotTranslator.cs` | **Prototype only.** Lazy model load, idle unload, synchronous native call on `Task.Run`. **Landed E8.S2** (prototype branch): the provider alone — `Load()`/`Unload()`/`IsLoaded` are the capability, the store is E8.S3, the chain placement is E8.S5. The *policy* landed **E8.S4** as `Services/BergamotLifetime.cs` (A-1(b), see §7.6 constraint 2): the provider calls it, owns no timer and decides nothing. | Shipping before the measured go/no-go (§7.6). Calling `ProviderGate.TryEnter` (a local engine takes no admission token) or writing `NotSent` (ruling E8-c). |
+| `BergamotTranslator` | `Services/BergamotTranslator.cs` | **The optional offline tier — shipped in v0.15.2.** Lazy model load, idle unload, synchronous native call on `Task.Run`. **Landed E8.S2**: the provider alone — `Load()`/`Unload()`/`IsLoaded` are the capability, the store is E8.S3, the chain placement is E8.S5. The *policy* landed **E8.S4** as `Services/BergamotLifetime.cs` (A-1(b), see §7.6 constraint 2): the provider calls it, owns no timer and decides nothing. | Being anything but the **last** rung of both chains, or running when `OfflineTierIsAvailable` is false (§7.6). Calling `ProviderGate.TryEnter` (a local engine takes no admission token) or writing `NotSent` (ruling E8-c). |
 | `IBergamotEngine` | `Services/BergamotEngine.cs` | **Landed E8.S2.** The three C exports as an interface — `translator_initialize` (the factory), `translator_translate`, `translator_free` — with `BergamotEngine` wrapping `BlockingService` and a fake standing in for it in every automated case of epic E8 (CI-8: no model download, no native DLL in CI). | Widening it: it is a P/Invoke surface, not an abstraction layer. |
 | `TextChunker` | `Services/TextChunker.cs` | `ChunkText` / `HardSplit`, moved out of `TranslationService` because two providers need them. | — |
 
@@ -693,18 +695,35 @@ fragility of §7.1. When a key is present it is therefore also the **safest** ti
 > CONFIRMED from the pricing page's wording and REPORTED from a Microsoft Q&A, but not verified on a real resource.
 > The settings copy must not promise "free forever" until it is.
 
-### 7.6 `BergamotTranslator` — **prototype only**, Phase 2
+### 7.6 `BergamotTranslator` — the optional offline tier, **shipped in v0.15.2**
+
+> **This shipped — release v0.15.2, epic E8, PR #59.** This section was written as a *prototype* spec — "not a
+> shipping component", a measured go/no-go, a branch that merges only on a go. All of that is now history: E8.S1's
+> five thresholds held (GO), E8.S2–E8.S6 landed the provider, the model store, the lifetime policy, the chain
+> placement and the packaging, and the owner waived E8.S7's field run and ordered the release (**ruling E8-h**,
+> `../README.md`). What ships:
+>
+> - **One language pair, ru→en, the `tiny` model.** A second pair is out of scope, so **ruling E8-a** binds the
+>   RAM ceiling to **150 MiB while active** — A-1(c)'s 127–310 MiB was the two-model RU↔FR pivot budget.
+> - **Appended LAST in both chains**, behind the single predicate `OfflineTierIsAvailable` (the
+>   `OfflineFallbackEnabled` setting **and** the store's installed answer — never the setting alone).
+> - **Files come only from the `offline-engine-v1` GitHub pre-release** and are verified — size, then SHA-256 —
+>   against `OfflineModelManifest.Shipping`, which ships inside the exe. The `UpdateService` allowlist was **not**
+>   widened (constraint 5, ruling E8-f).
+> - **Idle unload after 10 minutes**, subject to constraint 2's LIVE-aware amendment below.
+>
+> The paragraphs and constraints below are kept as written, with their landed annotations, so the reasoning behind
+> the shipped shape stays readable. Where one of them still says "prototype" or "prototype branch", read it as the
+> design-time framing it was.
 
 > **Amendment A-1 (Winston, 2026-09-06, after the owner's answer to OQ-C).** The owner asked for "a very small, very fast, one-click local translator that takes over when internet requests fail, even at a RAM cost". That is this component, with three changes to the text below: **(a)** installation is **one click** from the About tab (download of the engine + the needed language pairs on explicit consent, per `ux-mode-degrade.md` §4; `OfflineFallbackEnabled` is written by the Download/Remove actions, ruling R-4); **(b)** once installed, the model is **loaded on the first fallback use and kept loaded while LIVE is running** — it is unloaded only after LIVE stops and an idle timeout elapses, not on every idle window; **(c)** the RAM budget line below is **relaxed by the owner's explicit acceptance** (+127–310 MiB while active). Everything else stands: last tier of both chains, downstream of `SlangGlossary.Expand` (I6), prototype with a measured go/no-go (U6/U7), no dependency of any other component on it. True LLMs (Qwen/Gemma/Phi, 1–3 GB, seconds per line on CPU) remain rejected per `benchmark-fournisseurs.md` §6.
-
-Not a shipping component. It is in this architecture so the prototype is built against the same invariants.
 
 | | |
 |---|---|
 | Provider id | `bergamot` |
-| Package | `BergamotTranslatorSharp` (MPL-2.0, NuGet 0.5.1, 2026-07-30, net8.0) — **the only new NuGet in this design, and only on the prototype branch** |
+| Package | `BergamotTranslatorSharp` (MPL-2.0, NuGet 0.5.1, 2026-07-30, net8.0) — **the only new NuGet in this design**; referenced with `ExcludeAssets="native"` (constraint 4) |
 | Native | `bergamot.dll` win-x64, 21.4 MiB; imports `KERNEL32`/`SHELL32`/`dbghelp`/`ole32` only — no MKL, no MSVC redistributable |
-| Models | Mozilla, ~22–37 MB each decompressed; **downloaded on first use, never embedded** |
+| Models | Mozilla, ~22–37 MB each decompressed; **downloaded on explicit consent from the About tab, never embedded** |
 | Measured (`benchmark…` §10) | `tiny` ru→en: init 103–119 ms, 6.5–12.1 ms/line, 64–80 lines/s; **RSS +127 MiB USS, and it is NOT tunable** (swept `workspace`, `mini-batch-words`, `max-length-break`: ±1 MiB) |
 | Quality | COMET-22 ru→en flores200 **0.8497** vs Google 0.8785 — ahead of NLLB-600M (2.29 GiB) and OPUS-MT (307 MB) |
 
@@ -773,7 +792,9 @@ Architectural constraints, all load-bearing:
    compatible with shipping alongside an MIT app; it is still a second licence, and the owner has chosen SignPath
    Foundation, which requires the app itself to stay OSI-licensed (MIT).
 
-**Go/no-go is measured, not argued** — see `plan-migration.md`, increment 7.
+**Go/no-go was measured, not argued** — `plan-migration.md`, increment 7. Outcome: **GO** on E8.S1's five
+thresholds (2026-09-07, `03-stories/spikes/U6-U7-bergamot.md`); the target-machine half of that campaign (E8.S7)
+was **waived by the owner** and became v0.15.2's field feedback (ruling E8-h).
 
 ---
 
@@ -1111,9 +1132,10 @@ what makes P2 provable instead of arguable.
 - `DefaultsAndResizeTests.cs:16,28-32` pins `LiveSpeedPercent = 92` and the 700/3000/500 interval mapping. The LIVE
   back-off changes the *wait between ticks*, not `LiveIntervalMs(double)`; if a story ever needs to change that
   pure function, the pin is updated deliberately, in the same commit.
-- `PublishFlagsTests.cs:44-70` guards the no-compression choice and flag parity across the three build paths. Only
-  the Bergamot prototype (§7.6) and the MSI option (§13) would touch it, and both are outside the shipping
-  increments.
+- `PublishFlagsTests.cs:44-70` guards the no-compression choice and flag parity across the three build paths. The
+  offline tier shipped **without touching it** — layout C keeps the native asset out of every build output
+  (§7.6 constraint 4, E8.S6), so the only remaining candidate is the MSI option (§13), which is outside the
+  shipping increments.
 
 ---
 
@@ -1258,7 +1280,7 @@ blaming the key. A test never clears a gate — ruling E2-i gives that to a key 
 | R5 | **The rename `TranslationService` → `GoogleGtxTranslator` breaks docs and muscle memory.** | The same PR updates `project-context.md`, the two `ServicesTests` references and this document's glossary. Nothing else references the type by name. |
 | R6 | **A gate-open LIVE loop looks dead** — the `● LIVE` heartbeat keeps blinking while nothing happens. | An explicit paused state with a countdown, on both the main window and the overlay (Sally, increment 6). Pausing is not an error and must not auto-stop LIVE (§9.2). |
 | R7 | **Increment 1 shipped alone would make things worse** — a breaker in front of an endpoint that 429s on request #1 is an app that is correctly paused all the time. | Increments 1 and 2 are separate PRs but **one release** (the owner's decision 2; `plan-migration.md` says so explicitly). |
-| R8 | **Bergamot never earns its way in.** | It is a prototype with a measured go/no-go, and it is last. Nothing else in this design depends on it. |
+| R8 | ~~**Bergamot never earns its way in.**~~ **Retired 2026-09-07** — it earned its way in: the go/no-go measured GO and it shipped in **v0.15.2**. | It is still **last** in both chains, still **opt-in** (`OfflineTierIsAvailable`), and nothing else in this design depends on it — so a later no-go costs one **Remove** click and one release (ruling E8-h). |
 | R9 | **A user's Azure key gets drained by LIVE.** | `UseKeyForReading` defaults to false and the setting says what it costs; `QuotaExhausted` opens the gate for an hour rather than retrying. |
 
 ### 15.3 Open questions for the owner
