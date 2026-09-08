@@ -38,7 +38,9 @@ Ready-to-paste answers:
 | Artifacts to sign | `PWRUHelper.exe` (portable single-file) and `PWRUHelper-<version>-setup.msi`. |
 | Maintainer | Kizotis — github.com/Kizotis · twitch.tv/kizotis · discord `kizotis` |
 
-Approval typically takes a few days to a few weeks.
+**Applied 2026-09-08.** Waiting on SignPath Foundation's decision; approval typically takes
+a few days to a few weeks. Nothing else can move until it lands — the CI half is already done
+(Step 3), so activation is Step 2 plus one test tag.
 
 ## Step 2 — Set up the SignPath project (Kizotis, after approval)
 
@@ -70,6 +72,47 @@ turns signing on** — the CI wiring is already in the workflow (Step 3). The si
 values above are what the signing steps read once they start running, so set all of them
 in the same sitting; a token with missing variables produces a failing signing request,
 not an unsigned release.
+
+### Setting them from the terminal
+
+Faster and less error-prone than seven trips through the Settings UI. Requires `gh auth login`
+with admin rights on the repo. Fill in the seven values first, then paste the block whole:
+
+```bash
+gh secret   set SIGNPATH_API_TOKEN          --body "<CI user API token>"
+gh variable set SIGNPATH_ORGANIZATION_ID    --body "<org id>"
+gh variable set SIGNPATH_PROJECT_SLUG       --body "pwru-helper"
+gh variable set SIGNPATH_POLICY_SLUG        --body "release-signing"
+gh variable set SIGNPATH_EXE_ARTIFACT_CONFIG --body "<artifact-config slug for the exe>"
+gh variable set SIGNPATH_MSI_ARTIFACT_CONFIG --body "<artifact-config slug for the msi>"
+gh variable set SIGNPATH_CONNECTOR_URL      --body "<connector URL from the dashboard>"
+```
+
+Check what landed — the secret's VALUE is never readable again, only its name and date:
+
+```bash
+gh secret list
+gh variable list
+```
+
+### Activation checklist
+
+The token is the switch, so treat the next tag as a test rather than a release you rely on:
+
+1. Set the secret and all six variables in one sitting.
+2. Tag a patch version and push the tag.
+3. Watch the run: the four SignPath steps must **run**, not skip. If they skipped, the token
+   is unset or empty; if they failed, a `vars.*` value is wrong or `actions: read` was removed
+   from the workflow's `permissions:` block.
+4. Confirm the release still carries **both** artifacts (`gh release view <tag> --json assets`).
+5. Download the `.exe` and the `.msi`, open Properties in Windows: there must be a
+   **Digital Signatures** tab naming *SignPath Foundation*.
+6. Only then announce the release. If any step above fails, the fix is to unset
+   `SIGNPATH_API_TOKEN` — the workflow instantly reverts to shipping unsigned artifacts.
+
+Expect SmartScreen to keep warning for a while: the certificate is OV, so its reputation
+builds with download volume. Signing removes the *unknown publisher* wording and, more
+importantly for startup time, gives Defender a stable publisher identity to trust.
 
 ## Step 3 — CI wiring (APPLIED — live but dormant)
 
