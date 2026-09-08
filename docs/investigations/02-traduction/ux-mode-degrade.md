@@ -708,7 +708,8 @@ sentence must be re-derived, not left to rot.
    with no trace.
 4. Download with a percentage and a `Cancel`; the app stays fully usable throughout.
 5. Ready: `● Offline engine ready — used only when everything else is unavailable.`
-6. Next time everything is paused, the chip shows `● Offline engine`, the status line says `Translated on your PC
+6. Next time everything is paused, the chip shows `● Offline` (§3.0 rule 3 — `Offline engine` is the name, `Offline`
+   is the chip; **ruling E8-g**), the status line says `Translated on your PC
    (offline engine).`, and the feed keeps moving. When the online engines recover, the chain goes back up and the
    model is unloaded on idle — silently; the chip changing is enough.
 

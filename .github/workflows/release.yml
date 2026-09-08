@@ -12,10 +12,22 @@ on:
 
 permissions:
   contents: write
+  # The SignPath action reads the job details and downloads the uploaded artifact with the
+  # workflow token. Because this permissions block is explicit, every scope NOT listed here is
+  # `none` — so `actions: read` has to be granted or the signing steps fail the moment they are
+  # switched on. It costs nothing while signing is dormant.
+  actions: read
 
 jobs:
   release:
     runs-on: windows-latest
+    # `secrets` is NOT one of the contexts available to a step-level `if:`, so the token is
+    # mapped ONCE here (a job-level `env:` may read `secrets`) and every SignPath step tests the
+    # mapped string instead. No token set => SIGNING_ENABLED is 'false' => all signing steps are
+    # skipped and the release ships the same unsigned exe + msi it always has.
+    # See packaging/signpath-signing.md for the repo secret/variables that switch it on.
+    env:
+      SIGNING_ENABLED: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -46,26 +58,74 @@ jobs:
           -p:IncludeNativeLibrariesForSelfExtract=true
           -p:DebugType=none
 
-      - name: Build MSI installer + stage both artifacts
+      # The exe is staged into dist/ FIRST so a single path — dist/PWRUHelper.exe — is both what
+      # gets signed (when signing is on) and what the MSI wraps. The portable download and the MSI
+      # therefore always ship the exact same build, signed or not.
+      - name: Stage the portable exe
+        shell: pwsh
+        run: |
+          $exe = "bin/Release/net8.0-windows10.0.19041.0/win-x64/publish/PWRUHelper.exe"
+          if (-not (Test-Path $exe)) { throw "Published exe not found at $exe" }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item $exe "dist/PWRUHelper.exe"
+
+      # ---- sign the exe (dormant until SIGNPATH_API_TOKEN is set) ----
+      - name: Upload exe for signing
+        id: upload-exe
+        if: env.SIGNING_ENABLED == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-exe
+          path: dist/PWRUHelper.exe
+
+      - name: Sign exe with SignPath
+        if: env.SIGNING_ENABLED == 'true'
+        uses: SignPath/github-action-submit-signing-request@v2
+        with:
+          connector-url: ${{ vars.SIGNPATH_CONNECTOR_URL }}
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_EXE_ARTIFACT_CONFIG }}
+          github-artifact-id: ${{ steps.upload-exe.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: dist          # overwrites dist/PWRUHelper.exe with the signed one
+
+      - name: Build MSI installer (wraps the exe from dist, signed if signing ran)
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}".TrimStart('v')     # "v0.9.0" -> "0.9.0"
-          $exe = "bin/Release/net8.0-windows10.0.19041.0/win-x64/publish/PWRUHelper.exe"
-          if (-not (Test-Path $exe)) { throw "Published exe not found at $exe" }
-
-          New-Item -ItemType Directory -Force dist | Out-Null
-
-          # The installer wraps the very exe we just published, so the portable download and
-          # the MSI ship the exact same build.
           wix build installer/Product.wxs -ext WixToolset.UI.wixext -arch x64 `
             -d Version="$version.0" `
-            -d ExeFile="$exe" `
+            -d ExeFile="dist/PWRUHelper.exe" `
             -d IconFile="assets/icon.ico" `
             -d LicenseFile="installer/license.rtf" `
             -o "dist/PWRUHelper-$version-setup.msi"
-
-          Copy-Item $exe "dist/PWRUHelper.exe"
           Get-ChildItem dist
+
+      # ---- sign the msi (dormant until SIGNPATH_API_TOKEN is set) ----
+      - name: Upload msi for signing
+        id: upload-msi
+        if: env.SIGNING_ENABLED == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-msi
+          path: dist/PWRUHelper-*-setup.msi
+
+      - name: Sign msi with SignPath
+        if: env.SIGNING_ENABLED == 'true'
+        uses: SignPath/github-action-submit-signing-request@v2
+        with:
+          connector-url: ${{ vars.SIGNPATH_CONNECTOR_URL }}
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_MSI_ARTIFACT_CONFIG }}
+          github-artifact-id: ${{ steps.upload-msi.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: dist          # overwrites the msi with the signed one
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2

@@ -1,6 +1,8 @@
-# Version manifest — see packaging/DISTRIBUTION.md. Prefer `wingetcreate` over editing by hand.
+# Version manifest — see packaging/DISTRIBUTION.md.
+# The package has never been published to winget-pkgs: the FIRST submission must be made
+# by hand with `wingetcreate new`. After that, prefer `wingetcreate update` over hand-edits.
 PackageIdentifier: Kizotis.PWRUHelper
-PackageVersion: 0.7.0
+PackageVersion: 0.15.2
 DefaultLocale: en-US
 ManifestType: version
 ManifestVersion: 1.6.0

@@ -3,6 +3,22 @@
 _Phase 2 · author: **Paige** (BMAD Technical Writer), workflow **WD → MG → VD** · baseline commit `4759712` = `main` v0.14.0 ·
 branch `docs/investigations-diagnostic`, PR **#54** · 2026-09-06 · status: **synthesis of Phases 0–2. No production code was changed.**_
 
+> **Reading note added 2026-09-09 — one item below has since shipped.** This document is a **frozen snapshot of
+> Phases 0–2** and is deliberately not rewritten. One thing it describes as undecided is now decided: the
+> **Bergamot offline engine** (decision 4, lever 8 in the options table, increment 7, risk R8, and the
+> `prototype only` box in the component diagram) is no longer a prototype — it **shipped in v0.15.2** as an
+> optional, opt-in tier. Measured GO on
+> E8.S1's five thresholds; the target-machine field run was waived by the owner (**ruling E8-h**). Shipped shape:
+> one language pair **ru→en** (`tiny` model), **150 MiB** RAM ceiling while active (**ruling E8-a** — the
+> 250–310 MiB figures below were the two-model RU↔FR pivot budget), appended **last** in both chains behind
+> `OfflineTierIsAvailable`, files downloaded on consent from the `offline-engine-v1` GitHub pre-release and
+> verified by size then SHA-256 against `OfflineModelManifest.Shipping` (which ships inside the exe), idle unload
+> after 10 minutes. The current picture lives in [`README.md`](README.md) (Release C) and
+> [`02-traduction/architecture-cible.md`](02-traduction/architecture-cible.md) §7.6.
+>
+> _(FR) Un seul point de ce document a changé : le moteur hors-ligne **Bergamot** n'est plus un prototype — il est
+> **livré dans la v0.15.2**, optionnel et installable en un clic depuis l'onglet About._
+
 **How to read this document.** It **summarises and points**; it does not re-derive anything. Every number carries a pointer to the
 document and section that owns it (or a `file:line` for code). Evidence grades are carried through unchanged:
 **[MEASURED]** · **[CONFIRMED]** (read in code/config, or a dated first-party source) · **[INFERRED]** (derived, reasoning stated) ·

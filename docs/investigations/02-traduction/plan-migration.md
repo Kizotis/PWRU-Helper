@@ -1,7 +1,9 @@
 # 02 — P2 · Migration plan
 
 _Phase 2 · author: **Winston** (BMAD System Architect) · companion to `architecture-cible.md` ·
-baseline commit `4759712` = `main` v0.14.0 · 2026-09-06 · status: **proposed — no code written**._
+baseline commit `4759712` = `main` v0.14.0 · 2026-09-06 · status: **executed** — every increment below landed;
+increments 1–6 shipped as v0.15.0, increment 7 (the offline tier) as v0.15.2. Kept as the plan
+of record, with dated outcome notes where reality differed from the proposal._
 
 **Rule for every increment below:** it must be **shippable on its own** (the app works, the suite is green, the
 release could be cut) and **reversible on its own** (one PR, one revert). There is no big-bang. Every change lands
@@ -128,6 +130,18 @@ ship on their own.
 ---
 
 ## Increment 7 — Bergamot prototype, with a measured go/no-go
+
+> **Outcome, recorded 2026-09-09 — this increment SHIPPED as v0.15.2.** The plan below is left as written; it is the
+> proposal, not a description of the app. What actually happened: E8.S1's measurements returned **GO**, epic E8
+> (stories S1–S6) landed on `feature/p2-c-offline` and merged as PR #59, and the owner **waived** the
+> target-machine field run (E8.S7) and ordered the release — **ruling E8-h**, `../README.md`. The shipped shape:
+> one language pair (**ru→en**, the `tiny` model), a **150 MiB** RAM ceiling while active (**ruling E8-a** — the
+> 310 MiB below was the two-model RU↔FR pivot budget), the tier appended **last** in both chains behind
+> `OfflineTierIsAvailable`, files downloaded on consent from the `offline-engine-v1` GitHub pre-release and
+> verified by size then SHA-256 against `OfflineModelManifest.Shipping` (inside the exe), idle unload after
+> 10 minutes. Two guesses below did **not** hold: no build file was touched and `PublishFlagsTests` is unchanged
+> (layout C — `ExcludeAssets="native"`, `architecture-cible.md` §7.6 constraint 4), and the download is triggered
+> by an explicit About-tab click rather than "on first use".
 
 **Prototype branch. It does not merge unless the measurements say so.**
 

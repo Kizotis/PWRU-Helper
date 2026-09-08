@@ -5,7 +5,8 @@ publisher" warning. The only **genuinely free** way to fix this is the
 [SignPath Foundation](https://signpath.org) programme, which signs open-source projects
 for free. This file is everything needed to get it running; it's split into the
 **one-time action only Kizotis can do** (apply + set up the account) and the
-**CI wiring** (already drafted below — activates itself once the secrets exist).
+**CI wiring** (already applied to `release.yml` — dormant, and switches itself on the
+moment the secrets exist).
 
 > Trade-offs to accept up front:
 > - The certificate is issued to **"SignPath Foundation"**, so Windows will show
@@ -64,136 +65,57 @@ Then add these to the GitHub repo (**Settings → Secrets and variables → Acti
 | Variable | `SIGNPATH_MSI_ARTIFACT_CONFIG` | artifact-config slug for the msi |
 | Variable | `SIGNPATH_CONNECTOR_URL` | the GitHub connector URL from SignPath's dashboard |
 
-That's the whole one-time part **on the SignPath side**.
+That's the whole one-time part. **Setting `SIGNPATH_API_TOKEN` is also the switch that
+turns signing on** — the CI wiring is already in the workflow (Step 3). The six `vars.*`
+values above are what the signing steps read once they start running, so set all of them
+in the same sitting; a token with missing variables produces a failing signing request,
+not an unsigned release.
 
-> ⚠️ **Setting these secrets alone does NOT switch signing on.** The signing steps are
-> only *drafted* in Step 3 below — `.github/workflows/release.yml` does not contain a
-> single reference to SignPath today (`grep -i signpath .github/workflows/release.yml`
-> returns nothing). Until that block is actually applied to the workflow, a tagged
-> release keeps shipping unsigned no matter what secrets exist. Step 3 is a real
-> to-do, not a description of the current pipeline.
+## Step 3 — CI wiring (APPLIED — live but dormant)
 
-## Step 3 — CI wiring (already drafted; apply when secrets exist)
+`.github/workflows/release.yml` already contains the SignPath steps. Nothing further
+needs editing: with no `SIGNPATH_API_TOKEN` secret they all skip, and a tagged release
+ships exactly the unsigned `PWRUHelper.exe` + `PWRUHelper-<version>-setup.msi` it always
+has. Set the secret (plus the variables above) and the same workflow starts signing.
 
-Replace the steps in `.github/workflows/release.yml` from *"Publish portable single-file
-exe"* onward with the block below. Key idea: the MSI is always built from
-`dist/PWRUHelper.exe`, and when signing is enabled that file has already been replaced
-by its **signed** copy — so the installer wraps a signed exe, and the MSI itself is
-signed afterwards. Every SignPath step is gated on the token existing.
+How it's wired, in order:
+
+1. **Publish portable single-file exe** — unchanged publish flags (notably *no*
+   `-p:EnableCompressionInSingleFile`; see the comment above that step, it costs ~110 MB
+   of RAM at runtime).
+2. **Stage the portable exe** into `dist/PWRUHelper.exe`, so one path is both what gets
+   signed and what the installer wraps.
+3. **Upload exe for signing** → **Sign exe with SignPath** — writes the signed exe back
+   over `dist/PWRUHelper.exe`. *(guarded)*
+4. **Build MSI installer** from `dist/PWRUHelper.exe` — so the MSI wraps the signed exe
+   when signing ran, and the same build as the portable download either way.
+5. **Upload msi for signing** → **Sign msi with SignPath** — overwrites the MSI in
+   `dist/`. *(guarded)*
+6. **Publish GitHub Release** with both files from `dist/`, then the existing opt-in
+   winget step.
+
+**The guard.** `secrets` is not one of the contexts GitHub makes available to a
+step-level `if:`, so `if: ${{ secrets.SIGNPATH_API_TOKEN != '' }}` on a step is not
+trustworthy. The token is mapped once at **job** level (where `secrets` *is* available)
+and each SignPath step tests the mapped string:
 
 ```yaml
-      # No -p:EnableCompressionInSingleFile — see the comment in release.yml. These flags must stay
-      # identical to the ones live in release.yml, or applying this block would quietly change the
-      # shipped build (compressing it again costs ~110 MB of RAM at runtime).
-      - name: Publish portable single-file exe
-        run: >
-          dotnet publish PWRUHelper.csproj -c Release -r win-x64 --self-contained true
-          -p:PublishSingleFile=true
-          -p:IncludeNativeLibrariesForSelfExtract=true
-          -p:DebugType=none
-
-      - name: Stage the portable exe
-        shell: pwsh
-        run: |
-          $exe = "bin/Release/net8.0-windows10.0.19041.0/win-x64/publish/PWRUHelper.exe"
-          if (-not (Test-Path $exe)) { throw "Published exe not found at $exe" }
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item $exe "dist/PWRUHelper.exe"
-
-      # ---- sign the exe (dormant until SIGNPATH_API_TOKEN is set) ----
-      - name: Upload exe for signing
-        id: upload-exe
-        if: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: unsigned-exe
-          path: dist/PWRUHelper.exe
-
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      SIGNING_ENABLED: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+    steps:
       - name: Sign exe with SignPath
-        if: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
-        uses: SignPath/github-action-submit-signing-request@v2
-        with:
-          connector-url: ${{ vars.SIGNPATH_CONNECTOR_URL }}
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
-          artifact-configuration-slug: ${{ vars.SIGNPATH_EXE_ARTIFACT_CONFIG }}
-          github-artifact-id: ${{ steps.upload-exe.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: dist          # overwrites dist/PWRUHelper.exe with the signed one
-
-      - name: Build MSI installer (wraps the exe from dist, signed if signing ran)
-        shell: pwsh
-        run: |
-          $version = "${{ github.ref_name }}".TrimStart('v')
-          wix build installer/Product.wxs -ext WixToolset.UI.wixext -arch x64 `
-            -d Version="$version.0" `
-            -d ExeFile="dist/PWRUHelper.exe" `
-            -d IconFile="assets/icon.ico" `
-            -d LicenseFile="installer/license.rtf" `
-            -o "dist/PWRUHelper-$version-setup.msi"
-          Get-ChildItem dist
-
-      # ---- sign the msi (dormant until SIGNPATH_API_TOKEN is set) ----
-      - name: Upload msi for signing
-        id: upload-msi
-        if: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: unsigned-msi
-          path: dist/PWRUHelper-*-setup.msi
-
-      - name: Sign msi with SignPath
-        if: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
-        uses: SignPath/github-action-submit-signing-request@v2
-        with:
-          connector-url: ${{ vars.SIGNPATH_CONNECTOR_URL }}
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
-          artifact-configuration-slug: ${{ vars.SIGNPATH_MSI_ARTIFACT_CONFIG }}
-          github-artifact-id: ${{ steps.upload-msi.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: dist          # overwrites the msi with the signed one
-
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          name: PWRU Helper ${{ github.ref_name }}
-          files: |
-            dist/PWRUHelper.exe
-            dist/PWRUHelper-*-setup.msi
-          generate_release_notes: true
+        if: env.SIGNING_ENABLED == 'true'
+        ...
 ```
 
 Notes:
-- ⚠️ **Verify the `if:` guards before trusting them.** The `secrets` context is *not* in
-  GitHub's documented list of contexts available to a step-level `if:`
-  (`github, needs, strategy, matrix, job, runner, env, vars, steps, inputs`), so
-  `if: ${{ secrets.SIGNPATH_API_TOKEN != '' }}` may evaluate as empty/false — or error —
-  rather than doing what it looks like it does. `secrets` *is* available in a job-level
-  `env:`, so the unambiguous form is to map it once and test the mapped value:
-
-  ```yaml
-  jobs:
-    release:
-      runs-on: windows-latest
-      env:
-        SIGNING_ENABLED: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
-      steps:
-        - name: Sign exe with SignPath
-          if: env.SIGNING_ENABLED == 'true'
-          ...
-  ```
-
-  Either way, the FIRST tag after wiring this up should be treated as a test: confirm the
-  release still produced both artifacts before assuming the guards behaved.
-- The exact `connector-url` and the artifact-configuration slugs come from the SignPath
-  dashboard once the project is created; they're wired as repo variables above so no
-  secret ever appears in the YAML.
-- Action pinned to `SignPath/github-action-submit-signing-request@v2` (latest, 2025-10).
-- First signed release: after tagging, check `gh release view <tag>` and confirm the
+- **Treat the FIRST tag after setting the secret as a test.** Confirm the release still
+  produced both artifacts before assuming the signing requests behaved — and confirm the
   downloaded `.exe`/`.msi` show *Digital Signatures → SignPath Foundation* in their
-  Windows file Properties.
+  Windows file Properties (`gh release view <tag> --json name,assets` for the artifacts).
+- The `connector-url` and artifact-configuration slugs come from the SignPath dashboard;
+  they're repo **variables**, so no secret value ever appears in the YAML.
+- Action pinned to `SignPath/github-action-submit-signing-request@v2`.

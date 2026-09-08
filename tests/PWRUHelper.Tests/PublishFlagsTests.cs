@@ -70,11 +70,18 @@ public class PublishFlagsTests
     }
 
     [Fact]
-    public void The_drafted_signing_workflow_would_not_change_the_shipped_build()
+    public void The_signing_wiring_is_applied_not_merely_drafted()
     {
-        // packaging/signpath-signing.md carries a replacement for release.yml, to be applied once
-        // SignPath approves. Applying it must not quietly alter how the app is published.
-        Assert.Equal(PublishFlags(Read(".github/workflows/release.yml")),
-                     PublishFlags(Read("packaging/signpath-signing.md")));
+        // packaging/signpath-signing.md used to carry a full replacement for release.yml, to be
+        // applied once SignPath approved, and this test compared the two copies. The block has now
+        // been APPLIED and deleted from the doc, so the thing worth guarding changed shape:
+        //   1. the workflow must really contain the wiring the doc claims is live, and
+        //   2. the doc must never grow a rival copy of the publish step again — a second set of
+        //      -p: flags outside the three build files is exactly the drift this class exists for.
+        var workflow = Read(".github/workflows/release.yml");
+        Assert.Contains("SignPath/github-action-submit-signing-request", workflow);
+        Assert.Contains("SIGNING_ENABLED", workflow);
+
+        Assert.Empty(PublishFlags(Read("packaging/signpath-signing.md")));
     }
 }
