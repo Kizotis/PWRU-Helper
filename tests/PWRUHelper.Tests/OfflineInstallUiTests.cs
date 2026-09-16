@@ -242,8 +242,8 @@ public class OfflineInstallUiTests : GatesTestBase
     // =============================================================================================
 
     [Theory]
-    [InlineData(false, "○ Not installed — about 50 MB to download, works with no internet at all. "
-                     + "Used only when every online engine is unavailable.", "Download the offline engine")]
+    [InlineData(false, "○ Not installed — about 50 MB, works with no internet. Used only when online engines fail.",
+                "Download the offline engine")]
     [InlineData(true, "● Offline engine ready — used only when everything else is unavailable.", "Remove")]
     public void ApplySettings_restores_the_row_without_a_handler_writing_settings_back(
         bool enabled, string expectedRow, string expectedLabel)

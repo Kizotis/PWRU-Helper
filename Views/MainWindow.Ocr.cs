@@ -32,9 +32,8 @@ public partial class MainWindow
     {
         if (_overlay is { IsVisible: true }) ExitCompactMode(); else BringToFront();
         MainTabs.SelectedIndex = TabScreenOcr;
-        LiveStatus.Text = "⚠ The Russian OCR pack isn't installed, so nothing can be read at all. " +
-                          "Install it with the \"Install Russian OCR\" button on this tab — " + whatToDoNext;
-        ShowToast("Russian OCR pack needed — install it on this tab (1 click).");
+        LiveStatus.Text = "⚠ Russian OCR pack not installed. Click \"Install Russian OCR\" below, " + whatToDoNext;
+        ShowToast("Russian OCR pack needed — install it on this tab.");
     }
 
     private bool CheckOcrAvailability()
@@ -669,8 +668,7 @@ public partial class MainWindow
             $"•  Live speed: ~{LiveIntervalMs(d.LiveSpeedPercent) / 1000.0:0.0}s between reads\n" +
             $"•  Smallest text fragment: {d.MinFragmentLetters} letters\n" +
             $"•  Stability: {d.StabilityPercent}%\n" +
-            "•  Background filter: Boost contrast\n\n" +
-            "Your capture method, and everything on the other tabs, stay as they are.",
+            "•  Background filter: Boost contrast",
             "PWRU Helper", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (answer != MessageBoxResult.Yes) return;
 

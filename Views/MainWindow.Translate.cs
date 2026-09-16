@@ -103,8 +103,7 @@ public partial class MainWindow
 
             if (AutoCopyCheck.IsChecked == true && result.Length > 0 && await CopyToClipboardAsync(result))
                 ShowToast(blocks > 1
-                    ? $"Translated & copied whole — but the game takes {TextMatching.GameChatLimit} characters " +
-                      "per message, so send the highlighted blocks one by one"
+                    ? "Translated & copied — too long for one message: send the highlighted blocks one by one"
                     : "Translated & copied — paste in game with Ctrl+V");
         }
         catch (Exception ex)
@@ -191,8 +190,7 @@ public partial class MainWindow
     private void ShowTranslateStatus(string from, string to, int blocks, int characters)
     {
         TranslateStatus.Text = blocks > 1
-            ? $"{from} → {to}  ·  {characters} characters — too long for one chat message: " +
-              $"send it as {blocks}, one highlighted block at a time"
+            ? $"{from} → {to}  ·  too long for one message: send it as {blocks} highlighted blocks"
             : $"{from} → {to}";
         TranslateStatus.SetResourceReference(TextBlock.ForegroundProperty,
             blocks > 1 ? "GoldBrush" : "TextMutedBrush");
