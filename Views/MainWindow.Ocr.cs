@@ -45,19 +45,19 @@ public partial class MainWindow
 
         if (ready)
         {
-            OcrLangStatus.Text = "Russian OCR language pack: installed and ready ✓";
+            OcrLangStatus.Text = "Russian OCR: ready ✓";
             OcrLangStatus.SetResourceReference(TextBlock.ForegroundProperty, "TealBrush");
-            InstallOcrButton.Content = "Reinstall / repair Russian OCR";
+            InstallOcrButton.Content = "Repair Russian OCR";
         }
         else
         {
             // Not "won't read well" — without it nothing is read AT ALL. The app no longer falls back
             // to the Windows engine, because a Latin engine reads Cyrillic as confident gibberish.
-            OcrLangStatus.Text = "Russian OCR language pack: NOT INSTALLED — screen reading is off until it is.";
+            OcrLangStatus.Text = "Russian OCR: not installed — screen reading is off.";
             // Warn BEFORE the click: the pack downloads through Windows Update, and many players
             // have it switched off. The button handles it (on for the install, then off again).
             if (OcrPackInstaller.IsWindowsUpdateDisabled())
-                OcrLangStatus.Text += "\nWindows Update is off on this PC — the installer turns it on just for the install, then off again.";
+                OcrLangStatus.Text += "\nWindows Update is off: the install turns it on briefly, then off again.";
             OcrLangStatus.SetResourceReference(TextBlock.ForegroundProperty, "GoldBrush");
             InstallOcrButton.Content = "Install Russian OCR (1 click)";
         }
@@ -71,8 +71,7 @@ public partial class MainWindow
         // can't hide behind our window.
         bool wasTopmost = Topmost;
         Topmost = false;
-        OcrLangStatus.Text = "⏳ A Windows admin prompt is opening — click \"Yes\". " +
-                             "If you don't see it, check the taskbar or Alt+Tab. Then wait a few minutes…";
+        OcrLangStatus.Text = "⏳ Click \"Yes\" on the Windows prompt (check the taskbar if hidden), then wait a few minutes…";
         try
         {
             // Run the elevation on a background thread. Process.Start() with the
@@ -100,23 +99,20 @@ public partial class MainWindow
             // Rebuild the engine and re-check.
             _ocr = new OcrService("ru");
             if (CheckOcrAvailability())
-                OcrLangStatus.Text = "Russian OCR installed ✓ — you're ready to read the screen.";
+                OcrLangStatus.Text = "Russian OCR installed ✓";
             else if (exitCode != 0)
                 OcrLangStatus.Text = OcrPackInstaller.DescribeFailure(exitCode);
             else
-                OcrLangStatus.Text = "Install finished, but Russian OCR still isn't detected. " +
-                                     "Try restarting the app (or Windows) and check again.";
+                OcrLangStatus.Text = "Installed, but not detected yet — restart the app (or Windows).";
         }
         catch (Win32Exception w32) when (w32.NativeErrorCode == 1223)
         {
             // 1223 = ERROR_CANCELLED: the user clicked "No" / closed the UAC prompt.
-            OcrLangStatus.Text = "You didn't accept the Windows admin prompt, so nothing was installed. " +
-                                 "Click the button again and choose \"Yes\".";
+            OcrLangStatus.Text = "Nothing installed — click again and choose \"Yes\".";
         }
         catch (Exception ex)
         {
-            OcrLangStatus.Text = $"Install couldn't run ({ex.Message}). " +
-                                 "You can also run the command below manually in an admin PowerShell.";
+            OcrLangStatus.Text = $"Install couldn't run ({ex.Message}). Try the command below.";
         }
         finally
         {

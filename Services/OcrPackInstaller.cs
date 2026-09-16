@@ -96,15 +96,14 @@ internal static class OcrPackInstaller
     public static string DescribeFailure(int exitCode)
     {
         if (exitCode == CouldNotEnableWindowsUpdate || exitCode == ServiceDisabled || exitCode == AccessDenied)
-            return "Windows Update is off or locked on this PC, and the pack downloads through it. " +
-                   "If you use a tool like Windows Update Blocker, turn updates on there, install, then turn them off again.";
+            return "Windows Update is locked, and the pack downloads through it. " +
+                   "Turn updates on in your blocker tool, install, then turn them off again.";
         if (exitCode == BlockedByPolicy || exitCode == SourceNotFound || exitCode == SourceNotFoundAlt)
-            return "Windows is set to not download optional features (group policy or company PC). " +
-                   "Ask whoever manages this PC to allow it.";
+            return "Downloads of Windows features are blocked (group policy or company PC).";
         if (Array.IndexOf(NetworkErrors, exitCode) >= 0)
-            return "Windows couldn't reach its download servers. Check your internet, then try again.";
+            return "Windows couldn't download the pack. Check your internet, then try again.";
         return exitCode < 0
-            ? $"Install failed (Windows error 0x{exitCode:X8}). Try the command below in an admin PowerShell."
-            : "Install failed. Try the command below in an admin PowerShell.";
+            ? $"Install failed (error 0x{exitCode:X8}). Try the command below."
+            : "Install failed. Try the command below.";
     }
 }
