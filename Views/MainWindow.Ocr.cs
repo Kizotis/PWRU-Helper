@@ -54,6 +54,10 @@ public partial class MainWindow
             // Not "won't read well" — without it nothing is read AT ALL. The app no longer falls back
             // to the Windows engine, because a Latin engine reads Cyrillic as confident gibberish.
             OcrLangStatus.Text = "Russian OCR language pack: NOT INSTALLED — screen reading is off until it is.";
+            // Warn BEFORE the click: the pack downloads through Windows Update, and many players
+            // have it switched off. The button handles it (on for the install, then off again).
+            if (OcrPackInstaller.IsWindowsUpdateDisabled())
+                OcrLangStatus.Text += "\nWindows Update is off on this PC — the installer turns it on just for the install, then off again.";
             OcrLangStatus.SetResourceReference(TextBlock.ForegroundProperty, "GoldBrush");
             InstallOcrButton.Content = "Install Russian OCR (1 click)";
         }
@@ -79,8 +83,10 @@ public partial class MainWindow
                 var psi = new ProcessStartInfo
                 {
                     FileName = "powershell.exe",
-                    Arguments = "-NoProfile -ExecutionPolicy Bypass -Command " +
-                                $"\"Add-WindowsCapability -Online -Name '{OcrCapability}'\"",
+                    // Encoded: the script is multi-line (it turns Windows Update on for the
+                    // install and restores it after) — see OcrPackInstaller.
+                    Arguments = "-NoProfile -ExecutionPolicy Bypass -EncodedCommand " +
+                                OcrPackInstaller.EncodedInstallScript(),
                     Verb = "runas",              // triggers the UAC elevation prompt
                     UseShellExecute = true,
                     WindowStyle = ProcessWindowStyle.Hidden
@@ -96,9 +102,7 @@ public partial class MainWindow
             if (CheckOcrAvailability())
                 OcrLangStatus.Text = "Russian OCR installed ✓ — you're ready to read the screen.";
             else if (exitCode != 0)
-                OcrLangStatus.Text = $"The install command finished with an error (code {exitCode}). " +
-                                     "Make sure you're online, then try again — or run the command below in " +
-                                     "an admin PowerShell.";
+                OcrLangStatus.Text = OcrPackInstaller.DescribeFailure(exitCode);
             else
                 OcrLangStatus.Text = "Install finished, but Russian OCR still isn't detected. " +
                                      "Try restarting the app (or Windows) and check again.";
