@@ -41,6 +41,10 @@ public class OcrResultItem : INotifyPropertyChanged
     /// <summary>Full translated line (speaker + translated body), for the compact overlay.</summary>
     public string Translation => TextMatching.WithSpeaker(Speaker, _translationBody);
 
+    /// <summary>True once a real translation is in: not while it is pending (empty) and not a
+    /// failure placeholder, which always starts with "(". Gates the "copy translation" buttons.</summary>
+    public bool HasTranslation => !string.IsNullOrWhiteSpace(_translationBody) && !_translationBody.StartsWith('(');
+
     // Slang decode ("🔑 В = LFM · ПП = Full Moon Pavilion"), "" when the line has no slang.
     private string _glossary = "";
     public string Glossary

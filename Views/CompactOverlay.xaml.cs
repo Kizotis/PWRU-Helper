@@ -238,6 +238,19 @@ public partial class CompactOverlay : Window
     private async void ReadOnce_Click(object sender, RoutedEventArgs e)
         => await _owner.SelectAreaAndReadOnceAsync();
 
+    private async void CopyOriginal_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: OcrResultItem item } && await _owner.CopyToClipboardAsync(item.Original))
+            ShowToast("Russian copied");
+    }
+
+    private async void CopyTranslation_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: OcrResultItem item }) return;
+        if (!item.HasTranslation) { ShowToast("No translation to copy yet"); return; }
+        if (await _owner.CopyToClipboardAsync(item.Translation)) ShowToast("Translation copied");
+    }
+
     /// <summary>Follow the main window's read-once button state (a Ctrl+Alt+R read can be running
     /// while the overlay is the only thing on screen) — <b>amendment A8</b>: the button is never
     /// disabled, it becomes the cancel. Icon-only at 360 px, so the tooltip carries what the main

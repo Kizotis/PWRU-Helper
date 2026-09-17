@@ -60,7 +60,8 @@
                      already does. 8 px matches the chip's, so the header reads on one rhythm:
                      title · 8 · chip · 8 · LIVE · 8 · buttons. The chip keeps its own right margin so
                      the gap to the buttons survives LIVE being collapsed. -->
-                <TextBlock x:Name="LiveDot" DockPanel.Dock="Right" Text="●  LIVE" Margin="0,0,8,0"
+                <!-- Segoe UI Symbol: in the theme's Segoe UI, ● and ○ differ by 3 px and the beat moved the chip. -->
+                <TextBlock x:Name="LiveDot" DockPanel.Dock="Right" FontFamily="Segoe UI Symbol, Segoe UI" Text="●  LIVE" Margin="0,0,8,0"
                            Foreground="{StaticResource AccentBrush}" TextTrimming="CharacterEllipsis"
                            FontWeight="Bold" VerticalAlignment="Center" Visibility="Collapsed"/>
                 <!-- The provider chip, overlay placement: on the header line, right-hand end, beside
@@ -112,7 +113,12 @@
                                             </Style.Triggers>
                                         </Style>
                                     </Border.Style>
-                                    <StackPanel>
+                                    <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
                                         <!-- Two-tone like the main translator: grey speaker nick + body.
                                              Run.Text binds TwoWay by default, so read-only props need Mode=OneWay. -->
                                         <TextBlock FontSize="11" TextWrapping="Wrap"><Run Text="{Binding SpeakerPrefix, Mode=OneWay}" Foreground="{StaticResource TextMutedBrush}" FontWeight="SemiBold"/><Run Text="{Binding OriginalBody, Mode=OneWay}" Foreground="{StaticResource TextMutedBrush}"/></TextBlock>
@@ -131,6 +137,16 @@
                                             </TextBlock.Style>
                                         </TextBlock>
                                     </StackPanel>
+                                    <!-- Same two copy buttons as the main feed, smaller: Russian on top, translation below. -->
+                                    <StackPanel Grid.Column="1" Margin="6,0,0,0" VerticalAlignment="Top">
+                                        <Button Content="⧉ RU" Style="{StaticResource GhostButton}" Padding="4,0" FontSize="10"
+                                                Click="CopyOriginal_Click" ToolTip="Copy the Russian text"
+                                                AutomationProperties.Name="Copy the Russian text"/>
+                                        <Button Content="⧉ Tr" Style="{StaticResource GhostButton}" Padding="4,0" FontSize="10" Margin="0,3,0,0"
+                                                Click="CopyTranslation_Click" ToolTip="Copy the translation"
+                                                AutomationProperties.Name="Copy the translation"/>
+                                    </StackPanel>
+                                    </Grid>
                                 </Border>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>

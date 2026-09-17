@@ -311,7 +311,9 @@
                                  writes every surface from ONE EngineChip, so this tab rendered the same
                                  words twice, a hand apart. The Translator tab's chip is WriteChip, above;
                                  the always-on placement while playing is the compact overlay's header. -->
-                            <TextBlock x:Name="LiveIndicator" Text="● LIVE" Foreground="{StaticResource AccentBrush}"
+                            <!-- Segoe UI Symbol, not the theme's Segoe UI: there ● is 7.3 px and ○ 10.3 px, so every heartbeat
+                                 beat shoved the Stop button. In Segoe UI Symbol both circles are the same size and width. -->
+                            <TextBlock x:Name="LiveIndicator" FontFamily="Segoe UI Symbol, Segoe UI" Text="● LIVE" Foreground="{StaticResource AccentBrush}"
                                        FontWeight="Bold" VerticalAlignment="Center" Margin="12,0,0,0" Visibility="Collapsed"/>
                             <Button x:Name="StopLiveButton" Content="■ Stop" Style="{StaticResource GhostButton}"
                                     Padding="10,3" Margin="10,0,0,0" Visibility="Collapsed" Click="StopLive_Click"/>
@@ -372,10 +374,15 @@
                                                         </TextBlock.Style>
                                                     </TextBlock>
                                                 </StackPanel>
-                                                <Button Grid.Column="1" Content="⧉" Style="{StaticResource GhostButton}"
-                                                        Padding="7,2" Margin="8,0,0,0" VerticalAlignment="Top"
-                                                        Click="CopyOriginal_Click" ToolTip="Copy the Russian text"
-                                                        AutomationProperties.Name="Copy the Russian text"/>
+                                                <!-- One copy button per line, stacked in the lines' order: Russian on top, translation below. -->
+                                                <StackPanel Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Top">
+                                                    <Button Content="⧉ RU" Style="{StaticResource GhostButton}" Padding="7,2"
+                                                            Click="CopyOriginal_Click" ToolTip="Copy the Russian text"
+                                                            AutomationProperties.Name="Copy the Russian text"/>
+                                                    <Button Content="⧉ Tr" Style="{StaticResource GhostButton}" Padding="7,2" Margin="0,4,0,0"
+                                                            Click="CopyTranslation_Click" ToolTip="Copy the translation"
+                                                            AutomationProperties.Name="Copy the translation"/>
+                                                </StackPanel>
                                             </Grid>
                                         </Border>
                                     </DataTemplate>

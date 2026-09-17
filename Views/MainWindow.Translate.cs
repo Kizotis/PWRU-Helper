@@ -232,6 +232,14 @@ public partial class MainWindow
             ShowToast("Russian copied");
     }
 
+    // Copy the translation of a screen-read message (nothing while it is pending or failed).
+    private async void CopyTranslation_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: OcrResultItem item }) return;
+        if (!item.HasTranslation) { ShowToast("No translation to copy yet"); return; }
+        if (await CopyToClipboardAsync(item.Translation)) ShowToast("Translation copied");
+    }
+
     // ============================================================
     //  TRANSLATION BACKEND (Google default, optional DeepL)
     // ============================================================
