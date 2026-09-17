@@ -599,7 +599,7 @@ public partial class MainWindow : Window
             s.TranslatorTo = SelectedTag(ToCombo) ?? s.TranslatorTo;
             s.AlwaysOnTop = TopmostCheck.IsChecked == true;
             s.AutoCopyTranslation = AutoCopyCheck.IsChecked == true;
-            s.LastTab = MainTabs.SelectedIndex;
+            s.LastTab = TutorialLayer.IsActive ? _tutorialReturnTab : MainTabs.SelectedIndex;
 
             var b = RestoreBounds;   // correct even if maximised/minimised
             if (!b.IsEmpty)

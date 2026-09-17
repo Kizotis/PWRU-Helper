@@ -40,8 +40,10 @@
             </Image.RenderTransform>
         </Image>
 
+        <!-- TabNavigation=Cycle: Tab never walks out of the bubble into the controls under the dim. -->
         <Border x:Name="Bubble" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource GoldBrush}"
-                BorderThickness="1" CornerRadius="10" Padding="14,12" Opacity="0">
+                BorderThickness="1" CornerRadius="10" Padding="14,12" Opacity="0"
+                KeyboardNavigation.TabNavigation="Cycle">
             <Border.RenderTransform>
                 <TranslateTransform x:Name="BubbleShift"/>
             </Border.RenderTransform>

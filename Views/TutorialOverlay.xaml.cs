@@ -33,6 +33,7 @@ public partial class TutorialOverlay : UserControl
     private int _generation;          // bumped per step and on close: a stale async step bails out
     private Rect _hole;               // where the spotlight rests (the end of any hole animation)
     private Rect? _target;            // the current step's measured target, or null
+    private bool _transitioning;      // between Next/Back and the new bubble appearing: input ignored
 
     public TutorialOverlay() => InitializeComponent();
 
@@ -47,6 +48,7 @@ public partial class TutorialOverlay : UserControl
                         Action<int> selectTab, Action<bool> onClosed)
     {
         if (IsActive || steps.Count == 0) return;
+        StopAll();                    // a replay right after Done: no leftover bubble from the last run
         _steps = steps;
         _resolve = resolve;
         _selectTab = selectTab;
@@ -62,7 +64,7 @@ public partial class TutorialOverlay : UserControl
         Hole.Rect = _hole;
         Dim.Opacity = 1;
         Animate(this, OpacityProperty, 0, 1, 250, new CubicEase { EasingMode = EasingMode.EaseOut });
-        _ = ShowStepAsync(0, entrance: true);
+        RunStep(0, entrance: true);
     }
 
     /// <summary>End the tour now. Safe to call when it is not running.</summary>
@@ -70,6 +72,7 @@ public partial class TutorialOverlay : UserControl
     {
         if (!IsActive) return;
         IsActive = false;
+        _transitioning = false;
         _generation++;
         var callback = _onClosed;
         _onClosed = null;
@@ -85,29 +88,36 @@ public partial class TutorialOverlay : UserControl
         if (generation != _generation || IsActive) return;
         StopAll();
         Visibility = Visibility.Collapsed;
+        // Footprint: the decoded poses (~2.5 MB) are only needed while the tour runs.
+        Guide.Source = null;
+        Poses.Clear();
     }
 
     internal void Next()
     {
-        if (!IsActive) return;
+        // Ignored mid-transition: a double press (or a held key) on the second-to-last step used to
+        // run straight through Done and mark a tour nobody read as seen.
+        if (!IsActive || _transitioning) return;
         if (_index >= _steps.Count - 1) { Close(finished: true); return; }
         _direction = 1;
-        _ = ShowStepAsync(_index + 1, entrance: false);
+        RunStep(_index + 1, entrance: false);
     }
 
     internal void Back()
     {
-        if (!IsActive || _index == 0) return;
+        if (!IsActive || _transitioning || _index == 0) return;
         _direction = -1;
-        _ = ShowStepAsync(_index - 1, entrance: false);
+        RunStep(_index - 1, entrance: false);
     }
 
     /// <summary>The window routes its PreviewKeyDown here while the tour runs: → / Enter next,
     /// ← back, Esc skip. Every other key is swallowed too, so nothing reaches the controls behind
-    /// the dim — except Tab, which only cycles the bubble's own buttons.</summary>
+    /// the dim — except Tab, which cycles the bubble's own buttons (TabNavigation=Cycle), and
+    /// system keys, so Alt+F4 still closes the app.</summary>
     internal void HandleKey(KeyEventArgs e)
     {
-        if (!IsActive) return;
+        if (!IsActive || e.Key == Key.System) return;
+        if (e.IsRepeat) { e.Handled = true; return; }
         switch (e.Key)
         {
             case Key.Right: Next(); break;
@@ -124,6 +134,19 @@ public partial class TutorialOverlay : UserControl
     }
 
     // ---- one step ---------------------------------------------------------------------------
+
+    /// <summary>Every step starts here. A step that throws (a broken pose link fails only at run time)
+    /// must not leave the player stuck under the dim: log it and close.</summary>
+    private async void RunStep(int index, bool entrance)
+    {
+        _transitioning = true;
+        try { await ShowStepAsync(index, entrance); }
+        catch (Exception ex)
+        {
+            Logging.Warn("the tutorial could not show a step: " + ex.GetType().Name);
+            Close(finished: false);
+        }
+    }
 
     private async Task ShowStepAsync(int index, bool entrance)
     {
@@ -174,6 +197,7 @@ public partial class TutorialOverlay : UserControl
 
         await Task.Delay(entrance ? 150 : 250);
         if (gen != _generation) return;
+        _transitioning = false;
         Animate(Bubble, OpacityProperty, 0, 1, 200, new QuadraticEase { EasingMode = EasingMode.EaseOut });
         Animate(BubbleShift, TranslateTransform.YProperty, 8, 0, 200, new QuadraticEase { EasingMode = EasingMode.EaseOut });
         Animate(Guide, OpacityProperty, 0, 1, entrance ? 400 : 200);

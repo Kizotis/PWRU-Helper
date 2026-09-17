@@ -21,17 +21,34 @@ public partial class MainWindow
         // Not over an app that is quitting for an install, not over compact mode or a live session
         // the player restored: leave it unseen and try again next launch.
         if (_closing || Dispatcher.HasShutdownStarted || !IsVisible || IsLive || _overlay is { IsVisible: true }) return;
+        if (WindowState == WindowState.Minimized || !IsActive)
+        {
+            // The player is already in the game: an always-on-top dim they cannot answer (the keys go
+            // to the game) would only be in the way. Start it when they come back to the window.
+            EventHandler? onActivated = null;
+            onActivated = (_, _) =>
+            {
+                Activated -= onActivated;
+                if (!_settings.TutorialSeen && !IsLive && _overlay is not { IsVisible: true }) StartTutorial();
+            };
+            Activated += onActivated;
+            return;
+        }
         StartTutorial();
     }
 
     private void Tutorial_Click(object sender, RoutedEventArgs e) => StartTutorial();
+
+    /// <summary>The tab the player was on when the tour started — what is saved as LastTab if the
+    /// app closes mid-tour, rather than whichever tab the tour happened to be showing.</summary>
+    private int _tutorialReturnTab;
 
     internal void StartTutorial()
     {
         if (TutorialLayer.IsActive) return;
         if (_overlay is { IsVisible: true }) ExitCompactMode();
 
-        int returnTab = MainTabs.SelectedIndex;
+        int returnTab = _tutorialReturnTab = MainTabs.SelectedIndex;
         // "Missing" in the idle sense: an install already running is not a reason to explain it.
         bool packMissing = !IsOcrReady() && InstallOcrButton.IsEnabled;
         TutorialLayer.Start(

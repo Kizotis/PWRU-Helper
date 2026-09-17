@@ -127,6 +127,49 @@ public class TutorialTests
         Assert.Contains("\"TutorialSeen\": true", settings.Read());
     }
 
+    [Fact]
+    public void Every_pose_resolves_as_a_packed_resource()
+    {
+        // A broken pack URI builds green and fails only at run time — this is where it fails instead.
+        StaTestHost.Run(() =>
+        {
+            foreach (var file in TutorialScript.PoseFiles)
+                Assert.NotNull(Application.GetResourceStream(
+                    new Uri($"pack://application:,,,/PWRUHelper;component/assets/snufkin/{file}.png")));
+        });
+    }
+
+    [Fact]
+    public void Held_keys_and_rapid_presses_cannot_run_through_the_tour_and_Alt_keys_pass()
+    {
+        using var _ = new TempSettings("""{ "SettingsVersion": 3 }""");
+
+        StaTestHost.Run(() =>
+        {
+            var window = StartedWindow();
+            for (int i = 0; i < 12; i++) window.TutorialLayer.Next();   // all during the first transition
+            Assert.True(window.TutorialLayer.IsActive);
+            Assert.Equal(0, window.TutorialLayer.StepIndex);
+
+            using var source = new System.Windows.Interop.HwndSource(new System.Windows.Interop.HwndSourceParameters("tutorial-test"));
+            var alt = new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, Key.System) { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+            window.TutorialLayer.HandleKey(alt);
+            Assert.False(alt.Handled);                                   // Alt+F4 still closes the app
+            window.TutorialLayer.Close(finished: false);
+        });
+    }
+
+    private static MainWindow StartedWindow()
+    {
+        var window = new MainWindow();
+        var root = (FrameworkElement)window.Content;
+        root.Measure(new Size(640, 720));
+        root.Arrange(new Rect(0, 0, 640, 720));
+        root.UpdateLayout();
+        window.StartTutorial();
+        return window;
+    }
+
     private static string RepoFile(string relative)
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
