@@ -1,0 +1,65 @@
+<UserControl x:Class="PWRUHelper.TutorialOverlay"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Visibility="Collapsed">
+    <!-- The first-run tour, laid over the whole main window (Sally's storyboard). The Canvas's
+         transparent background catches EVERY click, including inside the spotlight: the tour never
+         lets a click reach the real control behind it (no selection overlay, no UAC, no clipboard). -->
+    <Canvas x:Name="Root" Background="Transparent" MouseLeftButtonDown="Root_MouseLeftButtonDown"
+            SizeChanged="Root_SizeChanged">
+
+        <!-- Dim = the whole window minus a rounded hole around the target. The hole's Rect is what
+             moves between steps. -->
+        <Path x:Name="Dim" Fill="#B3071C2F" IsHitTestVisible="False">
+            <Path.Data>
+                <CombinedGeometry GeometryCombineMode="Exclude">
+                    <CombinedGeometry.Geometry1>
+                        <RectangleGeometry x:Name="FullRect"/>
+                    </CombinedGeometry.Geometry1>
+                    <CombinedGeometry.Geometry2>
+                        <RectangleGeometry x:Name="Hole" RadiusX="8" RadiusY="8"/>
+                    </CombinedGeometry.Geometry2>
+                </CombinedGeometry>
+            </Path.Data>
+        </Path>
+
+        <Border x:Name="Halo" BorderBrush="{StaticResource TealBrush}" BorderThickness="2" CornerRadius="11"
+                IsHitTestVisible="False" Opacity="0" RenderTransformOrigin="0.5,0.5">
+            <Border.RenderTransform>
+                <ScaleTransform x:Name="HaloScale"/>
+            </Border.RenderTransform>
+        </Border>
+
+        <!-- Source is set per step from TutorialScript's pose (assets/snufkin/*.png). -->
+        <Image x:Name="Guide" Opacity="0" IsHitTestVisible="False" Stretch="Uniform"
+               RenderOptions.BitmapScalingMode="HighQuality">
+            <Image.RenderTransform>
+                <TranslateTransform x:Name="GuideShift"/>
+            </Image.RenderTransform>
+        </Image>
+
+        <Border x:Name="Bubble" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource GoldBrush}"
+                BorderThickness="1" CornerRadius="10" Padding="14,12" Opacity="0">
+            <Border.RenderTransform>
+                <TranslateTransform x:Name="BubbleShift"/>
+            </Border.RenderTransform>
+            <StackPanel>
+                <TextBlock x:Name="StepTitle" FontSize="15" FontWeight="SemiBold"
+                           Foreground="{StaticResource GoldBrush}" TextWrapping="Wrap"/>
+                <TextBlock x:Name="StepBody" FontSize="13" Margin="0,4,0,12" TextWrapping="Wrap"
+                           Foreground="{StaticResource TextBrush}"/>
+                <DockPanel LastChildFill="False">
+                    <StackPanel x:Name="Dots" DockPanel.Dock="Left" Orientation="Horizontal"
+                                VerticalAlignment="Center"/>
+                    <Button x:Name="NextButton" DockPanel.Dock="Right" Style="{StaticResource AccentButton}"
+                            Padding="12,4" Margin="6,0,0,0" Click="Next_Click"/>
+                    <Button x:Name="BackButton" DockPanel.Dock="Right" Style="{StaticResource GhostButton}"
+                            Padding="10,4" Margin="6,0,0,0" Click="Back_Click"/>
+                    <Button x:Name="SkipButton" DockPanel.Dock="Right" Style="{StaticResource GhostButton}"
+                            Padding="8,4" BorderThickness="0" Foreground="{StaticResource TextMutedBrush}"
+                            Click="Skip_Click"/>
+                </DockPanel>
+            </StackPanel>
+        </Border>
+    </Canvas>
+</UserControl>

@@ -342,7 +342,7 @@ public partial class MainWindow : Window
 
     private async void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
-        // (No first-run welcome dialog — the app opens straight to the tabs.)
+        // (No first-run welcome dialog — Snufkin's tour starts at the end of this handler instead.)
 
         // Build the OCR engine now that the window is up, on a worker thread so its WinRT work
         // doesn't freeze the UI we just showed. Touching IsAvailable is what forces the lazy
@@ -413,6 +413,9 @@ public partial class MainWindow : Window
         // RefreshEngineChip: a pause restored from disk has a countdown to step, and this is the one
         // start site that exists before any request has been made.
         UpdateEngineChip();
+
+        // Last: after the update check (never over its dialog or UAC) and after every warm-up.
+        await MaybeStartFirstRunTutorialAsync();
     }
 
     // ============================================================
@@ -1634,6 +1637,7 @@ public partial class MainWindow : Window
     private IntPtr HotkeyHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         if (msg != WM_HOTKEY) return IntPtr.Zero;
+        CloseTutorialForHotkey();   // a hotkey during the tour ends it first (counts as seen)
         switch (wParam.ToInt32())
         {
             case HK_SHOW: BringToFront(); handled = true; break;
