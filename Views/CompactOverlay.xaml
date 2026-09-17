@@ -87,6 +87,13 @@
             <!-- ===== Live feed (shared with the main window) ===== -->
             <ScrollViewer x:Name="FeedScroller" Grid.Row="2" VerticalScrollBarVisibility="Auto"
                           Margin="0,8,0,0" Padding="0,0,6,0">
+                <!-- The theme's scrollbar, thinner: every pixel here is a pixel of chat. Keep the window
+                     Grid's Margin="8": the bar's right edge then sits 1 px inside the native resize band. -->
+                <ScrollViewer.Resources>
+                    <Style TargetType="ScrollBar" BasedOn="{StaticResource {x:Type ScrollBar}}">
+                        <Setter Property="Width" Value="8"/>
+                    </Style>
+                </ScrollViewer.Resources>
                 <StackPanel>
                     <TextBlock x:Name="EmptyHint" TextWrapping="Wrap" Foreground="{StaticResource TextMutedBrush}"
                                FontSize="12"
