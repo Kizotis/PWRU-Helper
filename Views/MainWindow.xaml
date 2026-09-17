@@ -322,7 +322,7 @@
                         <StackPanel>
                             <TextBlock x:Name="ScreenReadStatus" TextWrapping="Wrap" Margin="0,0,0,8"
                                        Foreground="{StaticResource TextMutedBrush}"
-                                       Text="Click “Select area &amp; read once” above to read Russian text from your screen."/>
+                                       Text="Read Russian text from your screen with the buttons above."/>
                             <ItemsControl x:Name="OcrResults">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
