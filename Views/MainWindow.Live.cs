@@ -191,7 +191,15 @@ public partial class MainWindow
         _ = LiveLoop(rect, _liveCts.Token);
     }
 
-    private void StopLive_Click(object sender, RoutedEventArgs e) => StopLive();
+    /// <summary>The Translator tab's ▶ Live: the overlay's toggle (stop, or resume the last area),
+    /// except that with no saved area it lets you draw one right here rather than sending you to the
+    /// Screen OCR tab — you are already looking at the feed it fills.</summary>
+    private void TranslatorLive_Click(object sender, RoutedEventArgs e)
+    {
+        if (_selectingRegion || _readingOnce) return;   // a read-once owns the shared OCR engine
+        if (_liveCts == null && !TryGetSavedRegion(out _)) { LiveButton_Click(sender, e); return; }
+        ToggleLive();
+    }
 
     private void SensitivitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
@@ -343,7 +351,7 @@ public partial class MainWindow
         // A notice that was waiting to ride on a running line has nothing to ride on any more:
         // "Live stopped.  Back on Google." is two states in one sentence.
         if (!on) _stateNotice = null;
-        StopLiveButton.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        TranslatorLiveButton.Content = on ? CompactOverlay.LiveToggleStop : CompactOverlay.LiveToggleStart;
         LiveButton.Content = on ? "■  Stop live translation" : "▶  Start live translation";
         UpdateResumeLiveButton();
         LiveStatus.Text = on

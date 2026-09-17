@@ -57,6 +57,37 @@ public class LiveDotAndCopyTests
         Assert.Contains("Click=\"CopyTranslation_Click\"", xaml, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void The_Translator_tab_has_the_overlays_live_toggle_and_it_follows_live()
+    {
+        using var _ = new TempSettings("""{ "SettingsVersion": 3 }""");
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+            var setLiveUi = typeof(MainWindow).GetMethod("SetLiveUi",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+
+            Assert.Equal(CompactOverlay.LiveToggleStart, window.TranslatorLiveButton.Content);
+            setLiveUi.Invoke(window, new object[] { true });
+            Assert.Equal(CompactOverlay.LiveToggleStop, window.TranslatorLiveButton.Content);
+            setLiveUi.Invoke(window, new object[] { false });
+            Assert.Equal(CompactOverlay.LiveToggleStart, window.TranslatorLiveButton.Content);
+        });
+    }
+
+    [Fact]
+    public void The_Translator_row_matches_the_overlay_header_order_and_style()
+    {
+        var xaml = File.ReadAllText(RepoFile("Views/MainWindow.xaml"));
+        int dot = xaml.IndexOf("x:Name=\"LiveIndicator\"", StringComparison.Ordinal);
+        int read = xaml.IndexOf("x:Name=\"SelectAreaButton\"", StringComparison.Ordinal);
+        int live = xaml.IndexOf("x:Name=\"TranslatorLiveButton\"", StringComparison.Ordinal);
+        Assert.True(dot > 0 && dot < read && read < live, "● LIVE · 👁 Read once · ▶ Live, like the overlay");
+        foreach (int at in new[] { read, live })
+            Assert.Contains("GhostButton", xaml[at..xaml.IndexOf("/>", at, StringComparison.Ordinal)], StringComparison.Ordinal);
+    }
+
     private static string RepoFile(string relative)
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

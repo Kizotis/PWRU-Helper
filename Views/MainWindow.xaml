@@ -305,18 +305,22 @@
                                  a read is in flight, so its copy changes and therefore lives in the
                                  deck (UserMessages, GAP-4) — MainWindow.SetReadOnceCancelMode writes
                                  both forms, exactly as SetKeyTestLabels does for the key boxes. -->
-                            <Button x:Name="SelectAreaButton" Style="{StaticResource AccentButton}"
-                                    Padding="10,3" Click="SelectArea_Click"/>
+                            <!-- Same row as the compact overlay's header, in the same order and style:
+                                 live dot, read-once, live toggle — small ghost buttons with their emoji. -->
                             <!-- No chip here. It used to sit beside LiveIndicator, but PaintEngineChip
                                  writes every surface from ONE EngineChip, so this tab rendered the same
                                  words twice, a hand apart. The Translator tab's chip is WriteChip, above;
                                  the always-on placement while playing is the compact overlay's header. -->
                             <!-- Segoe UI Symbol, not the theme's Segoe UI: there ● is 7.3 px and ○ 10.3 px, so every heartbeat
-                                 beat shoved the Stop button. In Segoe UI Symbol both circles are the same size and width. -->
+                                 beat shoved the buttons beside it. In Segoe UI Symbol both circles are the same size and width. -->
                             <TextBlock x:Name="LiveIndicator" FontFamily="Segoe UI Symbol, Segoe UI" Text="● LIVE" Foreground="{StaticResource AccentBrush}"
-                                       FontWeight="Bold" VerticalAlignment="Center" Margin="12,0,0,0" Visibility="Collapsed"/>
-                            <Button x:Name="StopLiveButton" Content="■ Stop" Style="{StaticResource GhostButton}"
-                                    Padding="10,3" Margin="10,0,0,0" Visibility="Collapsed" Click="StopLive_Click"/>
+                                       FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,8,0" Visibility="Collapsed"/>
+                            <Button x:Name="SelectAreaButton" Style="{StaticResource GhostButton}"
+                                    Padding="8,2" Click="SelectArea_Click"/>
+                            <Button x:Name="TranslatorLiveButton" Style="{StaticResource GhostButton}" Padding="8,2"
+                                    Margin="6,0,0,0" Content="▶ Live" Click="TranslatorLive_Click"
+                                    ToolTip="Start / stop live translation on your last area (Ctrl+Alt+L)"
+                                    AutomationProperties.Name="Start or stop live translation"/>
                         </StackPanel>
                     </Grid>
 
