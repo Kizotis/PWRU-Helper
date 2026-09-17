@@ -94,6 +94,10 @@ public class AppSettings
 
     public bool FirstRunDone { get; set; }
 
+    // the first-run tour was finished or skipped. New in the version that ships the tour, so a
+    // saved settings.json without it reads false and an updating player sees the tour once too.
+    public bool TutorialSeen { get; set; }
+
     // Phrasebook: pinned favourites and recently-copied phrases (by Russian text).
     public List<string> Favourites { get; set; } = new();
     public List<string> Recents { get; set; } = new();

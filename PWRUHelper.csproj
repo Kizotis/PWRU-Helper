@@ -21,6 +21,8 @@
   <ItemGroup>
     <!-- window / taskbar icon -->
     <Resource Include="assets\icon.png" />
+    <!-- the guide's poses for the first-run tour (the owner's mascot art, background removed, 360 px tall). -->
+    <Resource Include="assets\snufkin\*.png" />
   </ItemGroup>
 
   <ItemGroup>
