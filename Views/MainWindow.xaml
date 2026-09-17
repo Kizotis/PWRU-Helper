@@ -409,7 +409,7 @@
                             <Button x:Name="ResumeLiveButton" Style="{StaticResource GhostButton}"
                                     Content="↻  Resume last area" Margin="8,0,0,0" Visibility="Collapsed"
                                     Click="ResumeLive_Click"
-                                    ToolTip="Start live on your last area."/>
+                                    ToolTip="Start live on the area you used last time (no need to re-select)."/>
                         </StackPanel>
                         <TextBlock x:Name="LiveStatus" TextWrapping="Wrap" Margin="0,6,0,10"
                                    Foreground="{StaticResource TextMutedBrush}"
