@@ -35,8 +35,10 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - `Services/` = pure-ish, unit-testable classes (translation pipeline, capture backends, OCR, dedup, slang, settings, logging, update).
 - Repo ROOT keeps only what must be there: `PWRUHelper.csproj` (25 test files find the root by walking up to it), `App.xaml` / `App.xaml.cs` (the WPF application definition), `OcrResultItem.cs`, `AssemblyInfo.cs`, `app.manifest`, the three `.bat` scripts and the docs. No `.sln` — adding one breaks `dotnet run` and both build scripts.
 - `OcrResultItem.cs` lives at repo ROOT with namespace `PWRUHelper` (NOT `.Models`) — the render test depends on this; do not move it.
-- Windows: `Views/CompactOverlay`, `Views/SelectionOverlay`. Tabs order: Phrasebook(0) · Squad(1) · Translator(2) · Screen OCR(3) · About(4).
-- Theme: `Views/Theme.xaml`, pwonline.ru dark-navy palette (bg `#071c2f`, panel `#0e2c47`, red `#a01116`, teal `#278eb4`, gold `#ffdc50`, text `#f4eddd`). The dark ToolTip style in Theme.xaml is load-bearing.
+- Windows: `Views/CompactOverlay`, `Views/SelectionOverlay`, plus `Views/TutorialOverlay` (a layer INSIDE MainWindow, not a window). Tabs order: Phrasebook(0) · Squad(1) · Translator(2) · Screen OCR(3) · About(4) — `Services/TutorialScript.cs` hardcodes the same indices.
+- Theme: `Views/Theme.xaml`, pwonline.ru dark-navy palette (bg `#071c2f`, panel `#0e2c47`, red `#a01116`, teal `#278eb4`, gold `#ffdc50`, text `#f4eddd`). The dark ToolTip style in Theme.xaml is load-bearing, and so is the implicit `ScrollBar` style (every scrollbar in both windows and every ComboBox dropdown; no Storyboard, bar width never changes on hover; the overlay's `FeedScroller` right margin of 1 keeps the bar out of the native resize band).
+- **First-run tour (v0.17.0):** steps, copy, targets and poses live ONLY in `Services/TutorialScript.cs`; the spotlight finds real controls by `x:Name` (`PhraseSearch`, `SquadMessagePanel`, `TranslateInput`, `FromScreenBar`, `LiveButton`, `InstallOcrButton`, `CompactButton`, `TutorialButton`) — renaming or removing one fails `TutorialTests`, keep both in step. The guide is presented as **"Kizotis"** (the owner), never by the mascot's name, in any UI text; poses are `assets/snufkin/*.png`. Every overlay animation is `FillBehavior.Stop` over its end value and `StopAll` runs on close — nothing may keep running after the tour.
+- **LIVE heartbeat labels** (`LiveIndicator`, overlay `LiveDot`) use `FontFamily="Segoe UI Symbol"`: in Segoe UI `●` and `○` differ by 3 px and every beat shoved the neighbours. Do not "fix" it with MinWidth — it broke TP-RENDER-10 at 240 px.
 - **XAML resource URIs must be absolute now that the windows sit in a subfolder.** A relative `assets/icon.png` resolved against `Views/` and threw at load (the build stayed green — it is a runtime pack-URI failure); `MainWindow.xaml` uses `pack://application:,,,/PWRUHelper;component/assets/icon.png`, and `App.xaml` points at `Views/MainWindow.xaml` / `Views/Theme.xaml`.
 - Tests read these sources by path (`RepoFile("Views/MainWindow.Live.cs")`, `Path.Combine(root, "Views", …)`) — re-homing a view means fixing those literals too.
 
@@ -89,6 +91,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 
 - **Deliberate non-features — do NOT propose or implement:** i18n/.resx (English UI is a choice), MVVM, multi-`q=` Google batching, WGC session caching (until WGC proves useful on a real fullscreen game).
 - `UpdateService` only trusts download URLs on `github.com`/`githubusercontent.com` — keep that allowlist.
+- The Russian OCR pack install (`Services/OcrPackInstaller`) must keep working with **Windows Update disabled** (common among players; it fails with 0x80070422 otherwise): the elevated script turns `wuauserv` on for the install and restores `Disabled` in a `finally`, and exits with the real HRESULT that `DescribeFailure` turns into a sentence. Never drop the restore — the player switched it off on purpose.
 - WGC capture failures latch after 3 consecutive misses (log once, GDI for the session); `SetMode` re-arms. `ScreenCapture.Mode` setter is private — use `SetMode(string)`.
 - Accepted tradeoffs — don't re-flag: the translation cache is **provider-agnostic** (ruling E4-a) — a Google result cached during a DeepL blip can be served later while DeepL is healthy, and since E4.S2/E4.S4 it survives both a key save and a restart, so only LRU eviction clears it. Keying by provider would multiply the cache by the tier count and defeat the point; the producing tier is recorded in the entry's `"p"` for the log and the Bergamot drop rule only. Also: MSI update quits before the UAC outcome; WGC pays a one-shot D3D device cost per capture.
 - Code signing is pending (SignPath guide + drafted CI steps in `packaging/signpath-signing.md`, gated on `secrets.SIGNPATH_API_TOKEN`); winget submission is drafted under `packaging/winget/`, gated on `WINGET_TOKEN`.
@@ -110,4 +113,4 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - Update when the stack, pipeline shape, or release process changes
 - Remove rules that become obvious over time
 
-Last Updated: 2026-09-09
+Last Updated: 2026-09-17
