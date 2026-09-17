@@ -305,16 +305,22 @@
                                  a read is in flight, so its copy changes and therefore lives in the
                                  deck (UserMessages, GAP-4) — MainWindow.SetReadOnceCancelMode writes
                                  both forms, exactly as SetKeyTestLabels does for the key boxes. -->
-                            <Button x:Name="SelectAreaButton" Style="{StaticResource AccentButton}"
-                                    Padding="10,3" Click="SelectArea_Click"/>
+                            <!-- Same row as the compact overlay's header, in the same order and style:
+                                 live dot, read-once, live toggle — small ghost buttons with their emoji. -->
                             <!-- No chip here. It used to sit beside LiveIndicator, but PaintEngineChip
                                  writes every surface from ONE EngineChip, so this tab rendered the same
                                  words twice, a hand apart. The Translator tab's chip is WriteChip, above;
                                  the always-on placement while playing is the compact overlay's header. -->
-                            <TextBlock x:Name="LiveIndicator" Text="● LIVE" Foreground="{StaticResource AccentBrush}"
-                                       FontWeight="Bold" VerticalAlignment="Center" Margin="12,0,0,0" Visibility="Collapsed"/>
-                            <Button x:Name="StopLiveButton" Content="■ Stop" Style="{StaticResource GhostButton}"
-                                    Padding="10,3" Margin="10,0,0,0" Visibility="Collapsed" Click="StopLive_Click"/>
+                            <!-- Segoe UI Symbol, not the theme's Segoe UI: there ● is 7.3 px and ○ 10.3 px, so every heartbeat
+                                 beat shoved the buttons beside it. In Segoe UI Symbol both circles are the same size and width. -->
+                            <TextBlock x:Name="LiveIndicator" FontFamily="Segoe UI Symbol, Segoe UI" Text="● LIVE" Foreground="{StaticResource AccentBrush}"
+                                       FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,8,0" Visibility="Collapsed"/>
+                            <Button x:Name="SelectAreaButton" Style="{StaticResource GhostButton}"
+                                    Padding="8,2" Click="SelectArea_Click"/>
+                            <Button x:Name="TranslatorLiveButton" Style="{StaticResource GhostButton}" Padding="8,2"
+                                    Margin="6,0,0,0" Content="▶ Live" Click="TranslatorLive_Click"
+                                    ToolTip="Start / stop live translation on your last area (Ctrl+Alt+L)"
+                                    AutomationProperties.Name="Start or stop live translation"/>
                         </StackPanel>
                     </Grid>
 
@@ -372,10 +378,15 @@
                                                         </TextBlock.Style>
                                                     </TextBlock>
                                                 </StackPanel>
-                                                <Button Grid.Column="1" Content="⧉" Style="{StaticResource GhostButton}"
-                                                        Padding="7,2" Margin="8,0,0,0" VerticalAlignment="Top"
-                                                        Click="CopyOriginal_Click" ToolTip="Copy the Russian text"
-                                                        AutomationProperties.Name="Copy the Russian text"/>
+                                                <!-- One copy button per line, stacked in the lines' order: Russian on top, translation below. -->
+                                                <StackPanel Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Top">
+                                                    <Button Content="⧉ RU" Style="{StaticResource GhostButton}" Padding="7,2"
+                                                            Click="CopyOriginal_Click" ToolTip="Copy the Russian text"
+                                                            AutomationProperties.Name="Copy the Russian text"/>
+                                                    <Button Content="⧉ Tr" Style="{StaticResource GhostButton}" Padding="7,2" Margin="0,4,0,0"
+                                                            Click="CopyTranslation_Click" ToolTip="Copy the translation"
+                                                            AutomationProperties.Name="Copy the translation"/>
+                                                </StackPanel>
                                             </Grid>
                                         </Border>
                                     </DataTemplate>
@@ -403,13 +414,14 @@
                             <ComboBox x:Name="OcrTargetCombo" VerticalAlignment="Center" Width="120"/>
                         </StackPanel>
 
+                        <!-- This tab's one job: choosing WHERE to read. Resuming and stopping live are the
+                             small ▶ Live / ■ Live toggles on the Translator tab and the overlay (and
+                             Ctrl+Alt+L), so the old "Resume last area" button is gone. -->
                         <StackPanel Orientation="Horizontal">
                             <Button x:Name="LiveButton" Style="{StaticResource AccentButton}"
-                                    Content="▶  Start live translation" Click="LiveButton_Click"/>
-                            <Button x:Name="ResumeLiveButton" Style="{StaticResource GhostButton}"
-                                    Content="↻  Resume last area" Margin="8,0,0,0" Visibility="Collapsed"
-                                    Click="ResumeLive_Click"
-                                    ToolTip="Start live on the area you used last time (no need to re-select)."/>
+                                    Padding="18,9" FontSize="15"
+                                    Content="🎯  Select the chat area &amp; start live" Click="LiveButton_Click"
+                                    ToolTip="Draw a box over the game chat. Live then translates every new line in it."/>
                         </StackPanel>
                         <TextBlock x:Name="LiveStatus" TextWrapping="Wrap" Margin="0,6,0,10"
                                    Foreground="{StaticResource TextMutedBrush}"

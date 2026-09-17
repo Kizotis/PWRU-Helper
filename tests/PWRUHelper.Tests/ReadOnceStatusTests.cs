@@ -662,7 +662,10 @@ public class ReadOnceStatusTests
             var window = new MainWindow();
 
             // Idle — and the copy comes from the deck, not from the XAML that no longer holds it.
-            Assert.Equal(UserMessages.ReadOnceLabel(), window.SelectAreaButton.Content);
+            // Short label like the overlay's; the full sentence is the automation name.
+            Assert.Equal(UserMessages.ReadOnceOverlayLabel(), window.SelectAreaButton.Content);
+            Assert.Equal(UserMessages.ReadOnceLabel(),
+                         System.Windows.Automation.AutomationProperties.GetName(window.SelectAreaButton));
             Assert.Equal(UserMessages.ReadOnceTooltip(), window.SelectAreaButton.ToolTip);
             Assert.True(window.SelectAreaButton.IsEnabled);
 
@@ -672,7 +675,7 @@ public class ReadOnceStatusTests
             Assert.True(window.SelectAreaButton.IsEnabled);      // the whole point of A8
 
             window.SetReadOnceCancelMode(reading: false);
-            Assert.Equal(UserMessages.ReadOnceLabel(), window.SelectAreaButton.Content);
+            Assert.Equal(UserMessages.ReadOnceOverlayLabel(), window.SelectAreaButton.Content);
             Assert.True(window.SelectAreaButton.IsEnabled);
 
             // The overlay's column of A8's table: the glyph becomes ■ and the tooltip becomes the

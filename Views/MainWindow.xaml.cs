@@ -492,7 +492,6 @@ public partial class MainWindow : Window
             ScreenCapture.SetMode(s.CaptureBackend);
             SetCaptureBackendCombo(s.CaptureBackend ?? "gdi");
 
-            UpdateResumeLiveButton();
             ApplyFontScale();
         }
         finally { _restoringSettings = false; }

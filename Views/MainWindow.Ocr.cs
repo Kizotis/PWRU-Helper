@@ -415,8 +415,12 @@ public partial class MainWindow
     /// <param name="reading">Whether a read-once is in flight — the state the button describes.</param>
     internal void SetReadOnceCancelMode(bool reading)
     {
-        SelectAreaButton.Content = reading ? UserMessages.CancelReadLabel() : UserMessages.ReadOnceLabel();
+        // The short "👁 Read once" label, like the overlay's: the Translator tab's row now copies the
+        // overlay header. The full sentence stays the button's automation name.
+        SelectAreaButton.Content = reading ? UserMessages.CancelReadLabel() : UserMessages.ReadOnceOverlayLabel();
         SelectAreaButton.ToolTip = reading ? UserMessages.CancelReadTooltip() : UserMessages.ReadOnceTooltip();
+        System.Windows.Automation.AutomationProperties.SetName(SelectAreaButton,
+            reading ? UserMessages.CancelReadLabel() : UserMessages.ReadOnceLabel());
         _overlay?.SetReadOnceCancelMode(reading);
     }
 

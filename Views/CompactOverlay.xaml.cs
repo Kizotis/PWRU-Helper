@@ -34,6 +34,10 @@ public partial class CompactOverlay : Window
     /// of them must never write the other (AC 1).</summary>
     internal const string DotOn = "●  LIVE", DotOff = "○  LIVE";
 
+    /// <summary>The live toggle's two labels — shared with the Translator tab's button, which copies
+    /// this header's row.</summary>
+    internal const string LiveToggleStart = "▶ Live", LiveToggleStop = "■ Live";
+
     /// <summary>Max characters the game accepts in a single chat message. A reply longer than this
     /// is split into word-aligned blocks the user copies and sends one by one. Shared with the
     /// Translator tab, which highlights the same cut points instead of splitting.</summary>
@@ -207,7 +211,7 @@ public partial class CompactOverlay : Window
     {
         bool live = _owner.IsLive;
         LiveDot.Visibility = live ? Visibility.Visible : Visibility.Collapsed;
-        LiveToggleButton.Content = live ? "■ Live" : "▶ Live";
+        LiveToggleButton.Content = live ? LiveToggleStop : LiveToggleStart;
         // Frozen on ○ — and it returns rather than falling through, so none of the four entry
         // points can advance _blink while nothing is being sent (R-02: a blinking dot over a
         // stopped pipe is the lie this whole story is about).
@@ -237,6 +241,19 @@ public partial class CompactOverlay : Window
     /// overlay just steps aside for the drag itself, then the framed result lands in the feed.</summary>
     private async void ReadOnce_Click(object sender, RoutedEventArgs e)
         => await _owner.SelectAreaAndReadOnceAsync();
+
+    private async void CopyOriginal_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: OcrResultItem item } && await _owner.CopyToClipboardAsync(item.Original))
+            ShowToast("Russian copied");
+    }
+
+    private async void CopyTranslation_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: OcrResultItem item }) return;
+        if (!item.HasTranslation) { ShowToast("No translation to copy yet"); return; }
+        if (await _owner.CopyToClipboardAsync(item.Translation)) ShowToast("Translation copied");
+    }
 
     /// <summary>Follow the main window's read-once button state (a Ctrl+Alt+R read can be running
     /// while the overlay is the only thing on screen) — <b>amendment A8</b>: the button is never
