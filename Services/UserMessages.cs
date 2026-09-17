@@ -692,7 +692,7 @@ internal static class UserMessages
     /// to the majority of players — principle 2's "many users will never open this tab" is only
     /// acceptable because nothing here has to be done.</summary>
     public static string AboutEnginesIntro()
-        => "By default everything runs on free engines — no key, no signup, nothing to set up.";
+        => "Free engines by default — no key, no signup, nothing to set up.";
 
     /// <summary>
     /// <b>The second half of the promise: what happens when one of them stops answering</b> (E7.S8;
@@ -706,8 +706,7 @@ internal static class UserMessages
     /// is here and not in the XAML (UX-DR19 / GAP-4).</para>
     /// </summary>
     public static string AboutEnginesPauses()
-        => "If an engine stops answering it is paused for a few minutes and the next one takes over "
-         + "on its own — nothing needs pressing, and a paused engine comes back by itself.";
+        => "If an engine stops answering, the next one takes over on its own and it comes back by itself.";
 
     /// <summary>
     /// <b>The P1 expectation copy</b> (<c>ux-mode-degrade.md</c> §3.8; <c>recommandations.md</c> §3.1
@@ -721,16 +720,13 @@ internal static class UserMessages
     /// deliberately not here.</para>
     /// </summary>
     public static string FirstLaunchExpectation()
-        => "The first launch after downloading — and after every update — can take up to about 10 "
-         + "seconds, with nothing on screen. Windows checks a file it has never seen before. Later "
-         + "launches are fast (about a second). Every update is a brand-new file as far as Windows "
-         + "is concerned, so the check happens again after each one.";
+        => "The first launch after a download or an update can take about 10 seconds, with nothing "
+         + "on screen, while Windows checks the new file. Later launches are fast.";
 
     /// <summary>§4.2's keys-block sentence, AC 3's second literal. Both halves matter: what a key
     /// buys (quota of your own) and where it lives (this PC, and nowhere else).</summary>
     public static string AboutKeysIntro()
-        => "A key gives you better translations and your own quota, instead of sharing a free door "
-         + "with everyone else. Keys are stored only on your PC.";
+        => "A key gives better translations and your own quota. Keys are stored only on your PC.";
 
     /// <summary>§4.2's offline block, as the placeholder T6 recommends: the line ships, the
     /// <c>[ Download the offline engine ]</c> button does not. <b>E8.S3 owns the behaviour</b> and
@@ -738,8 +734,7 @@ internal static class UserMessages
     /// than an absent one. Ruling <b>R-4</b> governs the setting when it arrives:
     /// <c>OfflineFallbackEnabled</c> is written by Download and Remove — there is no checkbox.</summary>
     public static string AboutOfflineNotInstalled()
-        => "○ Not installed — about 50 MB to download, works with no internet at all. Used only "
-         + "when every online engine is unavailable.";
+        => "○ Not installed — about 50 MB, works with no internet. Used only when online engines fail.";
 
     // ---- the offline engine's own copy (ux §3.6, §4.2, §4.3 · E8.S3) ---------------------------
     //
@@ -905,9 +900,8 @@ internal static class UserMessages
     /// cannot drift.</para>
     /// </summary>
     public static string CachePrivacyLine()
-        => @"Translations you have already seen are saved in %AppData%\PWRUHelper\ so the same chat "
-         + "line is never translated twice — they hold chat text, they never leave your PC, and "
-         + "they are never included in the error report.";
+        => @"Translations you've seen are saved in %AppData%\PWRUHelper\ so a line is never translated "
+         + "twice. They never leave your PC and are not in the error report.";
 
     /// <summary>A10's one control. A statement that the app stores your chat with no way to remove
     /// it is the exact shape principle 2 forbids — "what can you do about it" must be written, not
@@ -1054,9 +1048,8 @@ internal static class UserMessages
     /// trial-limited rather than a standing monthly allowance, this literal is what changes.</para>
     /// </summary>
     public static string AzureForReadingHint()
-        => "Azure gives you 2 million characters a month for free — roughly 20 to 40 hours of busy "
-         + "chat. Screen reading is off by default because live mode reads every new line and can "
-         + "use it up in a few evenings.";
+        => "Free Azure is 2 million characters a month (about 20 to 40 hours of busy chat). Screen "
+         + "reading is off by default: live can use it up in a few evenings.";
 
     /// <summary>ux flow (c).1, on the toast.</summary>
     public static string AzureKeySavedToast() => "Azure key saved — used when you write";

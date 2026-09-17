@@ -180,7 +180,7 @@
                     <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto" Padding="2,0,6,0">
                         <StackPanel>
                             <TextBlock TextWrapping="Wrap" Margin="2,0,0,2" Foreground="{StaticResource TextMutedBrush}"
-                                       Text="Make a group-forming message: tick the dungeon(s) and class(es) you're looking for, then copy the Russian phrase and paste it in chat."/>
+                                       Text="Tick dungeons and classes, then copy the Russian message into chat."/>
 
                             <TextBlock Text="Dungeons" FontSize="15" FontWeight="Bold"
                                        Foreground="{StaticResource GoldBrush}" Margin="0,14,0,6"/>
@@ -193,7 +193,7 @@
 
                             <TextBlock x:Name="SquadEmptyHint" Visibility="Collapsed" TextWrapping="Wrap"
                                        Margin="0,10,0,0" Foreground="{StaticResource GoldBrush}"
-                                       Text="Couldn't load squad.json — reinstall or restore it next to the app (or in %AppData%\PWRUHelper)."/>
+                                       Text="Couldn't load squad.json — reinstall the app."/>
                         </StackPanel>
                     </ScrollViewer>
 
@@ -248,7 +248,7 @@
                     <TextBlock Grid.Row="0" Margin="0,0,0,6" FontSize="13">
                         <Run Text="✍  Write — type and get the translation"
                              FontWeight="Bold" Foreground="{StaticResource GoldBrush}"/><Run
-                             Text="    ·  press Enter to translate  (Shift+Enter for a new line)"
+                             Text="    ·  Enter to translate, Shift+Enter for a new line"
                              Foreground="{StaticResource TextMutedBrush}"/>
                     </TextBlock>
 
@@ -274,7 +274,7 @@
                         <CheckBox x:Name="AutoCopyCheck" Content="Auto-copy" IsChecked="True"
                                   VerticalAlignment="Center" Margin="12,0,0,0"
                                   Foreground="{StaticResource TextMutedBrush}"
-                                  ToolTip="Copy the translation automatically so you can paste it in game with Ctrl+V."/>
+                                  ToolTip="Copy automatically, ready for Ctrl+V in game."/>
                         <TextBlock x:Name="TranslateStatus" VerticalAlignment="Center" Margin="12,0,0,0"
                                    Foreground="{StaticResource TextMutedBrush}"/>
                         <!-- The provider chip, write path (E7.S3 / ux-mode-degrade §2.3): ONE
@@ -322,7 +322,7 @@
                         <StackPanel>
                             <TextBlock x:Name="ScreenReadStatus" TextWrapping="Wrap" Margin="0,0,0,8"
                                        Foreground="{StaticResource TextMutedBrush}"
-                                       Text="Use “Select area &amp; read once” above to draw a box over Russian text (or start live on the Screen OCR tab). The Russian text and its translation will appear here."/>
+                                       Text="Read Russian text from your screen with the buttons above."/>
                             <ItemsControl x:Name="OcrResults">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
@@ -392,7 +392,7 @@
                     <StackPanel Margin="0,10,0,0">
 
                         <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextMutedBrush}" Margin="0,0,0,10"
-                                   Text="Capture Russian text from your screen and translate it. The results appear in the Translator tab."/>
+                                   Text="Read Russian text on your screen. Results show in the Translator tab."/>
 
                         <!-- "Select area & read once" now lives on the Translator tab, next to the
                              results it produces (and in the compact overlay). Only the target
@@ -413,11 +413,12 @@
                         </StackPanel>
                         <TextBlock x:Name="LiveStatus" TextWrapping="Wrap" Margin="0,6,0,10"
                                    Foreground="{StaticResource TextMutedBrush}"
-                                   Text="Live mode keeps watching the chosen area and re-translates automatically whenever new text appears, until you press Stop."/>
+                                   Text="Live re-reads your area and translates new lines until you press Stop."/>
 
                         <!-- Live OCR sensitivity -->
                         <StackPanel Margin="0,0,0,14">
-                            <StackPanel Orientation="Horizontal">
+                            <!-- Slider help lives in tooltips (title row + slider): one visible line per setting. -->
+                            <StackPanel Orientation="Horizontal" ToolTip="{Binding ToolTip, ElementName=SensitivitySlider}">
                                 <TextBlock Text="OCR sensitivity" FontWeight="SemiBold"
                                            Foreground="{StaticResource TextBrush}" VerticalAlignment="Center"/>
                                 <TextBlock x:Name="SensitivityValue" Text="5%" Margin="8,0,0,0"
@@ -426,11 +427,10 @@
                             </StackPanel>
                             <Slider x:Name="SensitivitySlider" Minimum="0" Maximum="100" Value="5"
                                     TickFrequency="10" Width="280" HorizontalAlignment="Left"
-                                    Margin="0,4,0,2" ValueChanged="SensitivitySlider_ValueChanged"/>
-                            <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMutedBrush}"
-                                       Text="Lower = calmer: ignores tiny changes and background movement (e.g. panning the camera behind the chat). Higher = catches every little change, but may re-translate more often."/>
+                                    Margin="0,4,0,2" ValueChanged="SensitivitySlider_ValueChanged"
+                                    ToolTip="Lower ignores small changes (camera moving behind the chat). Higher catches every change."/>
 
-                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0" ToolTip="{Binding ToolTip, ElementName=LiveSpeedSlider}">
                                 <TextBlock Text="Live speed" FontWeight="SemiBold"
                                            Foreground="{StaticResource TextBrush}" VerticalAlignment="Center"/>
                                 <TextBlock x:Name="LiveSpeedValue" Text="~0.7s between reads" Margin="8,0,0,0"
@@ -440,12 +440,11 @@
                             <!-- 92% → ~0.7s between reads. Keep in step with AppSettings.LiveSpeedPercent. -->
                             <Slider x:Name="LiveSpeedSlider" Minimum="0" Maximum="100" Value="92"
                                     TickFrequency="10" Width="280" HorizontalAlignment="Left"
-                                    Margin="0,4,0,2" ValueChanged="LiveSpeedSlider_ValueChanged"/>
-                            <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMutedBrush}"
-                                       Text="How often live mode re-reads the screen. Slide left to slow it down if it translates too fast; right to react quicker."/>
+                                    Margin="0,4,0,2" ValueChanged="LiveSpeedSlider_ValueChanged"
+                                    ToolTip="How often live re-reads the screen. Left = slower, right = faster."/>
 
                             <!-- Smallest text fragment -->
-                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0" ToolTip="{Binding ToolTip, ElementName=MinFragmentSlider}">
                                 <TextBlock Text="Smallest text fragment" FontWeight="SemiBold"
                                            Foreground="{StaticResource TextBrush}" VerticalAlignment="Center"/>
                                 <TextBlock x:Name="MinFragmentValue" Text="2 letters" Margin="8,0,0,0"
@@ -454,12 +453,11 @@
                             </StackPanel>
                             <Slider x:Name="MinFragmentSlider" Minimum="1" Maximum="6" Value="2"
                                     TickFrequency="1" IsSnapToTickEnabled="True" Width="280" HorizontalAlignment="Left"
-                                    Margin="0,4,0,2" ValueChanged="MinFragmentSlider_ValueChanged"/>
-                            <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMutedBrush}"
-                                       Text="Ignore fragments shorter than this many letters. Raise it to skip stray specks and single-letter OCR noise."/>
+                                    Margin="0,4,0,2" ValueChanged="MinFragmentSlider_ValueChanged"
+                                    ToolTip="Ignore bits shorter than this. Raise it to skip OCR noise."/>
 
                             <!-- Stability (frame confirmation) -->
-                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0" ToolTip="{Binding ToolTip, ElementName=StabilitySlider}">
                                 <TextBlock Text="Stability" FontWeight="SemiBold"
                                            Foreground="{StaticResource TextBrush}" VerticalAlignment="Center"/>
                                 <TextBlock x:Name="StabilityValue" Text="60%" Margin="8,0,0,0"
@@ -468,27 +466,24 @@
                             </StackPanel>
                             <Slider x:Name="StabilitySlider" Minimum="0" Maximum="100" Value="60"
                                     TickFrequency="10" Width="280" HorizontalAlignment="Left"
-                                    Margin="0,4,0,2" ValueChanged="StabilitySlider_ValueChanged"/>
-                            <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMutedBrush}"
-                                       Text="How strictly a new line must stay put for one read before it's translated. Higher = fewer false lines from flicker, but a touch slower to confirm real text."/>
+                                    Margin="0,4,0,2" ValueChanged="StabilitySlider_ValueChanged"
+                                    ToolTip="Higher = fewer false lines from flicker, a bit slower to show."/>
 
                             <!-- Settings saved by an older version are kept forever, so a tuned default
                                  shipped later never reaches anyone who already ran the app. This puts them back. -->
                             <Button x:Name="ResetTuningButton" Style="{StaticResource GhostButton}"
                                     Content="↺  Reset to recommended settings" Padding="12,5"
                                     HorizontalAlignment="Left" Margin="0,12,0,0" Click="ResetTuning_Click"
-                                    ToolTip="Put the four sliders above and the background filter back to the values shipped with this version. Your capture method and the other tabs are left alone."
+                                    ToolTip="Put the sliders and the background filter back to the recommended values."
                                     AutomationProperties.Name="Reset the reading settings to the recommended values"/>
                         </StackPanel>
 
                         <!-- Background filter (optional pre-OCR clean-up) -->
                         <StackPanel Margin="0,0,0,14">
-                            <TextBlock Text="Background filter" FontWeight="SemiBold"
+                            <TextBlock Text="Background filter" FontWeight="SemiBold" Margin="0,0,0,4"
                                        Foreground="{StaticResource TextBrush}"/>
-                            <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMutedBrush}"
-                                       Margin="0,2,0,4"
-                                       Text="Clean up the moving 3D scene behind the chat before reading. 'Boost contrast' keeps bright text of any colour; 'Keep one colour' isolates a single chat channel by its colour (paste a hex like #FFDC50 and widen the tolerance until only that channel shows)."/>
                             <ComboBox x:Name="OcrFilterCombo" Width="260" HorizontalAlignment="Left"
+                                      ToolTip="Cleans the 3D scene behind the chat. Keep one colour = one chat channel: paste its hex (e.g. #FFDC50) and widen the tolerance."
                                       SelectionChanged="OcrFilterCombo_Changed">
                                 <ComboBoxItem Content="Off" Tag="off"/>
                                 <ComboBoxItem Content="Boost contrast (any colour)" Tag="contrast"/>
@@ -516,10 +511,8 @@
                         <StackPanel Margin="0,0,0,14">
                             <TextBlock Text="Capture method" FontWeight="SemiBold"
                                        Foreground="{StaticResource TextBrush}"/>
-                            <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMutedBrush}"
-                                       Margin="0,2,0,4"
-                                       Text="How the screen is grabbed. Default (GDI) works for windowed / borderless games. Try 'Windows Graphics (experimental)' only if capture comes out black in full-screen — it automatically falls back to GDI if it can't run."/>
-                            <ComboBox x:Name="CaptureBackendCombo" Width="300" HorizontalAlignment="Left"
+                            <ComboBox x:Name="CaptureBackendCombo" Width="300" HorizontalAlignment="Left" Margin="0,4,0,0"
+                                      ToolTip="Keep Default. Try Windows Graphics only if the capture comes out black in full-screen."
                                       SelectionChanged="CaptureBackend_Changed">
                                 <ComboBoxItem Content="Default (GDI)" Tag="gdi"/>
                                 <ComboBoxItem Content="Windows Graphics — experimental" Tag="wgc"/>
@@ -535,7 +528,7 @@
                                            Foreground="{StaticResource GoldBrush}"/>
                                 <TextBlock TextWrapping="Wrap" Margin="0,6,0,0" FontSize="12"
                                            Foreground="{StaticResource TextBrush}"
-                                           Text="💡 Tip: for the most accurate reading, select only the last 3–4 lines of the chat rather than the whole chat window. A smaller, tighter area is read far more precisely."/>
+                                           Text="💡 Select only the last 3–4 chat lines: much more accurate."/>
                                 <TextBlock x:Name="OcrLangStatus" TextWrapping="Wrap" Margin="0,6,0,0"
                                            Foreground="{StaticResource TextBrush}"
                                            Text="Russian OCR language pack: checking…"/>
@@ -547,7 +540,7 @@
                                 </StackPanel>
                                 <TextBlock TextWrapping="Wrap" Margin="0,12,0,4"
                                            Foreground="{StaticResource TextMutedBrush}" FontSize="12">
-                                    <Run Text="…or do it yourself: right-click Start → "/><Run Text="Terminal (Admin)" FontWeight="Bold"/><Run Text=" or "/><Run Text="Windows PowerShell (Admin)" FontWeight="Bold"/><Run Text=", then paste the line below. "/><LineBreak/><Run Text="⚠ Must be PowerShell — this will NOT work in Command Prompt (cmd)." FontWeight="Bold" Foreground="{StaticResource GoldBrush}"/>
+                                    <Run Text="Or paste this in "/><Run Text="Windows PowerShell (Admin)" FontWeight="Bold"/><Run Text=" — not cmd:"/>
                                 </TextBlock>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
@@ -605,7 +598,7 @@
                              stay OSI-licensed (MIT) is met. -->
                         <TextBlock Text="Free and open source, under the MIT licence."
                                    Foreground="{StaticResource TextMutedBrush}" Margin="0,2,0,0" TextWrapping="Wrap"/>
-                        <TextBlock Text="The optional offline translation engine (Bergamot), its .NET wrapper and its model files are licensed under the MPL-2.0."
+                        <TextBlock Text="The optional offline engine (Bergamot, its .NET wrapper and models) is under the MPL-2.0."
                                    Foreground="{StaticResource TextMutedBrush}" Margin="0,2,0,0" TextWrapping="Wrap"/>
 
                         <!-- updates -->
@@ -628,9 +621,8 @@
                                 BorderBrush="{StaticResource GoldBrush}" BorderThickness="1"
                                 Padding="14" Margin="0,14,0,0">
                             <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextBrush}" LineHeight="20">
-                                This is a free project I made to help people. If you'd like me to add or
-                                change something, feel free to send me a message! Just remember it's free
-                                and made on my own time — so please don't expect changes the same day. 🙂
+                                Free project, made on my own time. Ideas or requests? Send me a message,
+                                just don't expect same-day changes. 🙂
                             </TextBlock>
                         </Border>
 
@@ -810,7 +802,7 @@
                             <PasswordBox x:Name="AzureKeyBox" Width="300" VerticalContentAlignment="Center"
                                          Margin="0,0,0,4"/>
                             <ComboBox x:Name="AzureRegionCombo" IsEditable="True" Width="160" Margin="8,0,0,4"
-                                      ToolTip="The region your Azure Translator resource is in — pick one or type it."
+                                      ToolTip="Your Azure resource's region."
                                       SelectionChanged="AzureRegionCombo_Changed">
                                 <ComboBoxItem Content="global" Tag="global"/>
                                 <ComboBoxItem Content="westeurope" Tag="westeurope"/>
@@ -846,14 +838,14 @@
                              it exists exactly once. No new brush, font or colour (UX-DR18). -->
                         <CheckBox x:Name="AzureForReadingCheck" Margin="0,10,0,0"
                                   Checked="AzureForReading_Changed" Unchecked="AzureForReading_Changed"
-                                  ToolTip="Off by default: live mode reads every new chat line, so it spends a metered key much faster than the Translator tab does.">
+                                  ToolTip="Off by default: live reading uses your quota fast.">
                             <!-- The label is a wrapping TextBlock and not a Content string (E7.S7
                                  review): a CheckBox measures a string label with infinite width, so
                                  at MinWidth=460 this sentence ran 65 px past a viewport that
                                  scrolls vertically only — clipped, with no way to read the rest.
                                  TP-RENDER-09 measures it at both shipped sizes. -->
                             <TextBlock TextWrapping="Wrap"
-                                       Text="Use my Azure key for screen reading too (uses your free quota faster)"/>
+                                       Text="Also use Azure for screen reading"/>
                         </CheckBox>
                         <TextBlock x:Name="AzureForReadingHint" TextWrapping="Wrap" FontSize="12"
                                    Margin="22,4,0,0" Foreground="{StaticResource TextMutedBrush}"/>
@@ -919,7 +911,7 @@
                         <TextBlock Text="Something went wrong?" FontSize="15" FontWeight="Bold"
                                    Foreground="{StaticResource GoldBrush}" Margin="0,18,0,6"/>
                         <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextMutedBrush}" Margin="0,0,0,6">
-                            Copy the recent error log and send it to me on Discord so I can see what happened.
+                            Copy the error log and send it to me on Discord.
                         </TextBlock>
                         <Button Content="📋 Copy error report" Style="{StaticResource GhostButton}" Padding="10,4"
                                 HorizontalAlignment="Left" Click="CopyErrorReport_Click"/>

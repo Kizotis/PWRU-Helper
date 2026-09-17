@@ -132,7 +132,7 @@ public partial class MainWindow
         // No Russian engine = nothing readable. Don't run a loop that can only ever produce empty
         // frames (and, before the fallback was removed, a feed full of confident Latin gibberish).
         // Send the user to the one-click installer instead — that IS the fix, and it's one click.
-        if (!IsOcrReady()) { ShowOcrPackNeeded("then start live again — your area is remembered."); return; }
+        if (!IsOcrReady()) { ShowOcrPackNeeded("then start live again."); return; }
 
         _liveRegion = rect;
         _liveTicks = 0;   // the heartbeat's phase; nothing on screen counts ticks any more
@@ -347,8 +347,8 @@ public partial class MainWindow
         LiveButton.Content = on ? "■  Stop live translation" : "▶  Start live translation";
         UpdateResumeLiveButton();
         LiveStatus.Text = on
-            ? "🔴 Live is running — re-reading the area and re-translating whenever the text changes. Press Stop to end."
-            : "Live mode keeps watching the chosen area and re-translates automatically whenever the text changes, until you press Stop.";
+            ? "🔴 Live is running — press Stop to end."
+            : "Live re-reads your area and translates new lines until you press Stop.";
         // One of the events the chip is repainted on instead of on a timer (E7.S3 T5): starting or
         // stopping LIVE changes which window owns the clock, and therefore whether the chip shows
         // one (E7.S2's AC 4). Polling a breaker every 250 ms is exactly the cost this epic removes.
