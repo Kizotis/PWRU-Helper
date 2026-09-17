@@ -22,7 +22,7 @@ namespace PWRUHelper;
 /// </summary>
 public partial class TutorialOverlay : UserControl
 {
-    private const double SoftDim = 0.64;             // 45% instead of the fill's 70%, for the finish
+    private const double SoftDim = 0.6;              // a lighter dim for the finish (≈47% instead of 78%)
     private static readonly Dictionary<string, BitmapImage> Poses = new();
 
     private IReadOnlyList<TutorialStep> _steps = Array.Empty<TutorialStep>();

@@ -10,7 +10,9 @@
 
         <!-- Dim = the whole window minus a rounded hole around the target. The hole's Rect is what
              moves between steps. -->
-        <Path x:Name="Dim" Fill="#B3071C2F" IsHitTestVisible="False">
+        <!-- Near-black navy at 78%: the theme's own background colour at 70% was measured on screen
+             and barely showed on a window that is already that colour. -->
+        <Path x:Name="Dim" Fill="#C7020A14" IsHitTestVisible="False">
             <Path.Data>
                 <CombinedGeometry GeometryCombineMode="Exclude">
                     <CombinedGeometry.Geometry1>
