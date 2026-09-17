@@ -179,9 +179,6 @@ public partial class MainWindow : Window
     // Phrasebook(0) · Squad(1) · Translator(2) · Screen OCR(3) · About(4).
     private const int TabTranslator = 2, TabScreenOcr = 3;
 
-    // The Windows OCR language pack we install / show the command for (single source).
-    private const string OcrCapability = "Language.OCR~~~ru-RU~0.0.1.0";
-
     // --- live screen translation ---
     private CancellationTokenSource? _liveCts;
     private bool _selectingRegion;                       // a screen-area drag is in progress
@@ -290,7 +287,7 @@ public partial class MainWindow : Window
         SetReadOnceCancelMode(reading: false);
 
         OcrResults.ItemsSource = _ocrItems;
-        OcrCommandBox.Text = $"Add-WindowsCapability -Online -Name \"{OcrCapability}\"";
+        OcrCommandBox.Text = OcrPackInstaller.ManualCommand();
         ShowAppVersion();
         PopulateLanguageCombos();
         LoadPhrases();

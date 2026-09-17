@@ -554,7 +554,7 @@
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
-                                    <!-- Text is set in code from the OcrCapability constant (single source) -->
+                                    <!-- Text is set in code from OcrPackInstaller.ManualCommand() (single source) -->
                                     <TextBox x:Name="OcrCommandBox" Grid.Column="0" IsReadOnly="True"
                                              FontFamily="Consolas" FontSize="12" VerticalContentAlignment="Center"/>
                                     <Button x:Name="CopyCmdButton" Grid.Column="1" Style="{StaticResource GhostButton}"
