@@ -83,7 +83,9 @@ Tick the dungeon, class and role you want and it writes the Russian "looking for
 
 > Windows may say *"unknown publisher"* — click **More info → Run anyway**. Normal for small free apps.
 
-**To read Russian off the screen** (one-time): open the *Screen OCR* tab → **Install Russian OCR (1 click)** → accept the Windows popup. The Phrasebook and Translator work without it.
+**To read Russian off the screen** (one-time): open the *Screen OCR* tab → **Install Russian OCR (1 click)** → accept the Windows popup. It works even if you switched Windows Update off (it is turned back off afterwards). The Phrasebook and Translator work without it.
+
+**First time?** A one-minute tour starts by itself. Replay it anytime: About → **🧭 Tutorial**.
 
 ---
 
