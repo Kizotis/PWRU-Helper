@@ -35,9 +35,17 @@ public class ThemedScrollBarTests
 
             var overlay = new CompactOverlay(window);
             overlay.FeedScroller.VerticalScrollBarVisibility = ScrollBarVisibility.Visible;
+            overlay.FeedScroller.HorizontalScrollBarVisibility = ScrollBarVisibility.Visible;
+            ((Panel)overlay.FeedScroller.Content).Children.Add(new Border { Width = 2000, Height = 2000 });
             var compact = LaidOutBar(overlay.FeedScroller, (FrameworkElement)overlay.Content);
             Assert.Equal(8, compact.ActualWidth, 1);
             AssertThemed(compact);
+
+            // The overlay's Width=8 must not leak onto a horizontal bar: the Orientation trigger wins.
+            var horizontal = (ScrollBar)overlay.FeedScroller.Template.FindName("PART_HorizontalScrollBar", overlay.FeedScroller);
+            Assert.Equal(10, horizontal.ActualHeight, 1);
+            Assert.True(horizontal.ActualWidth > 100, $"horizontal bar is {horizontal.ActualWidth}px wide");
+            AssertThemed(horizontal);
         });
     }
 
@@ -54,8 +62,11 @@ public class ThemedScrollBarTests
     private static void AssertThemed(ScrollBar bar)
     {
         var parts = Descendants(bar).ToList();
-        Assert.DoesNotContain(parts.OfType<RepeatButton>(), b => b.Command == ScrollBar.LineUpCommand
-                                                              || b.Command == ScrollBar.LineDownCommand);
+        // Exactly the two track halves, and they page — no arrow buttons.
+        var commands = parts.OfType<RepeatButton>().Select(b => b.Command).ToList();
+        Assert.Equal(2, commands.Count);
+        Assert.Contains(bar.Orientation == Orientation.Vertical ? ScrollBar.PageUpCommand : ScrollBar.PageLeftCommand, commands);
+        Assert.Contains(bar.Orientation == Orientation.Vertical ? ScrollBar.PageDownCommand : ScrollBar.PageRightCommand, commands);
         var thumb = Assert.Single(parts.OfType<Thumb>());
         Assert.Same(Application.Current.FindResource("ScrollThumb"), thumb.Style);
     }
