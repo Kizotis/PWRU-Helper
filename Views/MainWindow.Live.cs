@@ -39,13 +39,7 @@ public partial class MainWindow
     /// nothing re-sorts, and neither feed scrolls under the player's eyes.</para></summary>
     private readonly PendingRetryQueue<OcrResultItem> _pendingRetry = new();
 
-    private void UpdateResumeLiveButton()
-    {
-        bool show = _liveCts == null && _settings.LastLiveRegion is { Length: 4 };
-        ResumeLiveButton.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    /// <summary>Single entry point for the live button / Resume / Ctrl+Alt+L / overlay:
+    /// <summary>Single entry point for the ▶ Live toggles / Ctrl+Alt+L / overlay:
     /// stop if running, else resume the saved area, else surface the picker.</summary>
     internal void ToggleLive()
     {
@@ -82,21 +76,22 @@ public partial class MainWindow
     private async void LiveButton_Click(object sender, RoutedEventArgs e)
     {
         if (_selectingRegion) return;
-        if (_liveCts != null) { StopLive(); return; }
+        // Always picks a NEW area, even while live runs (to move the box). Stop first: the loop would
+        // otherwise read the dimmed selection layer. Cancelling the drag leaves live stopped, and
+        // ▶ Live resumes the old area.
+        if (_liveCts != null) StopLive();
 
         var region = await SelectRegionAsync();
         // A NEW area was just dragged — that is a new session, and it starts with an empty feed.
         if (region is { } rect) StartLive(rect, freshSession: true);
     }
 
-    private void ResumeLive_Click(object sender, RoutedEventArgs e) => ToggleLive();
-
     /// <summary>Start the loop on <paramref name="rect"/>.
     ///
     /// <para><paramref name="freshSession"/> is the whole of "does this wipe the chat", and it is a
     /// distinction the UI already draws: <b>selecting an area</b> (▶ on the Screen OCR tab, which
-    /// opens the picker) starts a new session, while <b>resuming the saved one</b> (↻ Resume last
-    /// area, ▶ Live on the overlay, Ctrl+Alt+L — all three go through <see cref="ToggleLive"/>)
+    /// opens the picker) starts a new session, while <b>resuming the saved one</b> (▶ Live on the
+    /// Translator tab and the overlay, Ctrl+Alt+L — all go through <see cref="ToggleLive"/>)
     /// carries on the one that was interrupted.</para>
     ///
     /// <para>The owner's report is the resume half: LIVE running, Read once, start again — and
@@ -112,7 +107,6 @@ public partial class MainWindow
         {
             _settings.LastLiveRegion = null;
             SettingsService.Save(_settings);
-            UpdateResumeLiveButton();
             ShowToast("That area isn't on any screen any more — select it again.");
             return;
         }
@@ -124,10 +118,9 @@ public partial class MainWindow
         // Remember the area so it can be resumed next session without re-selecting. This happens
         // BEFORE the OCR-pack check on purpose: the user has usually just dragged the rectangle, and
         // bailing out first threw that work away — after installing the pack they had to draw it all
-        // over again, with no "Resume last area" button to help them.
+        // over again.
         _settings.LastLiveRegion = new[] { rect.X, rect.Y, rect.Width, rect.Height };
         SettingsService.Save(_settings);
-        UpdateResumeLiveButton();
 
         // No Russian engine = nothing readable. Don't run a loop that can only ever produce empty
         // frames (and, before the fallback was removed, a feed full of confident Latin gibberish).
@@ -352,8 +345,6 @@ public partial class MainWindow
         // "Live stopped.  Back on Google." is two states in one sentence.
         if (!on) _stateNotice = null;
         TranslatorLiveButton.Content = on ? CompactOverlay.LiveToggleStop : CompactOverlay.LiveToggleStart;
-        LiveButton.Content = on ? "■  Stop live translation" : "▶  Start live translation";
-        UpdateResumeLiveButton();
         LiveStatus.Text = on
             ? "🔴 Live is running — re-reading the area and re-translating whenever the text changes. Press Stop to end."
             : "Live mode keeps watching the chosen area and re-translates automatically whenever the text changes, until you press Stop.";

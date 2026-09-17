@@ -88,6 +88,15 @@ public class LiveDotAndCopyTests
             Assert.Contains("GhostButton", xaml[at..xaml.IndexOf("/>", at, StringComparison.Ordinal)], StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void The_Screen_OCR_tab_is_about_choosing_the_area_and_has_no_resume_button()
+    {
+        var xaml = File.ReadAllText(RepoFile("Views/MainWindow.xaml"));
+        Assert.DoesNotContain("ResumeLiveButton", xaml, StringComparison.Ordinal);
+        int at = xaml.IndexOf("x:Name=\"LiveButton\"", StringComparison.Ordinal);
+        Assert.Contains("Select the chat area", xaml[at..xaml.IndexOf("/>", at, StringComparison.Ordinal)], StringComparison.Ordinal);
+    }
+
     private static string RepoFile(string relative)
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

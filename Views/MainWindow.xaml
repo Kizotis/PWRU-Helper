@@ -414,13 +414,14 @@
                             <ComboBox x:Name="OcrTargetCombo" VerticalAlignment="Center" Width="120"/>
                         </StackPanel>
 
+                        <!-- This tab's one job: choosing WHERE to read. Resuming and stopping live are the
+                             small ▶ Live / ■ Live toggles on the Translator tab and the overlay (and
+                             Ctrl+Alt+L), so the old "Resume last area" button is gone. -->
                         <StackPanel Orientation="Horizontal">
                             <Button x:Name="LiveButton" Style="{StaticResource AccentButton}"
-                                    Content="▶  Start live translation" Click="LiveButton_Click"/>
-                            <Button x:Name="ResumeLiveButton" Style="{StaticResource GhostButton}"
-                                    Content="↻  Resume last area" Margin="8,0,0,0" Visibility="Collapsed"
-                                    Click="ResumeLive_Click"
-                                    ToolTip="Start live on the area you used last time (no need to re-select)."/>
+                                    Padding="18,9" FontSize="15"
+                                    Content="🎯  Select the chat area &amp; start live" Click="LiveButton_Click"
+                                    ToolTip="Draw a box over the game chat. Live then translates every new line in it."/>
                         </StackPanel>
                         <TextBlock x:Name="LiveStatus" TextWrapping="Wrap" Margin="0,6,0,10"
                                    Foreground="{StaticResource TextMutedBrush}"
