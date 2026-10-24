@@ -92,9 +92,22 @@ public class OcrService
     /// (empty list if the engine is unavailable or nothing was read).
     /// </summary>
     public async Task<List<string>> ReadLinesAsync(Bitmap bitmap)
+        => (await ReadFrameAsync(bitmap, colorSource: null)).Lines;
+
+    /// <summary>
+    /// <see cref="ReadLinesAsync"/>, plus every word with the game colour it was drawn in (see
+    /// <see cref="ChatPalette"/>), in the same reading order as the lines.
+    ///
+    /// The colours are read off <paramref name="colorSource"/> — the capture as the game drew it —
+    /// and NOT off <paramref name="bitmap"/>, which is the background-filtered copy whenever that
+    /// filter is on: grey or black-and-white, with every colour already thrown away. The two are
+    /// the same size (the filter keeps it). Null colorSource = no colours, every word's is null.
+    /// </summary>
+    public async Task<OcrFrame> ReadFrameAsync(Bitmap bitmap, Bitmap? colorSource)
     {
         var engine = _engine.Value;                     // builds it on the first read, then cached
-        if (engine == null) return new List<string>();
+        if (engine == null)
+            return new OcrFrame(new List<string>(), Array.Empty<OcrWord>(), Array.Empty<IReadOnlyList<OcrWord>>());
 
         // Pick a scale factor before recognition:
         //  • DOWNSCALE huge captures — Windows.Media.Ocr rejects images whose width or
@@ -144,6 +157,8 @@ public class OcrService
         // first and every message body after. Project each line onto its geometry and let
         // OcrLayout rebuild the reading order. OcrLine itself carries no rectangle, so the line's
         // box is the union of its words'.
+        var pixels = colorSource == null ? null : PixelBuffer.Of(colorSource);
+
         var boxes = new List<OcrTextBox>(result.Lines.Count);
         foreach (var line in result.Lines)
         {
@@ -151,6 +166,7 @@ public class OcrService
             if (string.IsNullOrWhiteSpace(text)) continue;
 
             double left = double.MaxValue, top = double.MaxValue, right = double.MinValue, bottom = double.MinValue;
+            var words = new List<OcrWord>(line.Words.Count);
             foreach (var word in line.Words)
             {
                 var r = word.BoundingRect;
@@ -158,15 +174,49 @@ public class OcrService
                 if (r.Y < top) top = r.Y;
                 if (r.X + r.Width > right) right = r.X + r.Width;
                 if (r.Y + r.Height > bottom) bottom = r.Y + r.Height;
+
+                // The engine's rectangles are in the SCALED image; the colours are in the original.
+                uint? rgb = pixels?.Sample((int)Math.Floor(r.X / factor), (int)Math.Floor(r.Y / factor),
+                                           (int)Math.Ceiling((r.X + r.Width) / factor),
+                                           (int)Math.Ceiling((r.Y + r.Height) / factor));
+                words.Add(new OcrWord(word.Text ?? "", rgb));
             }
             // A line with no words has no text either (OcrLine.Text is built from them), so the
             // check above already dropped it — but geometry that never got written would order
             // wildly, so leave nothing to chance.
             if (left > right || top > bottom) { left = top = right = bottom = 0; }
 
-            boxes.Add(new OcrTextBox(text!, left, top, right - left, bottom - top));
+            boxes.Add(new OcrTextBox(text!, left, top, right - left, bottom - top, words));
         }
-        return OcrLayout.OrderIntoLines(boxes);
+
+        // The words follow the lines' reading order — the one OcrLayout rebuilds — so a message
+        // assembled from the lines can find its own words again (ChatColors.ColorBody).
+        var rows = OcrLayout.OrderIntoRows(boxes);
+        var lineWords = rows
+            .Select(row => (IReadOnlyList<OcrWord>)row.SelectMany(box => box.Words ?? Array.Empty<OcrWord>()).ToList())
+            .ToList();
+        return new OcrFrame(rows.Select(OcrLayout.JoinRow).ToList(), lineWords.SelectMany(w => w).ToList(), lineWords);
+    }
+
+    /// <summary>The colour source's pixels, copied out once per frame as 32 bpp BGRA so every
+    /// word's box is sampled from a plain array (no per-pixel GetPixel, no unsafe code).</summary>
+    private sealed record PixelBuffer(byte[] Bgra, int Width, int Height, int Stride)
+    {
+        internal static PixelBuffer Of(Bitmap bmp)
+        {
+            var rect = new Rectangle(0, 0, bmp.Width, bmp.Height);
+            var data = bmp.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            try
+            {
+                var buf = new byte[data.Stride * bmp.Height];
+                System.Runtime.InteropServices.Marshal.Copy(data.Scan0, buf, 0, buf.Length);
+                return new PixelBuffer(buf, bmp.Width, bmp.Height, data.Stride);
+            }
+            finally { bmp.UnlockBits(data); }
+        }
+
+        internal uint? Sample(int left, int top, int right, int bottom)
+            => ChatPalette.SampleBox(Bgra, Width, Height, Stride, left, top, right, bottom);
     }
 
     private static async Task<SoftwareBitmap> ToSoftwareBitmapAsync(Bitmap bitmap)

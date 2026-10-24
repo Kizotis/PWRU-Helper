@@ -37,7 +37,7 @@ Type in your language, get Russian instantly — already copied, ready to paste.
 <td width="50%" valign="top">
 
 ### 👁 Screen OCR
-Draw a box over the game chat. The app reads the Russian text and translates it, message by message. Turn on **live** mode and it keeps translating as new lines arrive. Chat slang is decoded under each line (`ПП = Full Moon Pavilion`).
+Draw a box over the game chat. The app reads the Russian text and translates it, message by message. Turn on **live** mode and it keeps translating as new lines arrive. Translations keep the game's own chat colours (group, world, faction, whispers…). Chat slang is decoded under each line (`ПП = Full Moon Pavilion`).
 
 </td>
 <td width="50%" valign="top">

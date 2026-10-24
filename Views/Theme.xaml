@@ -30,6 +30,11 @@
          the user exactly how far to select before pasting. Nothing is inserted into the text
          itself — whatever they select is exactly what was translated. -->
     <SolidColorBrush x:Key="ChatBlockBrush" Color="#4DA01116"/>
+
+    <!-- The card a translated chat message sits on, in both feeds. Near-black rather than the navy
+         PanelBrush (the owner: "un peu plus sombre"): it is what the game's own chat colours — cyan,
+         yellow, green, pink — are drawn to be read on, and the navy dulled every one of them. -->
+    <SolidColorBrush x:Key="ChatCardBrush" Color="#FF060D16"/>
     <SolidColorBrush x:Key="ChatCutBrush" Color="{StaticResource AccentColor}"/>
 
     <!-- Scrollbars (Sally's spec): the muted text colour at 65% for the thumb at rest (>= 3:1 on both

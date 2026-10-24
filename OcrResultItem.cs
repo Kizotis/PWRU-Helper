@@ -21,12 +21,35 @@ public class OcrResultItem : INotifyPropertyChanged
     /// <summary>The Russian message body, with the nickname split off.</summary>
     public string OriginalBody { get; set; } = "";
 
+    /// <summary>The game colours of <see cref="OriginalBody"/>, as runs that concatenate back to it
+    /// exactly (<see cref="ChatColors.ColorBody"/>); null when they couldn't be read, and the row
+    /// then keeps the uncoloured look. Set once at creation, like the body.</summary>
+    public IReadOnlyList<ChatRun>? BodyColors { get; set; }
+
+    /// <summary>The Russian line as the feed paints it: the nickname in the game's pale yellow, the
+    /// body in its own colours. The template dims it so the translation stays the line to read.</summary>
+    public IReadOnlyList<ChatRun> OriginalRuns
+        => WithSpeakerRun(BodyColors ?? new[] { new ChatRun(OriginalBody, null) });
+
+    /// <summary>The translation as the feed paints it — <see cref="ChatColors.ColorTranslation"/>:
+    /// the body's main colour, plus the [items] and names that came through unchanged.</summary>
+    public IReadOnlyList<ChatRun> TranslationRuns
+        => WithSpeakerRun(ChatColors.ColorTranslation(BodyColors, _translationBody));
+
+    // No colours known = no nickname colour either: the row looks exactly as it always did.
+    private IReadOnlyList<ChatRun> WithSpeakerRun(IReadOnlyList<ChatRun> body)
+        => string.IsNullOrEmpty(Speaker)
+            ? body
+            : new[] { new ChatRun(SpeakerPrefix, BodyColors == null ? null : ChatPalette.Nick, IsSpeaker: true) }
+                .Concat(body).ToList();
+
     /// <summary>Full Russian line (speaker + body) — what the copy button puts on the clipboard.</summary>
     public string Original => TextMatching.WithSpeaker(Speaker, OriginalBody);
 
     private string _translationBody = "";
     /// <summary>The translated body (the nickname is never translated). Updating it refreshes the
-    /// two-tone translator line and the single-string <see cref="Translation"/> the overlay binds.</summary>
+    /// coloured <see cref="TranslationRuns"/> both feeds paint and the single-string
+    /// <see cref="Translation"/>.</summary>
     public string TranslationBody
     {
         get => _translationBody;
@@ -35,6 +58,7 @@ public class OcrResultItem : INotifyPropertyChanged
             _translationBody = value;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TranslationBody)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Translation)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TranslationRuns)));
         }
     }
 

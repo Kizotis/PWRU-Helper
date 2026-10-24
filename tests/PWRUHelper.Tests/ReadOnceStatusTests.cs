@@ -538,9 +538,10 @@ public class ReadOnceStatusTests
         Assert.Equal(typeof(Task<(int, TranslationException?)>), m!.ReturnType);
         // The region is the third parameter since the resume rule: the rows this method appends are
         // registered with the LIVE dedup when the read overlapped the area a resume will use, and
-        // the decision needs the rectangle that was read. ct stays last.
+        // the decision needs the rectangle that was read. The frame's coloured words come fourth
+        // since the chat colours (each row's colours are read off them). ct stays last.
         Assert.Equal(new[] { typeof(List<string>), typeof(string), typeof(System.Drawing.Rectangle),
-                             typeof(CancellationToken) },
+                             typeof(IReadOnlyList<OcrWord>), typeof(CancellationToken) },
                      m.GetParameters().Select(p => p.ParameterType).ToArray());
 
         // The tuple element names, which are the readable half of the contract.
@@ -555,7 +556,7 @@ public class ReadOnceStatusTests
 
         // …and the caller really branches on it, rather than awaiting and then printing Done.
         var ocr = Code(File.ReadAllText(RepoFile("Views/MainWindow.Ocr.cs")));
-        Assert.Contains("var (translated, error) = await TranslateSentencesInto(sentences, target, rect, cts.Token);",
+        Assert.Contains("var (translated, error) = await TranslateSentencesInto(sentences, target, rect, frame.Words, cts.Token);",
                         ocr, StringComparison.Ordinal);
         // E5-g added the fourth argument: the "{t}" of a paused read, rendered by the code-behind
         // because formatting a countdown stays out of Services/ (I2). E7.S1 / amendment A7 added the
@@ -820,8 +821,8 @@ public class ReadOnceStatusTests
 
         // (4) …and that finally cannot run before the OCR call has returned: it is awaited inside
         // the try, and it takes no token of its own that could abandon it.
-        Assert.Contains("await _ocr.ReadLinesAsync(", read, StringComparison.Ordinal);
-        Assert.True(read.IndexOf("_ocr.ReadLinesAsync(", StringComparison.Ordinal)
+        Assert.Contains("await _ocr.ReadFrameAsync(", read, StringComparison.Ordinal);
+        Assert.True(read.IndexOf("_ocr.ReadFrameAsync(", StringComparison.Ordinal)
                     < read.IndexOf("_readingOnce = false;", StringComparison.Ordinal));
     }
 

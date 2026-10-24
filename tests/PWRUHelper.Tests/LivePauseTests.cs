@@ -376,7 +376,7 @@ public class LivePauseTests
 
         foreach (var forbidden in new[]
                  {
-                     "ScreenCapture.Capture", "ApplyOcrFilter", "ReadLinesAsync",
+                     "ScreenCapture.Capture", "ApplyOcrFilter", "ReadLinesAsync", "ReadFrameAsync",
                      "_dedup.Next", "AppendLinesToHistory", "TranslateBodiesAsync",
                      "_readTranslator",
                      // E5.S2 renamed the counter this line used to say (`consecutiveErrors`) into a

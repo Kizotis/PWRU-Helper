@@ -505,7 +505,9 @@ public partial class MainWindow
                     int minLetters = MinFragmentLetters();
                     // Split into whole chat messages by their "[Channel] Nick:" structure rather than
                     // by punctuation (players rarely type any) — see TextMatching.SplitChatMessages.
-                    var lines = TextMatching.SplitChatMessages(await _ocr.ReadLinesAsync(forOcr ?? bmp))
+                    // The colours come off `bmp`, the capture as the game drew it — never the filtered copy.
+                    var frame = await _ocr.ReadFrameAsync(forOcr ?? bmp, bmp);
+                    var lines = TextMatching.SplitChatMessages(frame.Lines, frame.LineWords)
                         .Select(TextMatching.StripNoise)                    // drop animated-emoji artifacts
                         .Where(l => TextMatching.LooksLikeText(l, minLetters)).ToList();
                     if (ct.IsCancellationRequested) break;
@@ -531,7 +533,7 @@ public partial class MainWindow
                     {
                         var target = SelectedTag(OcrTargetCombo) ?? "en";
                         SetScreenStatus($"🔴 Live — {confirmed.Count} new line(s), translating…");
-                        await AppendLinesToHistory(confirmed, target, ct);
+                        await AppendLinesToHistory(confirmed, target, frame.Words, ct);
                         if (ct.IsCancellationRequested) break;
                         outcome = LiveTickOutcome.Translated;   // AppendLinesToHistory throws on failure
                     }
@@ -765,12 +767,14 @@ public partial class MainWindow
 
     /// <summary>Add placeholder items, translate the batch (one request when possible),
     /// keep the last MaxHistory, and auto-scroll. Respects the live cancellation token.</summary>
-    private async Task AppendLinesToHistory(List<string> newLines, string target, CancellationToken ct)
+    private async Task AppendLinesToHistory(List<string> newLines, string target,
+                                            IReadOnlyList<OcrWord> words, CancellationToken ct)
     {
         // Keep each speaker's nickname out of the translation — translate only the message body,
         // then re-attach "Nick: " to the result (a name is a proper noun, not something to translate).
-        // SplitSpeakerStrict avoids stealing a body's leading "word:" (e.g. slang "тс:") as a nick.
-        var parts = newLines.Select(TextMatching.SplitSpeakerStrict).ToList();
+        // SplitSpeakerStrict avoids stealing a body's leading "word:" (e.g. slang "тс:") as a nick;
+        // Colorize gives back the nickname that refusal kept when its pale-yellow colour proves it.
+        var parts = newLines.Select(l => ChatColors.Colorize(l, TextMatching.SplitSpeakerStrict(l), words)).ToList();
         var items = new List<OcrResultItem>();
         for (int i = 0; i < newLines.Count; i++)
         {
@@ -778,6 +782,7 @@ public partial class MainWindow
             {
                 Speaker = parts[i].Speaker,
                 OriginalBody = parts[i].Body,
+                BodyColors = parts[i].Colors,
                 TranslationBody = "…",
                 Glossary = _slang.Decode(newLines[i]),
             };

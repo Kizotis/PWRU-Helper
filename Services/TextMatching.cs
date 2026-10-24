@@ -83,10 +83,59 @@ public static class TextMatching
         "оснв", "осн", "основной",              // main
         "групп", "группа", "гр",                // group
         "грул",                                 // …which the OCR reliably reads as "грул." — keep it
+        "фут",                                  // …or as "фут." over a light background (owner's screenshot, 2026-10)
         "отряд", "отр", "союз", "альянс",
         "торг", "торговля", "торговый", "помощь",
         "обыч", "обычн", "обычный",             // the white "normal" / local channel
+        "м/серв",                               // cross-server
     };
+
+    /// <summary>
+    /// The badges whose OCR reading is NOT a Russian word, so they can mean nothing but a badge —
+    /// wherever they stand and whether or not a "Nick:" header survived behind them.
+    ///
+    /// The owner's translation cache holds the proof of why they need this: when the OCR loses the
+    /// nickname or its colon, a line that starts with the group badge has no header, so it was
+    /// glued onto the message above as its wrapped tail — badge included — and the translator
+    /// made "grul" out of «Груп.»: <c>"спасибо грул. спасибо"</c>, <c>"…20Д. грул. если я где то на
+    /// боссе умру…"</c>. A badge like «Мир» or «Клан» cannot be trusted that far ("мир" and "клан"
+    /// are words a player writes), which is why <see cref="SplitChatMessages"/> still asks those
+    /// for a colon.
+    ///
+    /// «Груп.» counts only WITH its dot: "груп" alone is a player's clipped "group".
+    /// </summary>
+    private static readonly HashSet<string> StrongChatTags = new() { "грул", "грул.", "груп.", "сист", "сист.", "оснв", "оснв.", "м/серв" };
+
+    internal static bool IsStrongChatTag(string token)
+        => StrongChatTags.Contains(FoldHomoglyphs(token.Trim().TrimStart(TagEdgeTrim).TrimEnd(':', '|', ']', ')').ToLowerInvariant()));
+
+    /// <summary>
+    /// One OCR line as the message splitter consumes it: cut in front of every strong badge that is
+    /// not its first word (the OCR sometimes reads the next message's badge onto the end of a row —
+    /// "спасибо грул. спасибо" — and each piece is a message of its own), each piece's header
+    /// repaired from its colours (<see cref="ChatColors.RepairHeader"/>), and each piece's opening
+    /// colour (<see cref="ChatColors.OpeningColor"/>), null when its colours are unknown.
+    /// A blank line still comes out as one blank piece: it is a hard break.
+    /// </summary>
+    private static IEnumerable<(string Text, uint? Color)> Pieces(string? raw, IReadOnlyList<OcrWord>? words)
+    {
+        var line = (raw ?? "").Trim();
+        var tokens = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length == 0) { yield return ("", null); yield break; }
+        if (words != null && words.Count != tokens.Length) words = null;   // can't tell which word is which
+
+        int from = 0;
+        for (int i = 1; i <= tokens.Length; i++)
+        {
+            if (i < tokens.Length && !IsStrongChatTag(tokens[i])) continue;
+            var text = from == 0 && i == tokens.Length ? line : string.Join(" ", tokens[from..i]);
+            var pieceWords = words?.Skip(from).Take(i - from).ToList();
+            yield return pieceWords == null
+                ? (text, null)
+                : (ChatColors.RepairHeader(text, pieceWords), ChatColors.OpeningColor(pieceWords));
+            from = i;
+        }
+    }
 
     /// <summary>Punctuation the OCR sticks to a badge: the chip's border and the badge's own dot
     /// («Сист.», «Оснв.»). Trimmed before a token is matched against <see cref="ChatTags"/>.
@@ -98,7 +147,8 @@ public static class TextMatching
     /// <summary>Decoration to strip from both ends of a nickname — the player's own ("~V0oDo0~",
     /// "|Ghost|") and the crumbs the OCR leaves behind from the badge's border.</summary>
     private static readonly char[] NickEdgeTrim =
-        { ' ', '[', ']', '(', ')', '<', '>', '+', '.', ',', '-', '—', '–', '*', '~', '|', '_', '=' };
+        { ' ', '[', ']', '(', ')', '<', '>', '+', '.', ',', '-', '—', '–', '*', '~', '|', '_', '=',
+          '•', '·', '"', '“', '”' };   // specks the OCR leaves around a name ("“VBPIOCb•", "ki70tis•")
 
     /// <summary>
     /// Peel the channel badge («Мир», «Клан», «Сист.») off the front of an OCR line.
@@ -175,6 +225,8 @@ public static class TextMatching
         "speakingto",       // "You are speaking to <Player>: …"  (the whisper header)
         "becomestheowner",  // "<Player> becomes the owner of a real rarity…"
         "heavensgateway",   // "The heavens gateway have opened!…"
+        "safezone",         // "Leaving Safe Zone" / "Entering Safe Zone" (the owner's cache: glued as "грац Leaving Safe Zone")
+        "congratulationsto",// "Congratulations to <player> on obtaining the title …"
     };
 
     /// <summary>True if the line is one of the game's own announcements rather than a player's
@@ -205,6 +257,27 @@ public static class TextMatching
         return sb.ToString();
     }
 
+
+    /// <summary>The game's chat tabs, as the OCR folds them (<see cref="OcrFold"/>) — the real label
+    /// and what the OCR actually read off the owner's screenshots: "Com." comes back "Сот.", "World"
+    /// "Wodd", "Horn" "Нот", "Guild" "GuiId".</summary>
+    private static readonly HashSet<string> ChatTabWords = new()
+    {
+        "com", "cot", "squad", "guild", "guiid", "pm", "trade", "room", "world", "worid", "wodd",
+        "horn", "hot", "crossserv", "crosssen", "awards",
+    };
+
+    /// <summary>The tab bar under the chat ("Com. Squad Guild PM Trade Room World Horn Cross-serv.
+    /// Awards"), caught in the area when it is drawn a little too tall. It has no header, so it was
+    /// glued onto the last message as its tail and translated. Five tab names on one line, making up
+    /// most of it, is never a chat message.</summary>
+    public static bool IsChatTabBar(string line)
+    {
+        var tokens = (line ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        int tabs = tokens.Count(t => ChatTabWords.Contains(OcrFold(t)));
+        return tabs >= 5 && tabs * 10 >= tokens.Length * 7;
+    }
+
     /// <summary>Split raw OCR lines into whole chat messages using the game's own structure —
     /// each message is <c>[Channel] Nick: text</c>, so a line that starts a new <c>Nick:</c>
     /// (optionally after a channel tag) begins a new message, and any following line without one
@@ -213,14 +286,31 @@ public static class TextMatching
     /// The channel badge is dropped entirely (never shown, never translated — see
     /// <see cref="TryPeelChannelTag"/>); the nickname is kept as a "Nick: text" prefix.</summary>
     public static List<string> SplitChatMessages(IEnumerable<string> lines)
+        => SplitChatMessages(lines, lineWords: null);
+
+    /// <summary>
+    /// <see cref="SplitChatMessages(IEnumerable{string})"/>, helped by the colours the game drew each
+    /// line in (<paramref name="lineWords"/>[i] are the words of line i, from <see cref="OcrFrame"/>):
+    ///   • each header is repaired first (<see cref="ChatColors.RepairHeader"/>) — the chip's debris
+    ///     dropped, a colon the OCR read as a dot put back;
+    ///   • a line that would be glued on as a wrapped tail is NOT when it opens in another colour
+    ///     family than its message (<see cref="ChatPalette.FamilyOf"/>): a wrapped line keeps its
+    ///     message's colour, so "Жанна" (faction) followed by "Got 10 [Cloud dust]" (the game's
+    ///     orange) are two messages — the owner's screenshots held six of those glued pairs.
+    /// Without colours (null, or a line whose words don't line up) it is exactly the text-only split.
+    /// </summary>
+    public static List<string> SplitChatMessages(IEnumerable<string> lines,
+                                                 IReadOnlyList<IReadOnlyList<OcrWord>>? lineWords)
     {
         var messages = new List<string>();
         string speaker = "";
         var body = new List<string>();
         int lineCount = 0;
+        uint? color = null;   // the colour the message being built opened in, once one is known
 
         void Flush()
         {
+            color = null;
             if (body.Count == 0 && speaker.Length == 0) { lineCount = 0; return; }
             var text = string.Join(" ", body).Trim();
             var msg = speaker.Length > 0
@@ -231,12 +321,15 @@ public static class TextMatching
             speaker = ""; body.Clear(); lineCount = 0;
         }
 
-        foreach (var raw in lines)
+        var pieces = lines.SelectMany((l, i) => Pieces(l, lineWords != null && i < lineWords.Count ? lineWords[i] : null));
+        foreach (var (raw, lineColor) in pieces)
         {
             var line = raw.Trim();
             if (line.Length == 0) { Flush(); continue; }   // blank line = hard break
+            if (IsChatTabBar(line)) { Flush(); continue; }  // the tabs under the chat, not a message
 
             bool tagged = TryPeelChannelTag(line, out var rest);
+            bool strong = tagged && IsStrongChatTag(line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)[0]);
 
             // A badge on its own line (what the background filter produces) carries no message:
             // drop it. It still marks a boundary — the badge belongs to the message that follows.
@@ -251,9 +344,13 @@ public static class TextMatching
                 speaker = sp;
                 if (bd.Length > 0) body.Add(bd);
                 lineCount = 1;
+                color = lineColor;
             }
-            else if (tagged && rest.Contains(':'))
+            else if (tagged && (rest.Contains(':') || strong))
             {
+                // (A STRONG badge needs no colon — see StrongChatTags: no wrapped line ever begins
+                // with "грул." or "сист.", so the colon guard below has nothing to protect there.)
+                //
                 // Badged, but the nickname didn't survive the OCR (or there is none — a system
                 // announcement like "Сист. Elder of the City of Swords announces loudly: …", whose
                 // colon sits far too deep to read as a header). The badge still proves a new message
@@ -266,6 +363,7 @@ public static class TextMatching
                 Flush();
                 body.Add(rest);
                 lineCount = 1;
+                color = lineColor;
             }
             else if (IsSystemLine(line))
             {
@@ -279,10 +377,22 @@ public static class TextMatching
                 Flush();
                 body.Add(tagged ? rest : line);
                 lineCount = 1;
+                color = lineColor;
+            }
+            else if (ChatPalette.FamilyOf(lineColor) is { } family && ChatPalette.FamilyOf(color) is { } current
+                     && family != current)
+            {
+                // No header, no badge, no marker — but drawn in another colour family than the
+                // message above it, and a wrapped line never changes colour: a message of its own.
+                Flush();
+                body.Add(line);
+                lineCount = 1;
+                color = lineColor;
             }
             else
             {
                 body.Add(line);
+                color ??= lineColor;
                 if (++lineCount >= MaxLinesPerMessage) Flush();   // safety cap on runaway wraps
             }
         }
@@ -339,6 +449,16 @@ public static class TextMatching
         // A colon at position 0 (":)" smiley start) is never a header.
         if (colon <= 0 || colon > MaxHeaderChars + MaxTagChars) return false;
 
+        // A colon INSIDE an item's brackets is part of the item's name, not a nickname separator:
+        // the OCR read "It's [Courage Stone]!" as "l€'$ [Cour_age:Stone]!" on the owner's screen, and
+        // the announcement's tail became a message of its own from "l€'$ [Cour_age". Inside means an
+        // unclosed '[' before the colon AND its ']' after it — the badge border "[32) Атарион:" has
+        // the '[' but never the ']'.
+        int open = s.LastIndexOf('[', colon), shut = s.IndexOf(']', colon);
+        if (open >= 0 && s.IndexOf(']', open, colon - open) < 0 && shut > colon
+            && (s.IndexOf('[', colon) is var next && (next < 0 || next > shut)))
+            return false;
+
         var head = s[..colon].Trim();
         body = s[(colon + 1)..].Trim();
 
@@ -384,7 +504,7 @@ public static class TextMatching
         return true;
     }
 
-    private static bool IsChatTag(string token)
+    internal static bool IsChatTag(string token)
         => ChatTags.Contains(FoldHomoglyphs(token.Trim().Trim(TagEdgeTrim).ToLowerInvariant()));
 
     // Fold the Latin look-alikes players/OCR mix into Cyrillic tags ("Mиp" → "мир"), matching
