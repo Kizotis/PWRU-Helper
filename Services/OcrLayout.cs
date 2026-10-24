@@ -12,7 +12,10 @@ namespace PWRUHelper.Services;
 /// a small capture by up to 3×. That is why every threshold in <see cref="OcrLayout"/> is
 /// expressed as a fraction of text height and never as an absolute number of pixels.
 /// </summary>
-internal readonly record struct OcrTextBox(string Text, double Left, double Top, double Width, double Height)
+/// <para><see cref="Words"/> rides along untouched: it is what the line's colours were read from
+/// (<see cref="ChatPalette"/>), and null where nobody read any — every test box.</para>
+internal readonly record struct OcrTextBox(string Text, double Left, double Top, double Width, double Height,
+                                           IReadOnlyList<OcrWord>? Words = null)
 {
     internal double Right => Left + Width;
     internal double Bottom => Top + Height;
@@ -57,6 +60,16 @@ internal static class OcrLayout
     /// dropped; every returned line is trimmed and non-empty. Order of the input is irrelevant —
     /// only the geometry decides — except that exact ties keep the order they came in.</summary>
     internal static List<string> OrderIntoLines(IEnumerable<OcrTextBox> boxes)
+        => OrderIntoRows(boxes).Select(JoinRow).ToList();
+
+    /// <summary>One visual row back as ONE line: its fragments left to right, space-joined.</summary>
+    internal static string JoinRow(IReadOnlyList<OcrTextBox> row)
+        => string.Join(" ", row.Select(m => m.Text));
+
+    /// <summary><see cref="OrderIntoLines"/> before the join: every row's fragments, rows top to
+    /// bottom and fragments left to right. <see cref="OcrService"/> needs the fragments themselves
+    /// to put each word's colour in the same order as the lines.</summary>
+    internal static List<List<OcrTextBox>> OrderIntoRows(IEnumerable<OcrTextBox> boxes)
     {
         var frags = new List<OcrTextBox>();
         foreach (var b in boxes ?? Enumerable.Empty<OcrTextBox>())
@@ -64,8 +77,8 @@ internal static class OcrLayout
             var text = b.Text?.Trim();
             if (!string.IsNullOrWhiteSpace(text)) frags.Add(b with { Text = text! });
         }
-        if (frags.Count == 0) return new List<string>();
-        if (frags.Count == 1) return new List<string> { frags[0].Text };
+        if (frags.Count == 0) return new List<List<OcrTextBox>>();
+        if (frags.Count == 1) return new List<List<OcrTextBox>> { new() { frags[0] } };
 
         // OrderBy is a STABLE sort, so two fragments with identical geometry stay in the order the
         // engine gave them. List.Sort is not, and there is no reason to invent an ordering here.
@@ -94,7 +107,7 @@ internal static class OcrLayout
 
         return rows
             .OrderBy(r => r.Top).ThenBy(r => r.Left)
-            .Select(r => string.Join(" ", r.Members.OrderBy(m => m.Left).ThenBy(m => m.Top).Select(m => m.Text)))
+            .Select(r => r.Members.OrderBy(m => m.Left).ThenBy(m => m.Top).ToList())
             .ToList();
     }
 

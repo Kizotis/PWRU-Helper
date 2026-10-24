@@ -214,6 +214,74 @@ public class TemplateRenderTests
     }
 
     /// <summary>
+    /// <b>The game's chat colours reach the screen</b> (the owner, 2026-10-24), on both feeds: the
+    /// nickname in the game's pale yellow, the translation in its channel's colour with the item
+    /// that survived translation in its own, and the Russian line the same colours dimmed. Filled in
+    /// from a pending row, the way the LIVE loop does it — the colours ride on
+    /// <c>TranslationRuns</c>' change notification, which a dropped notify would leave at "…".
+    /// </summary>
+    [Fact]
+    public void A_coloured_row_paints_the_game_colours_on_both_feeds()
+    {
+        using var _ = new TempSettings("""{ "SettingsVersion": 3 }""");
+
+        StaTestHost.Run(() =>
+        {
+            var window = new MainWindow();
+            var compact = new CompactOverlay(window);
+
+            foreach (var template in new[] { window.OcrResults.ItemTemplate, compact.FeedItems.ItemTemplate })
+            {
+                var item = new OcrResultItem
+                {
+                    Speaker = "увущька",
+                    OriginalBody = "держи [Cloud dust]",
+                    BodyColors = new[] { new ChatRun("держи ", 0x00FF00), new ChatRun("[Cloud dust]", 0xAC34FF) },
+                    TranslationBody = "…",
+                };
+                var host = new ContentControl { ContentTemplate = template, Content = item };
+                Assert.Empty(Render(host).Messages);
+
+                item.TranslationBody = "here you go [Cloud dust]";
+                var errors = Render(host);
+                Assert.True(errors.Messages.Count == 0, "binding errors on a coloured row:\n" + errors.Dump());
+
+                var blocks = TextBlocksOf(host);
+                var translation = blocks.Single(b => TextOf(b).Contains("here you go", StringComparison.Ordinal));
+                var original = blocks.Single(b => TextOf(b).Contains("держи", StringComparison.Ordinal));
+
+                Assert.Equal(new[]
+                {
+                    ("увущька: ", 0xFFFFDC8Cu, 1.0),
+                    ("here you go ", 0xFF00FF00u, 1.0),
+                    ("[Cloud dust]", 0xFFAC34FFu, 1.0),
+                }, RunsOf(translation));
+                Assert.All(RunsOf(original), r => Assert.True(r.Opacity < 1.0, $"'{r.Text}' is not dimmed"));
+            }
+        });
+
+        static List<TextBlock> TextBlocksOf(DependencyObject root)
+        {
+            var found = new List<TextBlock>();
+            void Walk(DependencyObject node)
+            {
+                if (node is TextBlock tb) found.Add(tb);
+                for (int i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++) Walk(VisualTreeHelper.GetChild(node, i));
+            }
+            Walk(root);
+            return found;
+        }
+
+        static List<(string Text, uint Argb, double Opacity)> RunsOf(TextBlock tb)
+            => tb.Inlines.OfType<Run>().Select(r =>
+            {
+                var b = (SolidColorBrush)r.Foreground;
+                var c = b.Color;
+                return (r.Text, (uint)(c.A << 24 | c.R << 16 | c.G << 8 | c.B), b.Opacity);
+            }).ToList();
+    }
+
+    /// <summary>
     /// <b>TP-RENDER-06 — no row ever carries a countdown</b> (UX principle 5, hint 2). Fifty rows in
     /// the state a full pause leaves them — mostly pending, some given up, one read cancelled — laid
     /// out through both real templates, and the RENDERED text of every one of them is scanned for a
@@ -295,25 +363,23 @@ public class TemplateRenderTests
         Assert.Single(trap);
         Assert.DoesNotContain("Mode=OneWay", trap[0].Value, StringComparison.Ordinal);
 
-        var total = 0;
         foreach (var file in new[] { "Views/MainWindow.xaml", "Views/CompactOverlay.xaml" })
         {
-            var runs = Regex.Matches(File.ReadAllText(RepoFile(file)), pattern)
-                            .Select(m => m.Value).ToList();
+            var xaml = File.ReadAllText(RepoFile(file));
 
-            Assert.True(runs.Count >= 4,
-                $"{file}: the scan found {runs.Count} Run.Text bindings and the feed template ships "
-                + "four — the regex has drifted from the XAML and would pass over anything");
+            // Since the chat colours the feed lines are no longer bound Runs: ChatText builds the
+            // Runs itself, so they carry no binding to get wrong. The tripwire above proves the
+            // pattern still matches; THIS proves the scan is looking at the feed template at all —
+            // its two lines must still be there, painted by ChatText — so a scan that finds nothing
+            // finds nothing for the right reason.
+            Assert.Contains("local:ChatText.Runs=\"{Binding OriginalRuns}\"", xaml, StringComparison.Ordinal);
+            Assert.Contains("local:ChatText.Runs=\"{Binding TranslationRuns}\"", xaml, StringComparison.Ordinal);
 
-            foreach (var run in runs)
+            foreach (var run in Regex.Matches(xaml, pattern).Select(m => m.Value))
                 Assert.True(run.Contains("Mode=OneWay", StringComparison.Ordinal),
                     $"{file}: a Run.Text binding without Mode=OneWay (I15 — it binds TwoWay by "
                     + $"default and throws once per rendered row): {run}");
-
-            total += runs.Count;
         }
-
-        Assert.True(total >= 8, $"only {total} Run.Text bindings found across both feed templates");
     }
 
     /// <summary>

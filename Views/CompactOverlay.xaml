@@ -1,6 +1,7 @@
 <Window x:Class="PWRUHelper.CompactOverlay"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:PWRUHelper"
         Title="PWRU Helper (compact)"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         Topmost="True" ShowInTaskbar="False" WindowStartupLocation="Manual"
@@ -108,7 +109,7 @@
                                 <Border CornerRadius="6" Padding="8,6" Margin="0,0,0,6">
                                     <Border.Style>
                                         <Style TargetType="Border">
-                                            <Setter Property="Background" Value="{StaticResource PanelBrush}"/>
+                                            <Setter Property="Background" Value="{StaticResource ChatCardBrush}"/>
                                             <Setter Property="BorderThickness" Value="0"/>
                                             <Style.Triggers>
                                                 <!-- "Read once" lands in the live feed rather than replacing it,
@@ -127,10 +128,12 @@
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0">
-                                        <!-- Two-tone like the main translator: grey speaker nick + body.
-                                             Run.Text binds TwoWay by default, so read-only props need Mode=OneWay. -->
-                                        <TextBlock FontSize="11" TextWrapping="Wrap"><Run Text="{Binding SpeakerPrefix, Mode=OneWay}" Foreground="{StaticResource TextMutedBrush}" FontWeight="SemiBold"/><Run Text="{Binding OriginalBody, Mode=OneWay}" Foreground="{StaticResource TextMutedBrush}"/></TextBlock>
-                                        <TextBlock FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,2,0,0"><Run Text="{Binding SpeakerPrefix, Mode=OneWay}" Foreground="{StaticResource TextMutedBrush}"/><Run Text="{Binding TranslationBody, Mode=OneWay}" Foreground="{StaticResource TextBrush}"/></TextBlock>
+                                        <!-- The game's chat colours, like the main translator (ChatText): the
+                                             Russian line dimmed, the translation in its channel's colour. -->
+                                        <TextBlock FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource TextMutedBrush}"
+                                                   local:ChatText.Dim="0.75" local:ChatText.Runs="{Binding OriginalRuns}"/>
+                                        <TextBlock FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,2,0,0"
+                                                   Foreground="{StaticResource TextBrush}" local:ChatText.Runs="{Binding TranslationRuns}"/>
                                         <TextBlock Text="{Binding Glossary}" FontSize="11"
                                                    Foreground="{StaticResource GoldBrush}" TextWrapping="Wrap"
                                                    Margin="0,2,0,0">

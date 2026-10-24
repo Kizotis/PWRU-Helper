@@ -83,10 +83,47 @@ public static class TextMatching
         "оснв", "осн", "основной",              // main
         "групп", "группа", "гр",                // group
         "грул",                                 // …which the OCR reliably reads as "грул." — keep it
+        "фут",                                  // …or as "фут." over a light background (owner's screenshot, 2026-10)
         "отряд", "отр", "союз", "альянс",
         "торг", "торговля", "торговый", "помощь",
         "обыч", "обычн", "обычный",             // the white "normal" / local channel
+        "м/серв",                               // cross-server
     };
+
+    /// <summary>
+    /// The badges whose OCR reading is NOT a Russian word, so they can mean nothing but a badge —
+    /// wherever they stand and whether or not a "Nick:" header survived behind them.
+    ///
+    /// The owner's translation cache holds the proof of why they need this: when the OCR loses the
+    /// nickname or its colon, a line that starts with the group badge has no header, so it was
+    /// glued onto the message above as its wrapped tail — badge included — and the translator
+    /// made "grul" out of «Груп.»: <c>"спасибо грул. спасибо"</c>, <c>"…20Д. грул. если я где то на
+    /// боссе умру…"</c>. A badge like «Мир» or «Клан» cannot be trusted that far ("мир" and "клан"
+    /// are words a player writes), which is why <see cref="SplitChatMessages"/> still asks those
+    /// for a colon.
+    ///
+    /// «Груп.» counts only WITH its dot: "груп" alone is a player's clipped "group".
+    /// </summary>
+    private static readonly HashSet<string> StrongChatTags = new() { "грул", "грул.", "груп.", "сист", "сист.", "оснв", "оснв.", "м/серв" };
+
+    private static bool IsStrongChatTag(string token)
+        => StrongChatTags.Contains(FoldHomoglyphs(token.Trim().TrimStart(TagEdgeTrim).TrimEnd(':', '|', ']', ')').ToLowerInvariant()));
+
+    /// <summary>Cut a line in front of every strong badge that is not its first word: the OCR
+    /// sometimes reads the next message's badge onto the end of a row ("спасибо грул. спасибо"),
+    /// and each piece is a message of its own.</summary>
+    private static IEnumerable<string> SplitAtStrongTags(string line)
+    {
+        var tokens = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        int from = 0;
+        for (int i = 1; i < tokens.Length; i++)
+        {
+            if (!IsStrongChatTag(tokens[i])) continue;
+            yield return string.Join(" ", tokens[from..i]);
+            from = i;
+        }
+        yield return from == 0 ? line : string.Join(" ", tokens[from..]);
+    }
 
     /// <summary>Punctuation the OCR sticks to a badge: the chip's border and the badge's own dot
     /// («Сист.», «Оснв.»). Trimmed before a token is matched against <see cref="ChatTags"/>.
@@ -175,6 +212,8 @@ public static class TextMatching
         "speakingto",       // "You are speaking to <Player>: …"  (the whisper header)
         "becomestheowner",  // "<Player> becomes the owner of a real rarity…"
         "heavensgateway",   // "The heavens gateway have opened!…"
+        "safezone",         // "Leaving Safe Zone" / "Entering Safe Zone" (the owner's cache: glued as "грац Leaving Safe Zone")
+        "congratulationsto",// "Congratulations to <player> on obtaining the title …"
     };
 
     /// <summary>True if the line is one of the game's own announcements rather than a player's
@@ -231,12 +270,13 @@ public static class TextMatching
             speaker = ""; body.Clear(); lineCount = 0;
         }
 
-        foreach (var raw in lines)
+        foreach (var raw in lines.SelectMany(l => SplitAtStrongTags((l ?? "").Trim())))
         {
             var line = raw.Trim();
             if (line.Length == 0) { Flush(); continue; }   // blank line = hard break
 
             bool tagged = TryPeelChannelTag(line, out var rest);
+            bool strong = tagged && IsStrongChatTag(line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)[0]);
 
             // A badge on its own line (what the background filter produces) carries no message:
             // drop it. It still marks a boundary — the badge belongs to the message that follows.
@@ -252,8 +292,11 @@ public static class TextMatching
                 if (bd.Length > 0) body.Add(bd);
                 lineCount = 1;
             }
-            else if (tagged && rest.Contains(':'))
+            else if (tagged && (rest.Contains(':') || strong))
             {
+                // (A STRONG badge needs no colon — see StrongChatTags: no wrapped line ever begins
+                // with "грул." or "сист.", so the colon guard below has nothing to protect there.)
+                //
                 // Badged, but the nickname didn't survive the OCR (or there is none — a system
                 // announcement like "Сист. Elder of the City of Swords announces loudly: …", whose
                 // colon sits far too deep to read as a header). The badge still proves a new message

@@ -277,11 +277,13 @@ public partial class MainWindow
         {
             using var bmp = ScreenCapture.Capture(rect.X, rect.Y, rect.Width, rect.Height);
             using var forOcr = ApplyOcrFilter(bmp);   // null when the filter is off
-            var sentences = TextMatching.SplitChatMessages(await _ocr.ReadLinesAsync(forOcr ?? bmp))
+            // The colours come off `bmp`, the capture as the game drew it — never the filtered copy.
+            var frame = await _ocr.ReadFrameAsync(forOcr ?? bmp, bmp);
+            var sentences = TextMatching.SplitChatMessages(frame.Lines)
                 .Select(TextMatching.StripNoise)
                 .Where(l => l.Length > 0).ToList();
             // The capture and the OCR take no token of their own (ScreenCapture is synchronous GDI;
-            // OcrService.ReadLinesAsync has no ct parameter), so a Stop or a budget expiry landing
+            // OcrService.ReadFrameAsync has no ct parameter), so a Stop or a budget expiry landing
             // DURING them is only observed here — and it has to be observed here, before the two
             // things below that would otherwise happen for a read that is already over: telling the
             // player "No text detected there. Try a tighter box" (a diagnosis of a read nobody
@@ -302,7 +304,7 @@ public partial class MainWindow
             // ReadOnceSummary reaches it only when every line read carries a translation, which is
             // UX hint 4 and the whole of DoD V1.5. The counts come from what the rows ACTUALLY got,
             // never from lines — reading N lines has never meant translating N lines.
-            var (translated, error) = await TranslateSentencesInto(sentences, target, rect, cts.Token);
+            var (translated, error) = await TranslateSentencesInto(sentences, target, rect, frame.Words, cts.Token);
             // _liveCts is amendment A7's fork: the E5.S3 retry queue is drained by the LIVE
             // loop, so "they fill in when one is back" is a promise only a read taken with the loop
             // running can keep. (It is null on every path today — read-once stops the loop first —
@@ -434,7 +436,8 @@ public partial class MainWindow
     /// <c>Done — N line(s) translated.</c> print over a list of "(no internet connection)" rows
     /// (V1.5, amplifier A7).</para></summary>
     private async Task<(int Translated, TranslationException? Error)> TranslateSentencesInto(
-        List<string> sentences, string target, System.Drawing.Rectangle region, CancellationToken ct)
+        List<string> sentences, string target, System.Drawing.Rectangle region,
+        IReadOnlyList<OcrWord> words, CancellationToken ct)
     {
         // APPENDS to the feed — it used to Clear() it first. Reading once from the compact overlay
         // is meant to drop an answer INTO the live flow you are watching, not to wipe the flow to
@@ -442,7 +445,9 @@ public partial class MainWindow
         // among the live lines; the same MaxHistory cap as the live loop keeps the list bounded.
         // SplitSpeakerStrict, not SplitSpeaker: a body that itself starts "word:" (e.g. the slang
         // "тс: сбор у входа") must not lose its first word as a fake nickname and skip translation.
-        var parts = sentences.Select(TextMatching.SplitSpeakerStrict).ToList();   // (Speaker, Body)
+        // Colorize: the same split, plus the nickname its pale-yellow colour proves (see there).
+        var parts = sentences.Select(s => ChatColors.Colorize(s, TextMatching.SplitSpeakerStrict(s), words))
+                             .ToList();   // (Speaker, Body, Colors)
         var items = new List<OcrResultItem>();
         for (int i = 0; i < sentences.Count; i++)
         {
@@ -450,6 +455,7 @@ public partial class MainWindow
             {
                 Speaker = parts[i].Speaker,
                 OriginalBody = parts[i].Body,
+                BodyColors = parts[i].Colors,
                 TranslationBody = "…",
                 Glossary = _slang.Decode(sentences[i]),
                 IsReadOnce = true,

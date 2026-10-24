@@ -340,7 +340,7 @@
                                         <Border CornerRadius="8" Padding="12" Margin="0,0,0,8">
                                             <Border.Style>
                                                 <Style TargetType="Border">
-                                                    <Setter Property="Background" Value="{StaticResource PanelBrush}"/>
+                                                    <Setter Property="Background" Value="{StaticResource ChatCardBrush}"/>
                                                     <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
                                                     <Setter Property="BorderThickness" Value="1"/>
                                                     <Style.Triggers>
@@ -359,13 +359,16 @@
                                                     <ColumnDefinition Width="Auto"/>
                                                 </Grid.ColumnDefinitions>
                                                 <StackPanel Grid.Column="0">
-                                                    <!-- Two-tone: grey speaker nick + body. Run.Text binds TwoWay by
-                                                         default, so read-only props need Mode=OneWay — a get-only
-                                                         property bound TwoWay throws once per rendered row (the
-                                                         v0.11.2 crash, I15). Every new Run.Text binding here also
-                                                         gains a case in the STA TemplateRenderTests. -->
-                                                    <TextBlock FontSize="13" TextWrapping="Wrap"><Run Text="{Binding SpeakerPrefix, Mode=OneWay}" Foreground="{StaticResource TextMutedBrush}" FontWeight="SemiBold"/><Run Text="{Binding OriginalBody, Mode=OneWay}" Foreground="{StaticResource TextMutedBrush}"/></TextBlock>
-                                                    <TextBlock FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,4,0,0"><Run Text="{Binding SpeakerPrefix, Mode=OneWay}" Foreground="{StaticResource TextMutedBrush}"/><Run Text="{Binding TranslationBody, Mode=OneWay}" Foreground="{StaticResource TextBrush}"/></TextBlock>
+                                                    <!-- The game's chat colours (ChatText / ChatColors): nickname in
+                                                         pale yellow, body in its channel's colour, the Russian line
+                                                         dimmed under its translation. A row whose colours could not
+                                                         be read falls back to these TextBlocks' own Foregrounds. Any
+                                                         Run.Text binding added here must be Mode=OneWay (the v0.11.2
+                                                         crash, I15) and gains a case in the STA TemplateRenderTests. -->
+                                                    <TextBlock FontSize="13" TextWrapping="Wrap" Foreground="{StaticResource TextMutedBrush}"
+                                                               local:ChatText.Dim="0.75" local:ChatText.Runs="{Binding OriginalRuns}"/>
+                                                    <TextBlock FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,4,0,0"
+                                                               Foreground="{StaticResource TextBrush}" local:ChatText.Runs="{Binding TranslationRuns}"/>
                                                     <TextBlock Text="{Binding Glossary}" FontSize="12"
                                                                Foreground="{StaticResource GoldBrush}"
                                                                TextWrapping="Wrap" Margin="0,3,0,0">
