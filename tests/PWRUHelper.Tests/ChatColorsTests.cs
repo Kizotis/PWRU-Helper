@@ -273,6 +273,31 @@ public class ChatColorsTests
     }
 
     [Fact]
+    public void A_group_header_the_OCR_garbled_on_one_LIVE_frame_is_still_a_header()
+    {
+        // The owner's LIVE feed, 2026-10-24: «Груп. Kizotis: well» read once as "Гоъ•л. ki70tis•, well",
+        // which came out of the translator as a second row "Go•l. ki70tis•,well".
+        Assert.Equal("ki70tis: well", ChatColors.RepairHeader("Гоъ•л. ki70tis•, well",
+            W(("Гоъ•л.", null), ("ki70tis•,", Nick), ("well", Group))));
+        Assert.Equal("VBPIOCb: Куплю", ChatColors.RepairHeader("мир “VBPIOCb•. Куплю",
+            W(("мир", World), ("“VBPIOCb•.", Nick), ("Куплю", World))));
+    }
+
+    [Fact]
+    public void A_colon_inside_an_items_brackets_is_not_a_nickname_separator()
+    {
+        // The owner's screen: "It's [Courage Stone]!" read as "l€'$ [Cour_age:Stone]!" became a row of
+        // its own, «1t's [Соигаде Stonel!», with "l€'$ [Cour_age" taken for a player.
+        var lines = new[] { "Wei Xiaobao: mideo becomes the owner of a real rarity,", "l€'$ [Cour_age:Stone]!" };
+
+        Assert.Single(TextMatching.SplitChatMessages(lines));
+        Assert.False(TextMatching.TryParseHeader("l€'$ [Cour_age:Stone]!", out _, out _));
+        // …while the badge's border, which opens a bracket it never closes, still leaves the header alone.
+        Assert.True(TextMatching.TryParseHeader("[32) Атарион: доброе утро", out var nick, out _));
+        Assert.Equal("Атарион", nick);
+    }
+
+    [Fact]
     public void A_line_whose_words_do_not_line_up_is_left_alone()
         => Assert.Equal("[З— Anmut: да", ChatColors.RepairHeader("[З— Anmut: да", W(("Anmut:", Nick), ("да", Faction))));
 

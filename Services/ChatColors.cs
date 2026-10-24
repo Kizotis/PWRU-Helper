@@ -201,6 +201,9 @@ public static class ChatColors
     /// ("[З—", "•[ЗђЗ*2", "у[Зђ?)" — all read off the owner's screenshots).</summary>
     private const int MaxDebrisWords = 3;
 
+    /// <summary>What the OCR leaves around a nickname that is never part of it.</summary>
+    private static readonly char[] NameSpecks = { '•', '·', '"', '“', '”', '\'' };
+
     /// <summary>
     /// Repair one OCR line's header from its colours, before the line is grouped into messages.
     ///
@@ -225,12 +228,16 @@ public static class ChatColors
                && (words[start].Rgb == null || TextMatching.IsChatTag(tokens[start]) || TextMatching.IsStrongChatTag(tokens[start])))
             start++;
 
-        // The nickname: up to three pale-yellow words, the last of them ending in what the colon was read as.
+        // The nickname: up to three pale-yellow words, the last of them ending in what the colon was
+        // read as — ':' '.' ';' or ',' ("ki70tis•," on the owner's LIVE feed), once the specks the OCR
+        // sprinkles around a name ('•', quotes) are off.
         for (int j = start; j < tokens.Length && j < start + 3 && words[j].Rgb == ChatPalette.Nick; j++)
         {
-            var t = tokens[j];
-            if (t.Length < 2 || t[^1] is not (':' or '.' or ';')) continue;
-            var nick = string.Join(" ", tokens[start..j].Append(t[..^1]));
+            var t = tokens[j].TrimEnd(NameSpecks);
+            if (t.Length < 2 || t[^1] is not (':' or '.' or ';' or ',')) continue;
+            t = t[..^1].Trim(NameSpecks);
+            if (t.Length == 0) continue;
+            var nick = string.Join(" ", tokens[start..j].Select(x => x.Trim(NameSpecks)).Append(t));
             var rest = string.Join(" ", tokens[(j + 1)..]);
             return rest.Length > 0 ? $"{nick}: {rest}" : $"{nick}:";
         }

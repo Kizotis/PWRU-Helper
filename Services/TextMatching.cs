@@ -147,7 +147,8 @@ public static class TextMatching
     /// <summary>Decoration to strip from both ends of a nickname — the player's own ("~V0oDo0~",
     /// "|Ghost|") and the crumbs the OCR leaves behind from the badge's border.</summary>
     private static readonly char[] NickEdgeTrim =
-        { ' ', '[', ']', '(', ')', '<', '>', '+', '.', ',', '-', '—', '–', '*', '~', '|', '_', '=' };
+        { ' ', '[', ']', '(', ')', '<', '>', '+', '.', ',', '-', '—', '–', '*', '~', '|', '_', '=',
+          '•', '·', '"', '“', '”' };   // specks the OCR leaves around a name ("“VBPIOCb•", "ki70tis•")
 
     /// <summary>
     /// Peel the channel badge («Мир», «Клан», «Сист.») off the front of an OCR line.
@@ -447,6 +448,16 @@ public static class TextMatching
         // line like "[Торговля] Продавец_Мечей_777: …" isn't rejected before the tag is peeled.
         // A colon at position 0 (":)" smiley start) is never a header.
         if (colon <= 0 || colon > MaxHeaderChars + MaxTagChars) return false;
+
+        // A colon INSIDE an item's brackets is part of the item's name, not a nickname separator:
+        // the OCR read "It's [Courage Stone]!" as "l€'$ [Cour_age:Stone]!" on the owner's screen, and
+        // the announcement's tail became a message of its own from "l€'$ [Cour_age". Inside means an
+        // unclosed '[' before the colon AND its ']' after it — the badge border "[32) Атарион:" has
+        // the '[' but never the ']'.
+        int open = s.LastIndexOf('[', colon), shut = s.IndexOf(']', colon);
+        if (open >= 0 && s.IndexOf(']', open, colon - open) < 0 && shut > colon
+            && (s.IndexOf('[', colon) is var next && (next < 0 || next > shut)))
+            return false;
 
         var head = s[..colon].Trim();
         body = s[(colon + 1)..].Trim();
