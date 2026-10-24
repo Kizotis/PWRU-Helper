@@ -279,7 +279,7 @@ public partial class MainWindow
             using var forOcr = ApplyOcrFilter(bmp);   // null when the filter is off
             // The colours come off `bmp`, the capture as the game drew it — never the filtered copy.
             var frame = await _ocr.ReadFrameAsync(forOcr ?? bmp, bmp);
-            var sentences = TextMatching.SplitChatMessages(frame.Lines)
+            var sentences = TextMatching.SplitChatMessages(frame.Lines, frame.LineWords)
                 .Select(TextMatching.StripNoise)
                 .Where(l => l.Length > 0).ToList();
             // The capture and the OCR take no token of their own (ScreenCapture is synchronous GDI;

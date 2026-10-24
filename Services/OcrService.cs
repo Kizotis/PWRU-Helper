@@ -106,7 +106,8 @@ public class OcrService
     public async Task<OcrFrame> ReadFrameAsync(Bitmap bitmap, Bitmap? colorSource)
     {
         var engine = _engine.Value;                     // builds it on the first read, then cached
-        if (engine == null) return new OcrFrame(new List<string>(), Array.Empty<OcrWord>());
+        if (engine == null)
+            return new OcrFrame(new List<string>(), Array.Empty<OcrWord>(), Array.Empty<IReadOnlyList<OcrWord>>());
 
         // Pick a scale factor before recognition:
         //  • DOWNSCALE huge captures — Windows.Media.Ocr rejects images whose width or
@@ -191,9 +192,10 @@ public class OcrService
         // The words follow the lines' reading order — the one OcrLayout rebuilds — so a message
         // assembled from the lines can find its own words again (ChatColors.ColorBody).
         var rows = OcrLayout.OrderIntoRows(boxes);
-        return new OcrFrame(
-            rows.Select(OcrLayout.JoinRow).ToList(),
-            rows.SelectMany(row => row).SelectMany(box => box.Words ?? Array.Empty<OcrWord>()).ToList());
+        var lineWords = rows
+            .Select(row => (IReadOnlyList<OcrWord>)row.SelectMany(box => box.Words ?? Array.Empty<OcrWord>()).ToList())
+            .ToList();
+        return new OcrFrame(rows.Select(OcrLayout.JoinRow).ToList(), lineWords.SelectMany(w => w).ToList(), lineWords);
     }
 
     /// <summary>The colour source's pixels, copied out once per frame as 32 bpp BGRA so every

@@ -106,23 +106,35 @@ public static class TextMatching
     /// </summary>
     private static readonly HashSet<string> StrongChatTags = new() { "грул", "грул.", "груп.", "сист", "сист.", "оснв", "оснв.", "м/серв" };
 
-    private static bool IsStrongChatTag(string token)
+    internal static bool IsStrongChatTag(string token)
         => StrongChatTags.Contains(FoldHomoglyphs(token.Trim().TrimStart(TagEdgeTrim).TrimEnd(':', '|', ']', ')').ToLowerInvariant()));
 
-    /// <summary>Cut a line in front of every strong badge that is not its first word: the OCR
-    /// sometimes reads the next message's badge onto the end of a row ("спасибо грул. спасибо"),
-    /// and each piece is a message of its own.</summary>
-    private static IEnumerable<string> SplitAtStrongTags(string line)
+    /// <summary>
+    /// One OCR line as the message splitter consumes it: cut in front of every strong badge that is
+    /// not its first word (the OCR sometimes reads the next message's badge onto the end of a row —
+    /// "спасибо грул. спасибо" — and each piece is a message of its own), each piece's header
+    /// repaired from its colours (<see cref="ChatColors.RepairHeader"/>), and each piece's opening
+    /// colour (<see cref="ChatColors.OpeningColor"/>), null when its colours are unknown.
+    /// A blank line still comes out as one blank piece: it is a hard break.
+    /// </summary>
+    private static IEnumerable<(string Text, uint? Color)> Pieces(string? raw, IReadOnlyList<OcrWord>? words)
     {
+        var line = (raw ?? "").Trim();
         var tokens = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length == 0) { yield return ("", null); yield break; }
+        if (words != null && words.Count != tokens.Length) words = null;   // can't tell which word is which
+
         int from = 0;
-        for (int i = 1; i < tokens.Length; i++)
+        for (int i = 1; i <= tokens.Length; i++)
         {
-            if (!IsStrongChatTag(tokens[i])) continue;
-            yield return string.Join(" ", tokens[from..i]);
+            if (i < tokens.Length && !IsStrongChatTag(tokens[i])) continue;
+            var text = from == 0 && i == tokens.Length ? line : string.Join(" ", tokens[from..i]);
+            var pieceWords = words?.Skip(from).Take(i - from).ToList();
+            yield return pieceWords == null
+                ? (text, null)
+                : (ChatColors.RepairHeader(text, pieceWords), ChatColors.OpeningColor(pieceWords));
             from = i;
         }
-        yield return from == 0 ? line : string.Join(" ", tokens[from..]);
     }
 
     /// <summary>Punctuation the OCR sticks to a badge: the chip's border and the badge's own dot
@@ -244,6 +256,27 @@ public static class TextMatching
         return sb.ToString();
     }
 
+
+    /// <summary>The game's chat tabs, as the OCR folds them (<see cref="OcrFold"/>) — the real label
+    /// and what the OCR actually read off the owner's screenshots: "Com." comes back "Сот.", "World"
+    /// "Wodd", "Horn" "Нот", "Guild" "GuiId".</summary>
+    private static readonly HashSet<string> ChatTabWords = new()
+    {
+        "com", "cot", "squad", "guild", "guiid", "pm", "trade", "room", "world", "worid", "wodd",
+        "horn", "hot", "crossserv", "crosssen", "awards",
+    };
+
+    /// <summary>The tab bar under the chat ("Com. Squad Guild PM Trade Room World Horn Cross-serv.
+    /// Awards"), caught in the area when it is drawn a little too tall. It has no header, so it was
+    /// glued onto the last message as its tail and translated. Five tab names on one line, making up
+    /// most of it, is never a chat message.</summary>
+    public static bool IsChatTabBar(string line)
+    {
+        var tokens = (line ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        int tabs = tokens.Count(t => ChatTabWords.Contains(OcrFold(t)));
+        return tabs >= 5 && tabs * 10 >= tokens.Length * 7;
+    }
+
     /// <summary>Split raw OCR lines into whole chat messages using the game's own structure —
     /// each message is <c>[Channel] Nick: text</c>, so a line that starts a new <c>Nick:</c>
     /// (optionally after a channel tag) begins a new message, and any following line without one
@@ -252,14 +285,31 @@ public static class TextMatching
     /// The channel badge is dropped entirely (never shown, never translated — see
     /// <see cref="TryPeelChannelTag"/>); the nickname is kept as a "Nick: text" prefix.</summary>
     public static List<string> SplitChatMessages(IEnumerable<string> lines)
+        => SplitChatMessages(lines, lineWords: null);
+
+    /// <summary>
+    /// <see cref="SplitChatMessages(IEnumerable{string})"/>, helped by the colours the game drew each
+    /// line in (<paramref name="lineWords"/>[i] are the words of line i, from <see cref="OcrFrame"/>):
+    ///   • each header is repaired first (<see cref="ChatColors.RepairHeader"/>) — the chip's debris
+    ///     dropped, a colon the OCR read as a dot put back;
+    ///   • a line that would be glued on as a wrapped tail is NOT when it opens in another colour
+    ///     family than its message (<see cref="ChatPalette.FamilyOf"/>): a wrapped line keeps its
+    ///     message's colour, so "Жанна" (faction) followed by "Got 10 [Cloud dust]" (the game's
+    ///     orange) are two messages — the owner's screenshots held six of those glued pairs.
+    /// Without colours (null, or a line whose words don't line up) it is exactly the text-only split.
+    /// </summary>
+    public static List<string> SplitChatMessages(IEnumerable<string> lines,
+                                                 IReadOnlyList<IReadOnlyList<OcrWord>>? lineWords)
     {
         var messages = new List<string>();
         string speaker = "";
         var body = new List<string>();
         int lineCount = 0;
+        uint? color = null;   // the colour the message being built opened in, once one is known
 
         void Flush()
         {
+            color = null;
             if (body.Count == 0 && speaker.Length == 0) { lineCount = 0; return; }
             var text = string.Join(" ", body).Trim();
             var msg = speaker.Length > 0
@@ -270,10 +320,12 @@ public static class TextMatching
             speaker = ""; body.Clear(); lineCount = 0;
         }
 
-        foreach (var raw in lines.SelectMany(l => SplitAtStrongTags((l ?? "").Trim())))
+        var pieces = lines.SelectMany((l, i) => Pieces(l, lineWords != null && i < lineWords.Count ? lineWords[i] : null));
+        foreach (var (raw, lineColor) in pieces)
         {
             var line = raw.Trim();
             if (line.Length == 0) { Flush(); continue; }   // blank line = hard break
+            if (IsChatTabBar(line)) { Flush(); continue; }  // the tabs under the chat, not a message
 
             bool tagged = TryPeelChannelTag(line, out var rest);
             bool strong = tagged && IsStrongChatTag(line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)[0]);
@@ -291,6 +343,7 @@ public static class TextMatching
                 speaker = sp;
                 if (bd.Length > 0) body.Add(bd);
                 lineCount = 1;
+                color = lineColor;
             }
             else if (tagged && (rest.Contains(':') || strong))
             {
@@ -309,6 +362,7 @@ public static class TextMatching
                 Flush();
                 body.Add(rest);
                 lineCount = 1;
+                color = lineColor;
             }
             else if (IsSystemLine(line))
             {
@@ -322,10 +376,22 @@ public static class TextMatching
                 Flush();
                 body.Add(tagged ? rest : line);
                 lineCount = 1;
+                color = lineColor;
+            }
+            else if (ChatPalette.FamilyOf(lineColor) is { } family && ChatPalette.FamilyOf(color) is { } current
+                     && family != current)
+            {
+                // No header, no badge, no marker — but drawn in another colour family than the
+                // message above it, and a wrapped line never changes colour: a message of its own.
+                Flush();
+                body.Add(line);
+                lineCount = 1;
+                color = lineColor;
             }
             else
             {
                 body.Add(line);
+                color ??= lineColor;
                 if (++lineCount >= MaxLinesPerMessage) Flush();   // safety cap on runaway wraps
             }
         }
@@ -427,7 +493,7 @@ public static class TextMatching
         return true;
     }
 
-    private static bool IsChatTag(string token)
+    internal static bool IsChatTag(string token)
         => ChatTags.Contains(FoldHomoglyphs(token.Trim().Trim(TagEdgeTrim).ToLowerInvariant()));
 
     // Fold the Latin look-alikes players/OCR mix into Cyrillic tags ("Mиp" → "мир"), matching

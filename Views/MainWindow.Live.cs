@@ -507,7 +507,7 @@ public partial class MainWindow
                     // by punctuation (players rarely type any) — see TextMatching.SplitChatMessages.
                     // The colours come off `bmp`, the capture as the game drew it — never the filtered copy.
                     var frame = await _ocr.ReadFrameAsync(forOcr ?? bmp, bmp);
-                    var lines = TextMatching.SplitChatMessages(frame.Lines)
+                    var lines = TextMatching.SplitChatMessages(frame.Lines, frame.LineWords)
                         .Select(TextMatching.StripNoise)                    // drop animated-emoji artifacts
                         .Where(l => TextMatching.LooksLikeText(l, minLetters)).ToList();
                     if (ct.IsCancellationRequested) break;

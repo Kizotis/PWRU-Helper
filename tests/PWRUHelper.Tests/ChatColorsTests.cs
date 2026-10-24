@@ -227,6 +227,109 @@ public class ChatColorsTests
         Assert.Equal(new[] { new ChatRun("че где красивая пушка", Group) }, colors);
     }
 
+    // ---- message boundaries from colours (the owner's three leftovers, 2026-10-24) ----
+    // Every line below is the real OCR of the owner's screenshots, with the colour each word voted for.
+
+    private const uint Nick = ChatPalette.Nick;
+
+    private static IReadOnlyList<OcrWord> W(params (string Text, uint? Rgb)[] words)
+        => words.Select(w => new OcrWord(w.Text, w.Rgb)).ToList();
+
+    [Fact]
+    public void The_chips_debris_in_front_of_a_nickname_is_dropped()
+    {
+        Assert.Equal("Онегатива: ток в реально жизни", ChatColors.RepairHeader("[З— Онегатива: ток в реально жизни",
+            W(("[З—", null), ("Онегатива:", Nick), ("ток", Faction), ("в", Faction), ("реально", Faction), ("жизни", Faction))));
+        Assert.Equal("6iX9ine: Значит", ChatColors.RepairHeader("•[ЗђЗ*2 6iX9ine: Значит",
+            W(("•[ЗђЗ*2", null), ("6iX9ine:", Nick), ("Значит", Faction))));
+    }
+
+    [Theory]
+    [InlineData("[Зђ?) Frmr. шо", "Frmr: шо")]
+    [InlineData("мир kibtaeer. ищу", "kibtaeer: ищу")]
+    [InlineData("Frmr.", "Frmr:")]                         // a message that was only a smiley
+    public void A_colon_the_OCR_read_as_a_dot_is_put_back(string line, string repaired)
+    {
+        var tokens = line.Split(' ');
+        var words = tokens.Select((t, i) => new OcrWord(t,
+            i == tokens.Length - 1 && tokens.Length > 1 && !t.EndsWith('.') ? Faction
+            : t.EndsWith('.') ? Nick
+            : t == "мир" ? World : null)).ToList();
+
+        Assert.Equal(repaired, ChatColors.RepairHeader(line, words));
+    }
+
+    [Theory]
+    // A name inside an announcement: pale yellow, but no punctuation — the line is left alone.
+    [InlineData("MicoIash upgrades", 0xFFDC8Cu, 0xFF3300u)]
+    // The whisper header: the name is the 5th word, not a header.
+    [InlineData("You are speaking to увущька. hi", 0x3D8BFFu, 0x3D8BFFu)]
+    public void A_name_that_is_not_a_header_is_left_alone(string line, uint first, uint rest)
+    {
+        var tokens = line.Split(' ');
+        var words = tokens.Select((t, i) => new OcrWord(t, t.StartsWith("увущ") ? Nick : i == 0 ? first : rest)).ToList();
+
+        Assert.Equal(line, ChatColors.RepairHeader(line, words));
+    }
+
+    [Fact]
+    public void A_line_whose_words_do_not_line_up_is_left_alone()
+        => Assert.Equal("[З— Anmut: да", ChatColors.RepairHeader("[З— Anmut: да", W(("Anmut:", Nick), ("да", Faction))));
+
+    [Fact]
+    public void A_line_in_another_colour_family_is_not_glued_onto_the_message_above()
+    {
+        var lines = new[] { "6iX9ine: Жанна", "Got 10 [Cloud dust]", "Anmut: ну это от региона", "В ГШ ВАР МИСТДД В ПМ" };
+        var words = new[]
+        {
+            W(("6iX9ine:", Nick), ("Жанна", Faction)),
+            W(("Got", Item), ("10", Item), ("[Cloud", Epic), ("dust]", Epic)),
+            W(("Anmut:", Nick), ("ну", Faction), ("это", Faction), ("от", Faction), ("региона", Faction)),
+            W(("В", World), ("ГШ", World), ("ВАР", World), ("МИСТДД", World), ("В", World), ("ПМ", World)),
+        };
+
+        Assert.Equal(lines, TextMatching.SplitChatMessages(lines, words));
+    }
+
+    [Fact]
+    public void A_wrapped_line_in_its_messages_colour_still_glues_back_on()
+    {
+        var lines = new[] { "kibtaeer: ищу парня для поиграть,", "погулять" };
+        var words = new[]
+        {
+            W(("kibtaeer:", Nick), ("ищу", World), ("парня", World), ("для", World), ("поиграть,", World)),
+            W(("погулять", World)),
+        };
+
+        Assert.Equal(new[] { "kibtaeer: ищу парня для поиграть, погулять" }, TextMatching.SplitChatMessages(lines, words));
+    }
+
+    [Fact]
+    public void An_announcement_that_switches_colours_on_its_wrapped_line_stays_whole()
+    {
+        // "Name upgrades" then "[★★Starcatcher Shogri] to +9": red, then the item's orange — one message.
+        var lines = new[] { "Сист. Elder of Dream Port announces loudly: Графиня upgrades", "[ * *Starcatcher Shogrl to +9" };
+        var words = new[]
+        {
+            W(("Сист.", Nick), ("Elder", 0xFFFF00), ("of", 0xFFFF00), ("Dream", 0xFFFF00), ("Port", 0xFFFF00),
+              ("announces", System), ("loudly:", System), ("Графиня", Nick), ("upgrades", System)),
+            W(("[", Item), ("*", Item), ("*Starcatcher", Item), ("Shogrl", Item), ("to", System), ("+9", Group)),
+        };
+
+        var message = Assert.Single(TextMatching.SplitChatMessages(lines, words));
+        Assert.EndsWith("upgrades [ * *Starcatcher Shogrl to +9", message);
+    }
+
+    [Fact]
+    public void The_tab_bar_under_the_chat_is_never_a_message()
+    {
+        var lines = new[] { "Anmut: да это ужас(", "Сот. Squad GuiId РМ Trade Room Wodd Нот Cross-serv. Awards" };
+
+        Assert.Equal(new[] { "Anmut: да это ужас(" }, TextMatching.SplitChatMessages(lines));
+        Assert.True(TextMatching.IsChatTabBar("Сот. Squad GuiId РМ Trade Room Wodd Нот Cross-seN. Awards"));
+        Assert.False(TextMatching.IsChatTabBar("продам в пм, trade room squad"));   // a player can say three of them
+    }
+
     [Fact]
     public void Slang_in_the_body_colour_is_still_not_mistaken_for_a_nickname()
     {

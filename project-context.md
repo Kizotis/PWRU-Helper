@@ -23,7 +23,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - **C# / WPF on .NET 8**, TFM `net8.0-windows10.0.19041.0` — the 19041 Windows target is REQUIRED (it provides the free on-device `Windows.Media.Ocr` engine). `Nullable` + `ImplicitUsings` enabled.
 - **Code-behind, NO MVVM — deliberate.** Do not introduce MVVM, view-models, or binding frameworks.
 - `System.Drawing.Common` 8.0.10 (GDI screen capture).
-- Tests: **xUnit 2.9.2**, Test SDK 17.11.1, runner 2.8.2 — `dotnet test tests/PWRUHelper.Tests` (1452 tests, headless-safe, incl. STA render tests).
+- Tests: **xUnit 2.9.2**, Test SDK 17.11.1, runner 2.8.2 — `dotnet test tests/PWRUHelper.Tests` (1463 tests, headless-safe, incl. STA render tests).
 - Installer: **WiX v5.0.2 exactly** (`installer/Product.wxs`); WiX v6+ has a paid OSMF EULA that blocks CI builds.
 - **No `.sln` at repo root** — adding one breaks `dotnet run` and both `Build *.bat` scripts.
 - `Data/phrases.json`, `Data/slang.json`, `Data/squad.json`: EmbeddedResource **and** copied next to the exe as a first-run editable copy; the files are tracked source.
@@ -69,6 +69,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - OCR paths pick source per message: `IsProbablyRussian(body)` → `"ru"` else `"auto"`; displayed original + 🔑 line stay raw (never show expanded text as the original).
 - **Game chat colours (2026-10-24):** `OcrService.ReadFrameAsync(forOcr ?? bmp, bmp)` returns the lines AND every word with its colour, voted by the pixels under it against `ChatPalette` (measured off real screenshots) — always read off `bmp`, the unfiltered capture; the filtered copy has no colour left. `ChatColors.Colorize` places each message among the frame's words, and a pale-yellow (`ChatPalette.Nick`) run ending in `:` is a SPEAKER even when `SplitSpeakerStrict` refused it — the game never draws a body in that colour, so that nickname stays out of the translation. The translation is painted A + B: the colour the line opens in past the names (`MainColor` — never "most letters", a long `[item]` out-weighs a short message), plus every differently coloured piece that reappears verbatim. A row whose colours can't be placed stays uncoloured; feed lines are painted by `Views/ChatText` (attached property, no bound `Run`s).
 - **Strong badges:** `грул.`/`груп.`/`сист.`/`оснв.`/`м/серв` are not Russian words, so they open a message without a colon and cut a row they appear in the middle of (`StrongChatTags`) — that is the "grul" fix. Weak badges (`мир`, `клан`, `лично`…) are words and still need the colon.
+- **Message boundaries from colour** (both OCR paths call `SplitChatMessages(frame.Lines, frame.LineWords)`, never the text-only overload): `ChatColors.RepairHeader` drops colourless chip debris in front of a pale-yellow nickname and turns a nickname ending in `.`/`;` into `Nick:` (a pale-yellow word WITHOUT punctuation is a name inside an announcement — leave it); a wrapped line in another `ChatPalette.FamilyOf` family than its message starts a new one. All announcement colours (red, alert, orange, items) are ONE family on purpose — an announcement changes colour mid-sentence and wraps. The tab bar under the chat (`IsChatTabBar`, ≥ 5 tab names) is dropped.
 
 ### Testing Rules
 

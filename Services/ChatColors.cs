@@ -13,8 +13,10 @@ public readonly record struct OcrWord(string Text, uint? Rgb);
 public readonly record struct ChatRun(string Text, uint? Rgb, bool IsSpeaker = false);
 
 /// <summary>What one OCR pass produced: the lines (exactly what <see cref="OcrService.ReadLinesAsync"/>
-/// returns) and every word with its colour, in the same reading order.</summary>
-public sealed record OcrFrame(List<string> Lines, IReadOnlyList<OcrWord> Words);
+/// returns), every word with its colour in the same reading order, and the same words grouped by
+/// line (<see cref="LineWords"/>[i] are the words of <see cref="Lines"/>[i]).</summary>
+public sealed record OcrFrame(List<string> Lines, IReadOnlyList<OcrWord> Words,
+                              IReadOnlyList<IReadOnlyList<OcrWord>> LineWords);
 
 /// <summary>
 /// The colours Perfect World draws its chat in, so the feed can repeat them.
@@ -55,6 +57,22 @@ public static class ChatPalette
         new("item-rare",     0x8484FC, 0x8484FF),
         new("item-epic",     0xAC34FC, 0xAC34FF),
     };
+
+    /// <summary>
+    /// The colour family a display colour belongs to, for telling two messages apart: every player
+    /// channel is a family of its own, the grey-green info lines another, and everything the game
+    /// writes in its own announcements — red, alert red, orange, the item colours — ONE family,
+    /// because a single announcement switches between them mid-sentence and wraps ("Name upgrades"
+    /// on one line, "[★★Starcatcher Shogri] to +9" on the next) and must not be cut in two.
+    /// Null for the names (nickname, announcer: they open any kind of line) and for no colour.
+    /// </summary>
+    public static string? FamilyOf(uint? display)
+        => Entries.FirstOrDefault(e => e.Display == display)?.Name switch
+        {
+            null or "nick" or "announcer" => null,
+            "system" or "alert" or "item" or "item-rare" or "item-epic" => "game",
+            var name => name,
+        };
 
     /// <summary>How far (RGB Euclidean) a pixel may sit from a palette colour and still vote for
     /// it. Wide enough for the glyph's anti-aliased core, narrow enough that the two yellows 24
@@ -178,6 +196,47 @@ public static class ChatColors
         return runs;
     }
 
+    /// <summary>How many words may stand in front of a nickname and be dropped as the badge's
+    /// debris: the badge itself, a speck of its border, and what the OCR made of the chip
+    /// ("[З—", "•[ЗђЗ*2", "у[Зђ?)" — all read off the owner's screenshots).</summary>
+    private const int MaxDebrisWords = 3;
+
+    /// <summary>
+    /// Repair one OCR line's header from its colours, before the line is grouped into messages.
+    ///
+    /// The game draws every nickname in pale yellow and the chip in front of it in no game colour at
+    /// all, and that settles two things the text alone kept getting wrong (the owner's screenshots):
+    ///   • the chip's debris — "[З— Онегатива:", "ЗђЗ*2 Anmut:" — words that have NO colour standing in
+    ///     front of a pale-yellow nickname are dropped, instead of being kept as part of the name;
+    ///   • the colon the OCR read as a dot — "Frmr. шо", "kibtaeer. ищу парня" — a pale-yellow word
+    ///     at the start of a line ending in '.' or ';' IS the header, and becomes "Frmr: шо". Without
+    ///     it the line had no header and was glued onto the message above it.
+    /// A pale-yellow word with no punctuation is a name inside an announcement ("Micolash upgrades
+    /// [item]", "TaliMen joined the squad") and the line is left as it is. So is any line whose words
+    /// don't line up one-to-one with its text, or whose colours weren't read.
+    /// </summary>
+    public static string RepairHeader(string line, IReadOnlyList<OcrWord>? words)
+    {
+        var tokens = (line ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (words == null || words.Count != tokens.Length || tokens.Length == 0) return line ?? "";
+
+        int start = 0;
+        while (start < tokens.Length && start < MaxDebrisWords
+               && (words[start].Rgb == null || TextMatching.IsChatTag(tokens[start]) || TextMatching.IsStrongChatTag(tokens[start])))
+            start++;
+
+        // The nickname: up to three pale-yellow words, the last of them ending in what the colon was read as.
+        for (int j = start; j < tokens.Length && j < start + 3 && words[j].Rgb == ChatPalette.Nick; j++)
+        {
+            var t = tokens[j];
+            if (t.Length < 2 || t[^1] is not (':' or '.' or ';')) continue;
+            var nick = string.Join(" ", tokens[start..j].Append(t[..^1]));
+            var rest = string.Join(" ", tokens[(j + 1)..]);
+            return rest.Length > 0 ? $"{nick}: {rest}" : $"{nick}:";
+        }
+        return line!;
+    }
+
     /// <summary>The longest a nickname read off its colour may be — the same bound
     /// <see cref="TextMatching"/> puts on a nickname read off its text.</summary>
     private const int MaxNickChars = 22;
@@ -281,6 +340,11 @@ public static class ChatColors
         }
         return fallback ?? runs.Select(r => r.Rgb).FirstOrDefault(c => c != null);
     }
+
+    /// <summary><see cref="MainColor"/> of one OCR line's words: the colour the line opens in once
+    /// past the badge and the names — what a wrapped tail shares with its message.</summary>
+    public static uint? OpeningColor(IReadOnlyList<OcrWord> words)
+        => MainColor(words.Select(w => new ChatRun(w.Text, w.Rgb)).ToList());
 
     private static readonly uint AnnouncerDisplay = ChatPalette.Entries.Single(e => e.Name == "announcer").Display;
 
